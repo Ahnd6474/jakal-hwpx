@@ -1,0 +1,19 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "jakal-hwpx"
+version = "0.1.0"
+description = "Round-trip safe HWPX reader/editor/writer for Python"
+requires-python = ">=3.11"
+dependencies = ["lxml>=5.0.0"]
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

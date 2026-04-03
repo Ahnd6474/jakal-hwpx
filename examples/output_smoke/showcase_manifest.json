@@ -1,0 +1,135 @@
+{
+  "generated_at": "2026-04-04T01:13:44",
+  "corpus_dir": "D:\\GitHub\\jakal-docs\\all_hwpx_flat",
+  "output_dir": "examples\\output_smoke",
+  "hancom_validation_ran": false,
+  "documents": [
+    {
+      "name": "showcase_layout_headers",
+      "description": "Header, footer, page setup, paragraph insertion, and style batch editing.",
+      "source": "D:\\GitHub\\jakal-docs\\all_hwpx_flat\\from__8b952bb2f6.hwpx",
+      "output": "examples\\output_smoke\\showcase_layout_headers.hwpx",
+      "features": [
+        "header",
+        "footer",
+        "section_settings",
+        "paragraph",
+        "style_batch"
+      ],
+      "validations": {
+        "xml": [],
+        "reference": [],
+        "save_reopen": [],
+        "hancom_open": null
+      },
+      "notes": []
+    },
+    {
+      "name": "showcase_table_picture",
+      "description": "Table cell updates, merged row editing, and picture metadata editing.",
+      "source": "D:\\GitHub\\jakal-docs\\all_hwpx_flat\\2026년 초격차 프로젝트 국민평가단 모집 안내.hwpx",
+      "output": "examples\\output_smoke\\showcase_table_picture.hwpx",
+      "features": [
+        "table_editing",
+        "table_merge",
+        "picture_comment"
+      ],
+      "validations": {
+        "xml": [],
+        "reference": [],
+        "save_reopen": [],
+        "hancom_open": null
+      },
+      "notes": []
+    },
+    {
+      "name": "showcase_fields_references",
+      "description": "Bookmark, hyperlink, mail merge, formula, and cross-reference examples.",
+      "source": "D:\\GitHub\\jakal-docs\\all_hwpx_flat\\2026년 초격차 프로젝트 국민평가단 모집 안내.hwpx",
+      "output": "examples\\output_smoke\\showcase_fields_references.hwpx",
+      "features": [
+        "bookmark",
+        "hyperlink",
+        "mailmerge",
+        "formula",
+        "cross_reference"
+      ],
+      "validations": {
+        "xml": [],
+        "reference": [],
+        "save_reopen": [],
+        "hancom_open": null
+      },
+      "notes": []
+    },
+    {
+      "name": "showcase_notes",
+      "description": "Footnote and endnote content editing.",
+      "source": "D:\\GitHub\\jakal-docs\\all_hwpx_flat\\from__4f6bf57779.hwpx",
+      "output": "examples\\output_smoke\\showcase_notes.hwpx",
+      "features": [
+        "footnote",
+        "endnote"
+      ],
+      "validations": {
+        "xml": [],
+        "reference": [],
+        "save_reopen": [],
+        "hancom_open": null
+      },
+      "notes": []
+    },
+    {
+      "name": "showcase_numbering",
+      "description": "Body-level automatic numbering update using hp:newNum.",
+      "source": "D:\\GitHub\\jakal-docs\\all_hwpx_flat\\_붙임4_ _서식_ 공모신청서식.hwpx",
+      "output": "examples\\output_smoke\\showcase_numbering.hwpx",
+      "features": [
+        "newnum",
+        "automatic_numbering"
+      ],
+      "validations": {
+        "xml": [],
+        "reference": [],
+        "save_reopen": [],
+        "hancom_open": null
+      },
+      "notes": [
+        "Footnote/endnote marker numbers are recalculated by Hancom and are not forced by this demo."
+      ]
+    },
+    {
+      "name": "showcase_equation",
+      "description": "Equation script editing.",
+      "source": "D:\\GitHub\\jakal-docs\\all_hwpx_flat\\from__8ca4deae4c.hwpx",
+      "output": "examples\\output_smoke\\showcase_equation.hwpx",
+      "features": [
+        "equation"
+      ],
+      "validations": {
+        "xml": [],
+        "reference": [],
+        "save_reopen": [],
+        "hancom_open": null
+      },
+      "notes": []
+    },
+    {
+      "name": "showcase_shapes",
+      "description": "Shape comment editing and textart text replacement when available.",
+      "source": "D:\\GitHub\\jakal-docs\\all_hwpx_flat\\from__3b941ab8f0.hwpx",
+      "output": "examples\\output_smoke\\showcase_shapes.hwpx",
+      "features": [
+        "shape",
+        "textart"
+      ],
+      "validations": {
+        "xml": [],
+        "reference": [],
+        "save_reopen": [],
+        "hancom_open": null
+      },
+      "notes": []
+    }
+  ]
+}

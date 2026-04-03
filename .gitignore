@@ -1,0 +1,6 @@
+all_hwpx_flat/
+.idea/
+.venv
+manifests/
+scripts/
+/manifests/
