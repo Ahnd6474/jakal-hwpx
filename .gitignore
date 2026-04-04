@@ -4,3 +4,13 @@ all_hwpx_flat/
 manifests/
 scripts/
 /manifests/
+
+# Local build and temp artifacts
+.tmp/
+examples/output.zip
+vendor/
+
+# Python cache
+__pycache__/
+*.py[cod]
+*.pyc.*
