@@ -1,0 +1,9 @@
+lxml>=5.0.0
+
+[dev]
+build>=1.2
+pytest>=8.0
+twine>=5.0
+
+[test]
+pytest>=8.0

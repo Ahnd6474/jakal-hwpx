@@ -1,0 +1,4 @@
+include README.md
+include README.ko.md
+include HWPX_MODULE.md
+recursive-include src/jakal_hwpx py.typed
