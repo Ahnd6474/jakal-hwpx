@@ -28,7 +28,14 @@ Korean version: [README.ko.md](./README.ko.md)
 
 You need Python 3.11 or newer.
 
-Install the published package from PyPI:
+Install from a local checkout:
+
+```bash
+python -m pip install --upgrade pip
+python -m pip install .
+```
+
+If you publish the package to PyPI, users can install it with:
 
 ```bash
 python -m pip install --upgrade pip
@@ -37,7 +44,7 @@ python -m pip install jakal-hwpx
 
 The import path is `jakal_hwpx`. The project name in `pyproject.toml` is `jakal-hwpx`.
 
-If you want to work from a local checkout instead:
+If you want editable development mode:
 
 ```bash
 python -m pip install -e .[dev]
@@ -49,10 +56,10 @@ If you only want to run the test suite:
 python -m pip install -e .[test]
 ```
 
-If you want to use the Windows COM-based Hancom verification helpers, install `pywin32` too:
+If you want to use the Windows COM-based Hancom verification helpers:
 
 ```bash
-python -m pip install pywin32
+python -m pip install .[verify]
 ```
 
 ## Quick start
@@ -348,6 +355,20 @@ python examples/build_showcase_bundle.py --corpus-dir <path-to-hwpx-corpus> --ou
 ```
 
 For test execution, check `tests/conftest.py` first. The current suite assumes a maintainer-provided local corpus layout.
+
+To build release artifacts for PyPI:
+
+```bash
+python -m pip install --upgrade build twine
+python -m build
+python -m twine check dist/*
+```
+
+To upload them, you still need your own PyPI account and API token:
+
+```bash
+python -m twine upload dist/*
+```
 
 ## Further reading
 

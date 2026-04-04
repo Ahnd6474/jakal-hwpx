@@ -38,6 +38,8 @@ from .parts import (
 )
 from .xmlnode import HwpxXmlNode
 
+__version__ = "0.1.0"
+
 __all__ = [
     "BinaryDataPart",
     "Bookmark",
@@ -78,4 +80,5 @@ __all__ = [
     "TableCell",
     "VersionPart",
     "XmlPart",
+    "__version__",
 ]

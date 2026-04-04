@@ -1,4 +1,4 @@
-from .document import DocumentMetadata, HwpxDocument
+from .document import DocumentMetadata, HancomOpenProbeResult, HwpxDocument
 from .elements import (
     AutoNumber,
     Bookmark,
@@ -38,6 +38,8 @@ from .parts import (
 )
 from .xmlnode import HwpxXmlNode
 
+__version__ = "0.1.0"
+
 __all__ = [
     "BinaryDataPart",
     "Bookmark",
@@ -52,6 +54,7 @@ __all__ = [
     "GenericBinaryPart",
     "GenericTextPart",
     "GenericXmlPart",
+    "HancomOpenProbeResult",
     "HeaderPart",
     "HeaderFooterBlock",
     "HwpxDocument",
@@ -77,4 +80,5 @@ __all__ = [
     "TableCell",
     "VersionPart",
     "XmlPart",
+    "__version__",
 ]
