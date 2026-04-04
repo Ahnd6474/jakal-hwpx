@@ -37,6 +37,9 @@ def _hancom_model_root(document_path: Path) -> etree._Element:
             hwp.XHwpWindows.Item(0).Visible = False
         except Exception:
             pass
+        module_name = HwpxDocument.discover_hancom_security_module_name()
+        if module_name:
+            hwp.RegisterModule("FilePathCheckDLL", module_name)
         hwp.Open(str(document_path), "", "")
         hwpml = hwp.GetTextFile("HWPML2X", "")
         hwpml = re.sub(r"^<\?xml[^>]*\?>", "", hwpml)
@@ -209,3 +212,13 @@ def test_hancom_model_notes_autonum_equation_and_shape(valid_hwpx_files: list[Pa
     assert "SHAPE_EDITED" in shape_root.xpath(".//SHAPECOMMENT/text()")
     if shape.kind == "textart":
         assert "TEXTART_EDITED" in shape_root.xpath(".//TEXTART//CHAR/text()")
+
+
+def test_hancom_probe_path_reports_open_state(sample_hwpx_path: Path) -> None:
+    pytest.importorskip("win32com.client")
+    probe = HwpxDocument.probe_path_in_hancom(sample_hwpx_path)
+
+    assert probe.opened is True
+    assert probe.status == "opened"
+    assert probe.hwpml_retrieved is True
+    assert probe.hwpml_length is not None
