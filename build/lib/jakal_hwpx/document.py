@@ -1,11 +1,9 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
 import io
 import os
 import re
 import shutil
-import subprocess
 import tempfile
 import time
 import zipfile
@@ -43,50 +41,6 @@ from .parts import (
     XmlPart,
     infer_part_class,
 )
-
-
-@dataclass(slots=True)
-class HancomOpenProbeResult:
-    path: Path
-    opened: bool
-    open_return_value: object | None
-    hwpml_retrieved: bool
-    hwpml_length: int | None
-    error_message: str | None = None
-    security_module_registered: bool | None = None
-    used_com: bool = True
-
-    @property
-    def status(self) -> str:
-        if self.opened:
-            return "opened"
-        if self.error_message:
-            return "exception"
-        if self.open_return_value is False:
-            return "open_return_false"
-        return "unknown_failure"
-
-    @property
-    def likely_security_or_damage_block(self) -> bool:
-        return self.status == "open_return_false"
-
-    def failure_message(self) -> str:
-        if self.opened:
-            return ""
-        details = [f"Hancom probe failed with status={self.status}"]
-        if self.open_return_value is not None:
-            details.append(f"open_return_value={self.open_return_value!r}")
-        if self.error_message:
-            details.append(self.error_message)
-        if self.hwpml_length is not None:
-            details.append(f"hwpml_length={self.hwpml_length}")
-        if self.security_module_registered is not None:
-            details.append(f"security_module_registered={self.security_module_registered}")
-        if self.likely_security_or_damage_block:
-            details.append("Hancom returned False from Open(), which usually means the document was blocked.")
-        return "; ".join(details)
-
-
 def _normalize_path(path: str) -> str:
     return PurePosixPath(path).as_posix()
 
@@ -1006,201 +960,6 @@ class HwpxDocument:
         finally:
             self._cleanup_temp_dir(temp_dir)
 
-    @staticmethod
-    def discover_hancom_executable() -> Path | None:
-        env_path = os.environ.get("HWPX_HANCOM_EXE")
-        if env_path:
-            candidate = Path(env_path)
-            if candidate.exists():
-                return candidate
-
-        for name in ("Hanword.exe", "Hword.exe", "Hwp.exe"):
-            if located := shutil.which(name):
-                return Path(located)
-
-        for env_name in ("ProgramFiles", "ProgramFiles(x86)"):
-            base = os.environ.get(env_name)
-            if not base:
-                continue
-            base_path = Path(base)
-            for stem in ("Hanword.exe", "Hword.exe", "Hwp.exe"):
-                for candidate in base_path.glob(f"Hancom*/**/{stem}"):
-                    if candidate.is_file():
-                        return candidate
-                for candidate in base_path.glob(f"HNC/**/{stem}"):
-                    if candidate.is_file():
-                        return candidate
-        return None
-
-    @staticmethod
-    def _load_win32com_client():
-        try:
-            import win32com.client  # type: ignore[import-not-found]
-        except ModuleNotFoundError as exc:
-            raise ModuleNotFoundError(
-                "win32com.client is required for COM-based Hancom probing."
-            ) from exc
-        return win32com.client
-
-    @staticmethod
-    def discover_hancom_security_module_name() -> str | None:
-        env_name = os.environ.get("HWPX_HANCOM_SECURITY_MODULE_NAME")
-        if env_name:
-            return env_name
-
-        try:
-            import winreg
-        except ImportError:
-            return None
-
-        candidates = {"FilePathCheckerModuleExample", "FilePathCheckerModule"}
-        try:
-            key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, r"Software\HNC\HwpAutomation\Modules")
-        except OSError:
-            return None
-        try:
-            index = 0
-            while True:
-                try:
-                    value_name, _, _ = winreg.EnumValue(key, index)
-                except OSError:
-                    break
-                if value_name in candidates:
-                    return value_name
-                index += 1
-        finally:
-            winreg.CloseKey(key)
-        return None
-
-    @classmethod
-    def _register_hancom_security_module(cls, hwp) -> bool | None:
-        module_name = cls.discover_hancom_security_module_name()
-        if not module_name:
-            return None
-        try:
-            return bool(hwp.RegisterModule("FilePathCheckDLL", module_name))
-        except Exception:
-            return False
-
-    @classmethod
-    def probe_path_in_hancom(
-        cls,
-        path: str | os.PathLike[str],
-        *,
-        visible: bool = False,
-        extract_hwpml: bool = True,
-    ) -> HancomOpenProbeResult:
-        document_path = Path(path)
-        if not document_path.exists():
-            raise FileNotFoundError(document_path)
-
-        win32com_client = cls._load_win32com_client()
-        hwp = win32com_client.gencache.EnsureDispatch("HWPFrame.HwpObject")
-        open_result = None
-        hwpml_text = None
-        error_message = None
-        security_module_registered = None
-        try:
-            try:
-                hwp.XHwpWindows.Item(0).Visible = visible
-            except Exception:
-                pass
-
-            security_module_registered = cls._register_hancom_security_module(hwp)
-
-            try:
-                open_result = hwp.Open(str(document_path), "", "")
-            except Exception as exc:  # noqa: BLE001
-                error_message = f"{type(exc).__name__}: {exc}"
-
-            if extract_hwpml:
-                try:
-                    hwpml_text = hwp.GetTextFile("HWPML2X", "")
-                except Exception as exc:  # noqa: BLE001
-                    if error_message is None:
-                        error_message = f"GetTextFile failed: {type(exc).__name__}: {exc}"
-
-            return HancomOpenProbeResult(
-                path=document_path,
-                opened=bool(open_result),
-                open_return_value=open_result,
-                hwpml_retrieved=hwpml_text is not None,
-                hwpml_length=len(hwpml_text) if hwpml_text is not None else None,
-                error_message=error_message,
-                security_module_registered=security_module_registered,
-                used_com=True,
-            )
-        finally:
-            try:
-                hwp.XHwpDocuments.Active_XHwpDocument.Close(False)
-            except Exception:
-                pass
-            try:
-                hwp.Quit()
-            except Exception:
-                pass
-
-    def probe_in_hancom(
-        self,
-        executable_path: str | os.PathLike[str] | None = None,
-        timeout_seconds: int = 15,
-    ) -> HancomOpenProbeResult:
-        temp_dir = Path(tempfile.mkdtemp(prefix="jakal_hwpx_hancom_probe_"))
-        try:
-            temp_path = temp_dir / "open_test.hwpx"
-            self.save(temp_path)
-            try:
-                return self.probe_path_in_hancom(temp_path)
-            except ModuleNotFoundError:
-                if executable_path is None:
-                    discovered = self.discover_hancom_executable()
-                    if discovered is None:
-                        raise FileNotFoundError(
-                            "Hancom executable was not found and win32com.client is unavailable."
-                        )
-                    executable_path = discovered
-                process = subprocess.Popen([str(executable_path), str(temp_path)])
-                timed_out = False
-                try:
-                    process.wait(timeout=timeout_seconds)
-                except subprocess.TimeoutExpired:
-                    timed_out = True
-                    self._terminate_process_tree(process)
-                return HancomOpenProbeResult(
-                    path=temp_path,
-                    opened=timed_out or process.returncode in (None, 0),
-                    open_return_value=process.returncode,
-                    hwpml_retrieved=False,
-                    hwpml_length=None,
-                    error_message=None if timed_out or process.returncode in (None, 0) else f"Hancom process exited with code {process.returncode}",
-                    security_module_registered=None,
-                    used_com=False,
-                )
-        finally:
-            self._cleanup_temp_dir(temp_dir)
-
-    def hancom_open_validation_errors(
-        self,
-        executable_path: str | os.PathLike[str] | None = None,
-        timeout_seconds: int = 15,
-    ) -> list[str]:
-        try:
-            probe = self.probe_in_hancom(executable_path=executable_path, timeout_seconds=timeout_seconds)
-        except Exception as exc:  # noqa: BLE001
-            return [str(exc)]
-        if not probe.opened:
-            return [probe.failure_message()]
-        return []
-
-    def open_in_hancom(
-        self,
-        executable_path: str | os.PathLike[str] | None = None,
-        timeout_seconds: int = 15,
-    ) -> None:
-        probe = self.probe_in_hancom(executable_path=executable_path, timeout_seconds=timeout_seconds)
-        if not probe.opened:
-            raise RuntimeError(probe.failure_message())
-
     def _ensure_editable_sections(self) -> None:
         if self.sections:
             return
@@ -1245,25 +1004,6 @@ class HwpxDocument:
                 except (TypeError, ValueError):
                     continue
         return str(highest + 1)
-
-    @staticmethod
-    def _terminate_process_tree(process: subprocess.Popen[bytes] | subprocess.Popen[str]) -> None:
-        if process.poll() is not None:
-            return
-        try:
-            subprocess.run(
-                ["taskkill", "/PID", str(process.pid), "/T", "/F"],
-                check=False,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                timeout=10,
-            )
-        except Exception:  # noqa: BLE001
-            process.kill()
-        try:
-            process.wait(timeout=10)
-        except Exception:  # noqa: BLE001
-            pass
 
     @staticmethod
     def _cleanup_temp_dir(temp_dir: Path, retries: int = 10, delay_seconds: float = 0.5) -> None:

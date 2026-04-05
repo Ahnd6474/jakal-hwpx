@@ -5,17 +5,11 @@ import subprocess
 import sys
 from pathlib import Path
 
-import pytest
-
-
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
-def test_showcase_bundle_script(tmp_path: Path) -> None:
-    corpus_dir = REPO_ROOT / "all_hwpx_flat"
-    if not corpus_dir.exists():
-        pytest.skip("showcase corpus is not available in this checkout")
-
+def test_showcase_bundle_script(sample_corpus_dir: Path, tmp_path: Path) -> None:
+    corpus_dir = sample_corpus_dir
     output_dir = tmp_path / "showcase_output"
     command = [
         sys.executable,

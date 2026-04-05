@@ -18,19 +18,21 @@ classifiers = [
   "Programming Language :: Python :: 3",
   "Programming Language :: Python :: 3.11",
   "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
   "Programming Language :: Python :: Implementation :: CPython",
   "Topic :: Software Development :: Libraries :: Python Modules",
   "Topic :: Text Editors :: Word Processors",
 ]
 
 [project.urls]
-Homepage = "https://github.com/Ahnd6474/jakal-docs"
-Source = "https://github.com/Ahnd6474/jakal-docs"
-Issues = "https://github.com/Ahnd6474/jakal-docs/issues"
-Documentation = "https://github.com/Ahnd6474/jakal-docs#readme"
+Homepage = "https://github.com/Ahnd6474/jakal-hwpx"
+Source = "https://github.com/Ahnd6474/jakal-hwpx"
+Issues = "https://github.com/Ahnd6474/jakal-hwpx/issues"
+Documentation = "https://github.com/Ahnd6474/jakal-hwpx#readme"
 
 [project.optional-dependencies]
-dev = ["build>=1.2", "pytest>=8.0", "twine>=5.0"]
+dev = ["build>=1.2", "pytest>=8.0", "tox>=4.0", "twine>=5.0"]
+release = ["build>=1.2", "twine>=5.0"]
 test = ["pytest>=8.0"]
 
 [tool.setuptools]
@@ -44,4 +46,5 @@ where = ["src"]
 jakal_hwpx = ["py.typed"]
 
 [tool.pytest.ini_options]
+addopts = "-ra"
 testpaths = ["tests"]

@@ -329,31 +329,52 @@ print(doc.save_reopen_validation_errors())
 
 ## Maintainer workflows
 
-The repository includes broader validation and showcase scripts, but those are not required to use the library itself.
+The repository includes a committed smoke corpus under `examples/output_smoke`, so the default test suite can run from a normal checkout. If you maintain a larger private corpus, point the tests and showcase script at it with `JAKAL_HWPX_SAMPLE_DIR`.
 
-One constraint matters:
-
-- Most repository tests expect a local HWPX corpus that is not committed with the package sources.
-
-If you maintain such a setup, the showcase script can be pointed at your own paths explicitly:
+Run the test suite with your current interpreter:
 
 ```bash
+python -m pip install -e .[dev]
+tox -e py
+```
+
+Run the supported-version matrix locally when you have multiple interpreters installed:
+
+```bash
+tox
+```
+
+Build the showcase bundle against the default committed samples:
+
+```bash
+python examples/build_showcase_bundle.py --corpus-dir examples/output_smoke --output-dir examples/output
+```
+
+Or override the sample corpus explicitly:
+
+```bash
+set JAKAL_HWPX_SAMPLE_DIR=<path-to-hwpx-corpus>
+tox -e py
 python examples/build_showcase_bundle.py --corpus-dir <path-to-hwpx-corpus> --output-dir <path-to-output>
 ```
 
-For test execution, check `tests/conftest.py` first. The current suite assumes a maintainer-provided local corpus layout.
+To build release artifacts locally before publishing:
 
-To build release artifacts for PyPI:
+```bash
+tox -e pkg
+```
+
+CI now runs tests on Python 3.11, 3.12, and 3.13, and the publish workflow supports:
+
+- manual `workflow_dispatch` uploads to TestPyPI or PyPI
+- GitHub Release based publishing to PyPI
+
+For manual uploads outside GitHub Actions:
 
 ```bash
 python -m pip install --upgrade build twine
 python -m build
 python -m twine check dist/*
-```
-
-To upload them, you still need your own PyPI account and API token:
-
-```bash
 python -m twine upload dist/*
 ```
 
