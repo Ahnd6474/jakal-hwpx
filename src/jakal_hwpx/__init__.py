@@ -1,4 +1,4 @@
-from .document import DocumentMetadata, HancomOpenProbeResult, HwpxDocument
+from .document import DocumentMetadata, HwpxDocument
 from .elements import (
     AutoNumber,
     Bookmark,
@@ -54,7 +54,6 @@ __all__ = [
     "GenericBinaryPart",
     "GenericTextPart",
     "GenericXmlPart",
-    "HancomOpenProbeResult",
     "HeaderPart",
     "HeaderFooterBlock",
     "HwpxDocument",

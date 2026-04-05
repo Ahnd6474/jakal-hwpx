@@ -56,12 +56,6 @@ If you only want to run the test suite:
 python -m pip install -e .[test]
 ```
 
-If you want to use the Windows COM-based Hancom verification helpers:
-
-```bash
-python -m pip install .[verify]
-```
-
 ## Quick start
 
 ```python
@@ -189,7 +183,7 @@ If you only need raw XML access, `lxml` may be enough. If you need programmatic 
 | `compile(validate=True)` | `bytes` | Build the in-memory package into `.hwpx` bytes. |
 | `save(path, validate=True)` | `Path` | Write the package to disk. |
 
-#### Validation and Hancom verification
+#### Validation
 
 | Method | Returns | Description |
 |--------|---------|-------------|
@@ -200,10 +194,6 @@ If you only need raw XML access, `lxml` may be enough. If you need programmatic 
 | `schema_validation_errors(schema_map)` | `list[str]` | Optional XSD validation for specific XML parts. |
 | `reference_validation_errors()` | `list[str]` | Style, manifest, bookmark, and field reference checks. |
 | `save_reopen_validation_errors()` | `list[str]` | Save, reopen, and report structural errors. |
-| `discover_hancom_executable()` | `Path \| None` | Try to find an installed Hancom executable. |
-| `hancom_open_validation_errors(executable_path=None, timeout_seconds=15)` | `list[str]` | Save a temp file, try to open it in Hancom, and report failures. |
-| `open_in_hancom(executable_path=None, timeout_seconds=15)` | `None` | Open a temp copy in Hancom and raise if launch/open fails. |
-
 If `is_distribution_protected` is `True`, high-level section editing is intentionally blocked because the encrypted section data is not editable through the public helpers.
 
 ### `DocumentMetadata`
@@ -337,21 +327,18 @@ print(doc.reference_validation_errors())
 print(doc.save_reopen_validation_errors())
 ```
 
-If Hancom is installed on Windows, you can also use `open_in_hancom()` or `hancom_open_validation_errors()`. Set `HWPX_HANCOM_EXE` only when auto-discovery is not enough.
-
 ## Maintainer workflows
 
 The repository includes broader validation and showcase scripts, but those are not required to use the library itself.
 
-Two constraints matter:
+One constraint matters:
 
 - Most repository tests expect a local HWPX corpus that is not committed with the package sources.
-- Hancom model verification is Windows-only and requires a local Hancom installation.
 
 If you maintain such a setup, the showcase script can be pointed at your own paths explicitly:
 
 ```bash
-python examples/build_showcase_bundle.py --corpus-dir <path-to-hwpx-corpus> --output-dir <path-to-output> --skip-hancom
+python examples/build_showcase_bundle.py --corpus-dir <path-to-hwpx-corpus> --output-dir <path-to-output>
 ```
 
 For test execution, check `tests/conftest.py` first. The current suite assumes a maintainer-provided local corpus layout.

@@ -1,10 +1,8 @@
 from __future__ import annotations
 
-import os
 import zipfile
 from pathlib import Path
 
-import pytest
 from lxml import etree
 
 from jakal_hwpx import HwpxDocument
@@ -166,11 +164,3 @@ def test_validation_layers(valid_hwpx_files: list[Path], tmp_path: Path) -> None
     assert document.schema_validation_errors({"version.xml": version_schema}) == []
     assert document.reference_validation_errors() == []
     assert document.save_reopen_validation_errors() == []
-
-
-def test_hancom_open_regression(valid_hwpx_files: list[Path]) -> None:
-    executable = os.environ.get("HWPX_HANCOM_EXE") or HwpxDocument.discover_hancom_executable()
-    if not executable:
-        pytest.skip("Hancom executable path is not configured")
-    document = HwpxDocument.open(valid_hwpx_files[0])
-    document.open_in_hancom(executable)

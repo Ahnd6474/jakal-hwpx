@@ -32,7 +32,6 @@ Documentation = "https://github.com/Ahnd6474/jakal-docs#readme"
 [project.optional-dependencies]
 dev = ["build>=1.2", "pytest>=8.0", "twine>=5.0"]
 test = ["pytest>=8.0"]
-verify = ["pywin32>=306; platform_system == 'Windows'"]
 
 [tool.setuptools]
 package-dir = {"" = "src"}
