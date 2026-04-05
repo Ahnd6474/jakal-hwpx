@@ -109,22 +109,9 @@ This repository currently includes:
 - unit tests for open/edit/save/reopen flows
 - corpus round-trip tests against the valid HWPX files collected in `all_hwpx_flat`
 - feature tests for header/footer, notes, bookmarks, fields, equations, shapes, tables, styles, and validation layers
-- Hancom `HWPML2X` model verification tests that confirm actual load results, feature placement, and exported semantics in the installed Hwp application
-
 Validation APIs:
 
 - `doc.xml_validation_errors()`: well-formedness and structural checks for core XML parts
 - `doc.schema_validation_errors({...})`: optional XSD validation for user-supplied schema files
 - `doc.reference_validation_errors()`: manifest/style/field/bookmark reference integrity checks
 - `doc.save_reopen_validation_errors()`: save and reopen regression check
-- `doc.open_in_hancom()` / `doc.hancom_open_validation_errors()`: actual Hancom open regression check
-
-For real Hancom regression, set `HWPX_HANCOM_EXE` or let `HwpxDocument.discover_hancom_executable()` find an installed executable.
-
-Hancom model verification currently confirms:
-
-- header/footer text lands under actual `HEADER` and `FOOTER` blocks
-- merged table cells, batch-applied styles, bookmarks, hyperlinks, mail merge fields, formulas, and cross references survive Hancom load in the expected paragraph order
-- note text, `NEWNUM` automatic numbering, equations, picture comments, and shape comments survive Hancom load
-
-Note: note marker numbers rendered inside footnotes/endnotes are recalculated by Hancom. The current `AutoNumber.set_number()` API is verified against body-level `newNum` controls, not per-note rendered numbering.

@@ -8,12 +8,6 @@
 python examples/build_showcase_bundle.py
 ```
 
-If you want faster generation without launching Hancom:
-
-```powershell
-python examples/build_showcase_bundle.py --skip-hancom
-```
-
 ## Output
 
 By default the script writes to `examples/output/`.
@@ -47,6 +41,5 @@ Each generated file is checked with:
 - `xml_validation_errors()`
 - `reference_validation_errors()`
 - `save_reopen_validation_errors()`
-- `hancom_open_validation_errors()` when Hancom is installed and `--skip-hancom` is not used
 
 `showcase_manifest.json` stores the validation result for every output file.

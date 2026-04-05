@@ -5,18 +5,19 @@ import subprocess
 import sys
 from pathlib import Path
 
-
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
-def test_showcase_bundle_script(tmp_path: Path) -> None:
+def test_showcase_bundle_script(sample_corpus_dir: Path, tmp_path: Path) -> None:
+    corpus_dir = sample_corpus_dir
     output_dir = tmp_path / "showcase_output"
     command = [
         sys.executable,
         str(REPO_ROOT / "examples" / "build_showcase_bundle.py"),
+        "--corpus-dir",
+        str(corpus_dir),
         "--output-dir",
         str(output_dir),
-        "--skip-hancom",
     ]
     completed = subprocess.run(command, cwd=REPO_ROOT, capture_output=True, text=True, check=True)
 
@@ -28,7 +29,6 @@ def test_showcase_bundle_script(tmp_path: Path) -> None:
     assert report_path.exists()
 
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-    assert manifest["hancom_validation_ran"] is False
     assert len(manifest["documents"]) == 7
 
     expected_names = {
@@ -47,4 +47,3 @@ def test_showcase_bundle_script(tmp_path: Path) -> None:
         assert item["validations"]["xml"] == []
         assert item["validations"]["reference"] == []
         assert item["validations"]["save_reopen"] == []
-        assert item["validations"]["hancom_open"] is None

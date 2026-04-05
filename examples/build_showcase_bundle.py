@@ -29,7 +29,7 @@ class ShowcaseResult:
     source: str
     output: str
     features: list[str]
-    validations: dict[str, list[str] | None]
+    validations: dict[str, list[str]]
     notes: list[str] = field(default_factory=list)
 
 
@@ -75,13 +75,11 @@ def preferred_style_id(items: list[object]) -> str | None:
     return getattr(items[0], "style_id", None)
 
 
-def validate_document(document: HwpxDocument, *, verify_hancom: bool) -> dict[str, list[str] | None]:
-    hancom_open = document.hancom_open_validation_errors() if verify_hancom else None
+def validate_document(document: HwpxDocument) -> dict[str, list[str]]:
     return {
         "xml": document.xml_validation_errors(),
         "reference": document.reference_validation_errors(),
         "save_reopen": document.save_reopen_validation_errors(),
-        "hancom_open": hancom_open,
     }
 
 
@@ -93,7 +91,6 @@ def finalize_document(
     source: Path,
     output_path: Path,
     features: list[str],
-    verify_hancom: bool,
     notes: list[str] | None = None,
 ) -> ShowcaseResult:
     document.set_metadata(title=name, creator="jakal_hwpx showcase")
@@ -105,12 +102,12 @@ def finalize_document(
         source=str(source),
         output=str(output_path),
         features=features,
-        validations=validate_document(document, verify_hancom=verify_hancom),
+        validations=validate_document(document),
         notes=notes or [],
     )
 
 
-def build_layout_showcase(files: list[Path], output_dir: Path, *, verify_hancom: bool) -> ShowcaseResult:
+def build_layout_showcase(files: list[Path], output_dir: Path) -> ShowcaseResult:
     source = find_sample_with_section_xpath(files, ".//hp:header and .//hp:footer")
     document = HwpxDocument.open(source)
 
@@ -142,11 +139,10 @@ def build_layout_showcase(files: list[Path], output_dir: Path, *, verify_hancom:
         source=source,
         output_path=output_dir / "showcase_layout_headers.hwpx",
         features=["header", "footer", "section_settings", "paragraph", "style_batch"],
-        verify_hancom=verify_hancom,
     )
 
 
-def build_table_picture_showcase(files: list[Path], output_dir: Path, *, verify_hancom: bool) -> ShowcaseResult:
+def build_table_picture_showcase(files: list[Path], output_dir: Path) -> ShowcaseResult:
     source = find_sample_with_section_xpath(files, ".//hp:pic and .//hp:tbl[hp:tr/hp:tc[2]]")
     document = HwpxDocument.open(source)
 
@@ -169,11 +165,10 @@ def build_table_picture_showcase(files: list[Path], output_dir: Path, *, verify_
         source=source,
         output_path=output_dir / "showcase_table_picture.hwpx",
         features=["table_editing", "table_merge", "picture_comment"],
-        verify_hancom=verify_hancom,
     )
 
 
-def build_field_showcase(files: list[Path], output_dir: Path, *, verify_hancom: bool) -> ShowcaseResult:
+def build_field_showcase(files: list[Path], output_dir: Path) -> ShowcaseResult:
     source = files[0]
     document = HwpxDocument.open(source)
 
@@ -191,11 +186,10 @@ def build_field_showcase(files: list[Path], output_dir: Path, *, verify_hancom: 
         source=source,
         output_path=output_dir / "showcase_fields_references.hwpx",
         features=["bookmark", "hyperlink", "mailmerge", "formula", "cross_reference"],
-        verify_hancom=verify_hancom,
     )
 
 
-def build_notes_showcase(files: list[Path], output_dir: Path, *, verify_hancom: bool) -> ShowcaseResult:
+def build_notes_showcase(files: list[Path], output_dir: Path) -> ShowcaseResult:
     source = find_sample_with_section_xpath(files, ".//hp:footNote and .//hp:endNote")
     document = HwpxDocument.open(source)
 
@@ -210,11 +204,10 @@ def build_notes_showcase(files: list[Path], output_dir: Path, *, verify_hancom: 
         source=source,
         output_path=output_dir / "showcase_notes.hwpx",
         features=["footnote", "endnote"],
-        verify_hancom=verify_hancom,
     )
 
 
-def build_numbering_showcase(files: list[Path], output_dir: Path, *, verify_hancom: bool) -> ShowcaseResult:
+def build_numbering_showcase(files: list[Path], output_dir: Path) -> ShowcaseResult:
     source = find_sample_with_section_xpath(files, ".//hp:newNum")
     document = HwpxDocument.open(source)
 
@@ -228,12 +221,11 @@ def build_numbering_showcase(files: list[Path], output_dir: Path, *, verify_hanc
         source=source,
         output_path=output_dir / "showcase_numbering.hwpx",
         features=["newnum", "automatic_numbering"],
-        verify_hancom=verify_hancom,
-        notes=["Footnote/endnote marker numbers are recalculated by Hancom and are not forced by this demo."],
+        notes=["Rendered footnote/endnote marker numbers are recomputed by the editor and are not forced by this demo."],
     )
 
 
-def build_equation_showcase(files: list[Path], output_dir: Path, *, verify_hancom: bool) -> ShowcaseResult:
+def build_equation_showcase(files: list[Path], output_dir: Path) -> ShowcaseResult:
     source = find_sample_with_section_xpath(files, ".//hp:equation")
     document = HwpxDocument.open(source)
 
@@ -246,11 +238,10 @@ def build_equation_showcase(files: list[Path], output_dir: Path, *, verify_hanco
         source=source,
         output_path=output_dir / "showcase_equation.hwpx",
         features=["equation"],
-        verify_hancom=verify_hancom,
     )
 
 
-def build_shape_showcase(files: list[Path], output_dir: Path, *, verify_hancom: bool) -> ShowcaseResult:
+def build_shape_showcase(files: list[Path], output_dir: Path) -> ShowcaseResult:
     source = find_sample_with_section_xpath(files, ".//hp:textart or .//hp:rect or .//hp:line")
     document = HwpxDocument.open(source)
 
@@ -266,7 +257,6 @@ def build_shape_showcase(files: list[Path], output_dir: Path, *, verify_hancom: 
         source=source,
         output_path=output_dir / "showcase_shapes.hwpx",
         features=["shape", "textart"],
-        verify_hancom=verify_hancom,
     )
 
 
@@ -290,11 +280,6 @@ def write_markdown_report(results: list[ShowcaseResult], report_path: Path) -> N
                 f"- XML validation errors: {len(result.validations['xml'] or [])}",
                 f"- Reference validation errors: {len(result.validations['reference'] or [])}",
                 f"- Save/reopen validation errors: {len(result.validations['save_reopen'] or [])}",
-                (
-                    f"- Hancom open validation errors: {len(result.validations['hancom_open'] or [])}"
-                    if result.validations["hancom_open"] is not None
-                    else "- Hancom open validation: skipped"
-                ),
             ]
         )
         if result.notes:
@@ -316,11 +301,6 @@ def parse_args() -> argparse.Namespace:
         default=str(REPO_ROOT / "examples" / "output"),
         help="Directory where showcase documents will be written.",
     )
-    parser.add_argument(
-        "--skip-hancom",
-        action="store_true",
-        help="Skip Hancom open validation even if Hwp is installed.",
-    )
     return parser.parse_args()
 
 
@@ -334,15 +314,14 @@ def main() -> int:
     if not files:
         raise SystemExit(f"No valid HWPX files were found in {corpus_dir}.")
 
-    verify_hancom = not args.skip_hancom and HwpxDocument.discover_hancom_executable() is not None
     results = [
-        build_layout_showcase(files, output_dir, verify_hancom=verify_hancom),
-        build_table_picture_showcase(files, output_dir, verify_hancom=verify_hancom),
-        build_field_showcase(files, output_dir, verify_hancom=verify_hancom),
-        build_notes_showcase(files, output_dir, verify_hancom=verify_hancom),
-        build_numbering_showcase(files, output_dir, verify_hancom=verify_hancom),
-        build_equation_showcase(files, output_dir, verify_hancom=verify_hancom),
-        build_shape_showcase(files, output_dir, verify_hancom=verify_hancom),
+        build_layout_showcase(files, output_dir),
+        build_table_picture_showcase(files, output_dir),
+        build_field_showcase(files, output_dir),
+        build_notes_showcase(files, output_dir),
+        build_numbering_showcase(files, output_dir),
+        build_equation_showcase(files, output_dir),
+        build_shape_showcase(files, output_dir),
     ]
 
     manifest_path = output_dir / "showcase_manifest.json"
@@ -351,7 +330,6 @@ def main() -> int:
         "generated_at": datetime.now().isoformat(timespec="seconds"),
         "corpus_dir": str(corpus_dir),
         "output_dir": str(output_dir),
-        "hancom_validation_ran": verify_hancom,
         "documents": [asdict(item) for item in results],
     }
     manifest_path.write_text(json.dumps(manifest, indent=2, ensure_ascii=False), encoding="utf-8")

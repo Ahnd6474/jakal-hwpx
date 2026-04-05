@@ -56,12 +56,6 @@ If you only want to run the test suite:
 python -m pip install -e .[test]
 ```
 
-If you want to use the Windows COM-based Hancom verification helpers:
-
-```bash
-python -m pip install .[verify]
-```
-
 ## Quick start
 
 ```python
@@ -189,7 +183,7 @@ If you only need raw XML access, `lxml` may be enough. If you need programmatic 
 | `compile(validate=True)` | `bytes` | Build the in-memory package into `.hwpx` bytes. |
 | `save(path, validate=True)` | `Path` | Write the package to disk. |
 
-#### Validation and Hancom verification
+#### Validation
 
 | Method | Returns | Description |
 |--------|---------|-------------|
@@ -200,10 +194,6 @@ If you only need raw XML access, `lxml` may be enough. If you need programmatic 
 | `schema_validation_errors(schema_map)` | `list[str]` | Optional XSD validation for specific XML parts. |
 | `reference_validation_errors()` | `list[str]` | Style, manifest, bookmark, and field reference checks. |
 | `save_reopen_validation_errors()` | `list[str]` | Save, reopen, and report structural errors. |
-| `discover_hancom_executable()` | `Path \| None` | Try to find an installed Hancom executable. |
-| `hancom_open_validation_errors(executable_path=None, timeout_seconds=15)` | `list[str]` | Save a temp file, try to open it in Hancom, and report failures. |
-| `open_in_hancom(executable_path=None, timeout_seconds=15)` | `None` | Open a temp copy in Hancom and raise if launch/open fails. |
-
 If `is_distribution_protected` is `True`, high-level section editing is intentionally blocked because the encrypted section data is not editable through the public helpers.
 
 ### `DocumentMetadata`
@@ -337,36 +327,54 @@ print(doc.reference_validation_errors())
 print(doc.save_reopen_validation_errors())
 ```
 
-If Hancom is installed on Windows, you can also use `open_in_hancom()` or `hancom_open_validation_errors()`. Set `HWPX_HANCOM_EXE` only when auto-discovery is not enough.
-
 ## Maintainer workflows
 
-The repository includes broader validation and showcase scripts, but those are not required to use the library itself.
+The repository includes a committed smoke corpus under `examples/output_smoke`, so the default test suite can run from a normal checkout. If you maintain a larger private corpus, point the tests and showcase script at it with `JAKAL_HWPX_SAMPLE_DIR`.
 
-Two constraints matter:
-
-- Most repository tests expect a local HWPX corpus that is not committed with the package sources.
-- Hancom model verification is Windows-only and requires a local Hancom installation.
-
-If you maintain such a setup, the showcase script can be pointed at your own paths explicitly:
+Run the test suite with your current interpreter:
 
 ```bash
-python examples/build_showcase_bundle.py --corpus-dir <path-to-hwpx-corpus> --output-dir <path-to-output> --skip-hancom
+python -m pip install -e .[dev]
+tox -e py
 ```
 
-For test execution, check `tests/conftest.py` first. The current suite assumes a maintainer-provided local corpus layout.
+Run the supported-version matrix locally when you have multiple interpreters installed:
 
-To build release artifacts for PyPI:
+```bash
+tox
+```
+
+Build the showcase bundle against the default committed samples:
+
+```bash
+python examples/build_showcase_bundle.py --corpus-dir examples/output_smoke --output-dir examples/output
+```
+
+Or override the sample corpus explicitly:
+
+```bash
+set JAKAL_HWPX_SAMPLE_DIR=<path-to-hwpx-corpus>
+tox -e py
+python examples/build_showcase_bundle.py --corpus-dir <path-to-hwpx-corpus> --output-dir <path-to-output>
+```
+
+To build release artifacts locally before publishing:
+
+```bash
+tox -e pkg
+```
+
+CI now runs tests on Python 3.11, 3.12, and 3.13, and the publish workflow supports:
+
+- manual `workflow_dispatch` uploads to TestPyPI or PyPI
+- GitHub Release based publishing to PyPI
+
+For manual uploads outside GitHub Actions:
 
 ```bash
 python -m pip install --upgrade build twine
 python -m build
 python -m twine check dist/*
-```
-
-To upload them, you still need your own PyPI account and API token:
-
-```bash
 python -m twine upload dist/*
 ```
 

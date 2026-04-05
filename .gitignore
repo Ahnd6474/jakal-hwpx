@@ -7,6 +7,8 @@ scripts/
 
 # Local build and temp artifacts
 .tmp/
+build/
+dist/
 examples/output.zip
 vendor/
 
@@ -14,3 +16,8 @@ vendor/
 __pycache__/
 *.py[cod]
 *.pyc.*
+.coverage
+.eggs/
+.tox/
+*.egg-info/
+htmlcov/
