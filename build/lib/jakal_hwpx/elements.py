@@ -39,6 +39,8 @@ def _replace_text(element: etree._Element, old: str, new: str, count: int = -1) 
         replaced += changed
         if changed and remaining == 0:
             break
+    if replaced:
+        _invalidate_paragraph_layout(element)
     return replaced
 
 

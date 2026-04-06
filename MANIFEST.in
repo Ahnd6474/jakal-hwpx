@@ -3,5 +3,6 @@ include THIRD_PARTY_NOTICES.md
 include README.md
 include README.ko.md
 include HWPX_MODULE.md
+include HWPX_MODULE.ko.md
 include RELEASING.md
 recursive-include src/jakal_hwpx py.typed

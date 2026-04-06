@@ -1,22 +1,29 @@
 # jakal-hwpx
 
-`jakal-hwpx`는 `HWPX` 문서를 읽고, 수정하고, 검증하고, 저장하기 위한 Python 도구 모음입니다. 현재는 `PDF <-> HWPX` 브릿지 기능도 초기 형태로 함께 포함되어 있습니다.
+`jakal-hwpx`는 `HWPX` 문서를 읽고, 수정하고, 검증하고, 다시 저장하기 위한 Python 패키지입니다.
 
-English version: [README.md](./README.md)
+영문 문서: [README.md](./README.md)
 
-이 문서는 레포 전체 구조와 설치, 테스트, 샘플 위치를 설명합니다. 모듈과 API 상세 설명은 [HWPX_MODULE.md](./HWPX_MODULE.md)에서 따로 관리합니다.
-
-## 레포 구성
+## 저장소 구성
 
 - `src/jakal_hwpx`: 실제 Python 패키지
-- `examples/samples`: 샘플 `hwpx`, `hwp`, `pdf` 문서
-- `examples/output_smoke`: 테스트용 커밋된 smoke corpus
+- `examples/samples`: 샘플 `hwpx`, `hwp` 문서
+- `examples/output_smoke`: 테스트용 smoke corpus
 - `examples/output`: showcase 산출물
-- `tools`: `.hwp -> .hwpx` 변환에 쓰는 Java 도구
+- `tools`: `.hwp -> .hwpx` 변환에 쓰는 유지보수용 Java 도구
 
 ## 설치
 
 Python 3.11 이상이 필요합니다.
+
+PyPI에서 설치:
+
+```bash
+python -m pip install --upgrade pip
+python -m pip install jakal-hwpx
+```
+
+로컬 체크아웃에서 설치:
 
 ```bash
 python -m pip install --upgrade pip
@@ -36,22 +43,110 @@ python -m pip install -e .[dev]
 ```python
 from jakal_hwpx import HwpxDocument
 
-doc = HwpxDocument.open("examples/samples/hwpx/AI와_특이점_보고서.hwpx")
-doc.replace_text("before", "after", count=1)
+doc = HwpxDocument.blank()
+doc.set_metadata(title="예제", creator="jakal-hwpx")
+doc.set_paragraph_text(0, 0, "Hello HWPX")
+doc.save("build/hello.hwpx")
+```
+
+모듈 구조와 주요 편집 API는 [HWPX_MODULE.ko.md](./HWPX_MODULE.ko.md)를 참고하세요.
+
+## 핵심 API
+
+대부분의 사용자는 `HwpxDocument`와 그 메서드가 반환하는 몇 가지 래퍼 타입만 알면 충분합니다.
+
+- `HwpxDocument`: HWPX 열기, 생성, 수정, 검증, 컴파일, 저장
+- `SectionSettings`: 섹션별 용지 크기와 여백 조회 및 수정
+- `Table`, `TableCell`: 표 내용 조회와 편집
+- `HeaderFooterBlock`: 머리말과 꼬리말 텍스트 조회 및 교체
+- `Bookmark`, `Field`, `Note`, `Equation`, `ShapeObject`: 북마크, 필드, 각주, 수식, 도형 같은 고급 요소 편집
+- `HwpxPart` 계열 클래스: 패키지 내부 파트에 직접 접근해야 할 때 쓰는 저수준 API
+
+### `HwpxDocument` 요약
+
+| 메서드 | 용도 |
+| --- | --- |
+| `open(path)` | 기존 HWPX 파일 열기 |
+| `blank()` | 기본 파트가 들어 있는 새 문서 만들기 |
+| `metadata()` / `set_metadata()` | 문서 메타데이터 조회 및 수정 |
+| `get_document_text()` | 섹션 전체 본문 텍스트 추출 |
+| `set_paragraph_text()` | 특정 문단 텍스트 교체 |
+| `append_paragraph()` | 섹션 끝에 문단 추가 |
+| `replace_text()` | 문서 전체에서 문자열 치환 |
+| `section_settings()` | 페이지 크기와 여백 설정 접근 |
+| `tables()`, `pictures()`, `notes()`, `fields()` | 고급 요소 래퍼 조회 |
+| `validation_errors()` | 저장 전 패키지 유효성 점검 |
+| `save(path)` | 파일로 저장 |
+
+### 자주 보게 되는 래퍼 타입
+
+| 타입 | 대표 사용처 |
+| --- | --- |
+| `SectionSettings` | 페이지 크기, 여백, 방향 수정 |
+| `Table` / `TableCell` | 표 텍스트 수정, 행 추가, 셀 병합 |
+| `HeaderFooterBlock` | 머리말과 꼬리말 텍스트 교체 |
+| `Field` | 하이퍼링크, 메일 머지, 계산식, 상호 참조 필드 수정 |
+| `Picture` | 포함된 이미지 바이너리 조회 및 교체 |
+| `Note` | 각주와 미주 수정 |
+| `ShapeObject` | 텍스트가 들어간 도형 수정 |
+
+## 예제 코드
+
+### 문서 열기와 검증
+
+```python
+from jakal_hwpx import HwpxDocument
+
+doc = HwpxDocument.open("input.hwpx")
+
+print(doc.metadata())
+print(doc.get_document_text())
+print(doc.validation_errors())
+print(doc.reference_validation_errors())
+```
+
+### 메타데이터와 본문 수정
+
+```python
+from jakal_hwpx import HwpxDocument
+
+doc = HwpxDocument.open("input.hwpx")
+doc.set_metadata(title="수정된 제목", creator="Docs Team", keyword="example")
+doc.replace_text("초안", "최종")
+doc.append_paragraph("추가한 문단", section_index=0)
 doc.save("build/edited.hwpx")
 ```
 
-`PdfDocument`, `pdf_to_hwpx()`, `hwpx_to_pdf()` 같은 상세 사용법은 [HWPX_MODULE.md](./HWPX_MODULE.md)를 참고하세요.
+### 페이지 설정과 표 수정
 
-## 샘플 파일 위치
+```python
+from jakal_hwpx import HwpxDocument
 
-루트에 흩어진 예시 문서 대신 샘플 입력은 아래에 정리합니다.
+doc = HwpxDocument.open("input.hwpx")
 
-- `examples/samples/hwpx/`
-- `examples/samples/hwp/`
-- `examples/samples/pdf/`
+settings = doc.section_settings(0)
+settings.set_page_size(width=60000, height=85000)
+settings.set_margins(left=7000, right=7000, top=5000, bottom=5000)
 
-생성 산출물과 검증 결과는 `build/validation/` 같은 빌드 디렉터리에 두는 것을 권장합니다.
+table = doc.tables()[0]
+table.set_cell_text(0, 0, "수정됨")
+table.append_row()[0].set_text("새 행")
+
+doc.save("build/layout-updated.hwpx")
+```
+
+### 하이퍼링크와 필드 추가
+
+```python
+from jakal_hwpx import HwpxDocument
+
+doc = HwpxDocument.blank()
+bookmark = doc.append_bookmark("summary_anchor")
+doc.append_hyperlink("https://example.com", display_text="Example")
+doc.append_calculation_field("40+2", display_text="42")
+doc.append_cross_reference(bookmark.name or "summary_anchor", display_text="요약으로 이동")
+doc.save("build/fields.hwpx")
+```
 
 ## 테스트
 
@@ -70,13 +165,14 @@ python -m pytest -q
 
 ## 추가 문서
 
-- [HWPX_MODULE.md](./HWPX_MODULE.md): 모듈 구조와 API 설명
+- [HWPX_MODULE.ko.md](./HWPX_MODULE.ko.md): 한국어 패키지 구조와 API 설명
+- [HWPX_MODULE.md](./HWPX_MODULE.md): 영문 패키지 구조와 API 설명
 - [examples/SHOWCASE.md](./examples/SHOWCASE.md): showcase 생성 흐름
 - [RELEASING.md](./RELEASING.md): 배포 체크리스트
-- [THIRD_PARTY_NOTICES.md](./THIRD_PARTY_NOTICES.md): 샘플 문서, 번들 도구, HWPX 관련 명칭 범위 안내
+- [THIRD_PARTY_NOTICES.md](./THIRD_PARTY_NOTICES.md): 샘플 문서와 번들 도구 관련 고지
 
 ## 라이선스
 
-이 저장소의 프로젝트 작성 원본 소스 코드는 [MIT License](./LICENSE)로 제공합니다.
+프로젝트가 직접 작성한 소스 코드는 [MIT License](./LICENSE)를 따릅니다.
 
-다만 샘플 문서, 커밋된 산출물, `tools/` 아래 번들 도구 자산은 별도 권리나 상위 라이선스를 따를 수 있습니다. 재배포 전에는 [THIRD_PARTY_NOTICES.md](./THIRD_PARTY_NOTICES.md)를 함께 확인하세요.
+샘플 문서, 커밋된 산출물, `tools/` 아래 번들 도구 자산은 별도 권리나 상위 라이선스를 따를 수 있습니다. 재배포 전에는 [THIRD_PARTY_NOTICES.md](./THIRD_PARTY_NOTICES.md)를 함께 확인하세요.
