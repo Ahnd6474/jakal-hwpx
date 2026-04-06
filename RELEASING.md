@@ -5,11 +5,12 @@ This project already includes GitHub Actions workflows for building and publishi
 ## Before the first public release
 
 1. Choose the project's license and add a top-level `LICENSE` file.
-2. Create the `jakal-hwpx` project on TestPyPI and PyPI, or confirm that you own the existing project.
-3. Configure PyPI trusted publishing for this repository.
-4. Add the `pypi` and `testpypi` GitHub environments if they are not already configured.
+2. Review bundled third-party tools and sample documents, then update `THIRD_PARTY_NOTICES.md` if the redistribution scope changed.
+3. Create the `jakal-hwpx` project on TestPyPI and PyPI, or confirm that you own the existing project.
+4. Configure PyPI trusted publishing for this repository.
+5. Add the `pypi` and `testpypi` GitHub environments if they are not already configured.
 
-Without a real `LICENSE` file, packaging still builds, but the release is not ready for public redistribution.
+Without a real `LICENSE` file and a reviewed third-party notice, packaging still builds, but the release is not ready for public redistribution.
 
 ## Local validation
 

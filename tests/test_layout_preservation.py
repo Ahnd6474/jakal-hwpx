@@ -5,7 +5,7 @@ from pathlib import Path
 from lxml import etree
 
 from jakal_hwpx import HwpxDocument
-from jakal_hwpx.elements import _set_text
+from jakal_hwpx.elements import _replace_text, _set_text
 
 from conftest import find_sample_with_section_xpath
 
@@ -124,3 +124,20 @@ def test_set_text_redistributes_single_line_text_across_existing_paragraphs() ->
         "[ ] Full-day service (name: ), [ ] Part-time service (name: )",
     ]
     assert not element.xpath(".//hp:linesegarray", namespaces=NS)
+
+
+def test_replace_text_invalidates_linesegarray() -> None:
+    paragraph = etree.fromstring(
+        """
+        <hp:p xmlns:hp="http://www.hancom.co.kr/hwpml/2011/paragraph" id="0" paraPrIDRef="0" styleIDRef="0" pageBreak="0" columnBreak="0" merged="0">
+          <hp:run charPrIDRef="0"><hp:t>alpha beta gamma</hp:t></hp:run>
+          <hp:linesegarray />
+        </hp:p>
+        """
+    )
+
+    replaced = _replace_text(paragraph, "beta", "beta_LAYOUT_REFRESH", count=1)
+
+    assert replaced == 1
+    assert "".join(paragraph.xpath(".//hp:t/text()", namespaces=NS)) == "alpha beta_LAYOUT_REFRESH gamma"
+    assert not paragraph.xpath("./hp:linesegarray", namespaces=NS)

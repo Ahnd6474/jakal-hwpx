@@ -1,3 +1,5 @@
+include LICENSE
+include THIRD_PARTY_NOTICES.md
 include README.md
 include README.ko.md
 include HWPX_MODULE.md

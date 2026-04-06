@@ -73,3 +73,10 @@ python -m pytest -q
 - [HWPX_MODULE.md](./HWPX_MODULE.md): 모듈 구조와 API 설명
 - [examples/SHOWCASE.md](./examples/SHOWCASE.md): showcase 생성 흐름
 - [RELEASING.md](./RELEASING.md): 배포 체크리스트
+- [THIRD_PARTY_NOTICES.md](./THIRD_PARTY_NOTICES.md): 샘플 문서, 번들 도구, HWPX 관련 명칭 범위 안내
+
+## 라이선스
+
+이 저장소의 프로젝트 작성 원본 소스 코드는 [MIT License](./LICENSE)로 제공합니다.
+
+다만 샘플 문서, 커밋된 산출물, `tools/` 아래 번들 도구 자산은 별도 권리나 상위 라이선스를 따를 수 있습니다. 재배포 전에는 [THIRD_PARTY_NOTICES.md](./THIRD_PARTY_NOTICES.md)를 함께 확인하세요.

@@ -90,7 +90,10 @@ Generated validation outputs belong under `build/validation/`.
 - [HWPX_MODULE.md](./HWPX_MODULE.md): package structure, module roles, and API usage
 - [examples/SHOWCASE.md](./examples/SHOWCASE.md): showcase generation workflow
 - [RELEASING.md](./RELEASING.md): release checklist
+- [THIRD_PARTY_NOTICES.md](./THIRD_PARTY_NOTICES.md): scope notes for sample files, bundled tools, and HWPX-related naming
 
 ## License
 
-This repository does not currently include a top-level `LICENSE` file.
+Original project-authored source code in this repository is available under the [MIT License](./LICENSE).
+
+Sample documents, committed outputs, and bundled toolchain artifacts under `tools/` can be subject to separate rights or upstream licenses. See [THIRD_PARTY_NOTICES.md](./THIRD_PARTY_NOTICES.md) before redistributing those assets.
