@@ -1,29 +1,18 @@
 # jakal-hwpx
 
-Round-trip-safe HWPX reading, editing, validation, and writing for Python.
+Python tools for reading, editing, validating, and bridging `HWPX`, plus early `PDF <-> HWPX` conversion helpers.
 
-Korean version: [README.ko.md](./README.ko.md)
+Korean overview: [README.ko.md](./README.ko.md)
 
-`jakal_hwpx` is the Python package in `src/jakal_hwpx`. This README focuses on the library you import and use in code. Some broader repository workflows depend on a local HWPX corpus and Windows-only tooling that are not part of a normal checkout, so they are treated as optional maintainer workflows here instead of the main path.
+## What This Repo Contains
 
-## Table of contents
+- `src/jakal_hwpx`: the importable Python package
+- `examples/samples`: sample `hwpx`, `hwp`, and `pdf` documents used for local experimentation
+- `examples/output_smoke`: committed smoke corpus for tests
+- `examples/output`: showcase outputs generated from the smoke corpus
+- `tools`: bundled Java-based `.hwp -> .hwpx` converter assets used by maintainer workflows
 
-- [Installation](#installation)
-- [Quick start](#quick-start)
-- [PDF bridge](#pdf-bridge)
-- [What is jakal-hwpx?](#what-is-jakal-hwpx)
-- [Why use it?](#why-use-it)
-- [API](#api)
-  - [`HwpxDocument`](#hwpxdocument)
-  - [`DocumentMetadata`](#documentmetadata)
-  - [Element wrappers](#element-wrappers)
-  - [Part classes](#part-classes)
-  - [`HwpxXmlNode`](#hwpxxmlnode)
-  - [Exceptions](#exceptions)
-- [Examples](#examples)
-- [Maintainer workflows](#maintainer-workflows)
-- [Further reading](#further-reading)
-- [License](#license)
+This README is intentionally repo-level. Detailed module and API notes live in [HWPX_MODULE.md](./HWPX_MODULE.md).
 
 ## Installation
 
@@ -36,400 +25,72 @@ python -m pip install --upgrade pip
 python -m pip install .
 ```
 
-If you publish the package to PyPI, users can install it with:
-
-```bash
-python -m pip install --upgrade pip
-python -m pip install jakal-hwpx
-```
-
-The import path is `jakal_hwpx`. The project name in `pyproject.toml` is `jakal-hwpx`.
-
-If you want editable development mode:
+For editable development mode:
 
 ```bash
 python -m pip install -e .[dev]
 ```
 
-If you only want to run the test suite:
+The package name is `jakal-hwpx` and the import path is `jakal_hwpx`.
 
-```bash
-python -m pip install -e .[test]
-```
-
-## Quick start
-
-```python
-from pathlib import Path
-
-from jakal_hwpx import HwpxDocument
-
-source = Path("example.hwpx")
-target = Path("example-edited.hwpx")
-
-doc = HwpxDocument.open(source)
-doc.set_metadata(title="Edited title", creator="jakal-hwpx")
-doc.replace_text("old text", "new text", count=1)
-doc.append_paragraph("Added from Python.", section_index=0)
-
-if doc.headers():
-    doc.headers()[0].set_text("Edited header")
-
-doc.save(target)
-print(doc.validation_errors())
-# []
-```
-
-To start from a new in-memory blank document instead of opening an existing file:
+## Quick Start
 
 ```python
 from jakal_hwpx import HwpxDocument
 
-doc = HwpxDocument()
-doc.append_paragraph("First paragraph in a new document.", section_index=0)
-
-raw_bytes = doc.compile()
-doc.save("new-document.hwpx")
+doc = HwpxDocument.open("examples/samples/hwpx/AI와_특이점_보고서.hwpx")
+doc.replace_text("before", "after", count=1)
+doc.save("build/edited.hwpx")
 ```
 
-## PDF bridge
+For module-level usage, `PdfDocument`, or bridge APIs such as `pdf_to_hwpx()` and `hwpx_to_pdf()`, see [HWPX_MODULE.md](./HWPX_MODULE.md).
 
-`jakal_hwpx` now also includes a lightweight PDF layer built on top of `pypdf` so you can read PDFs, create basic PDFs, and bridge between PDF pages and HWPX sections.
+## Repository Layout
 
-```python
-from jakal_hwpx import PdfDocument, hwpx_to_pdf, pdf_to_hwpx
-
-pdf = PdfDocument.blank()
-page = pdf.add_page(width=595, height=842)
-page.add_text("Hello from PDF")
-pdf.save("hello.pdf")
-
-hwpx = pdf_to_hwpx("hello.pdf", ocr_text_by_page=["OCR text for page 1"])
-hwpx.save("from-pdf.hwpx")
-
-roundtrip_pdf = hwpx_to_pdf(hwpx)
-roundtrip_pdf.save("from-hwpx.pdf")
+```text
+src/jakal_hwpx/          Python package
+examples/samples/hwpx/   sample HWPX documents
+examples/samples/hwp/    sample HWP documents
+examples/samples/pdf/    sample PDF documents
+examples/output_smoke/   committed smoke corpus used by tests
+examples/output/         generated showcase outputs
+scripts/                 maintainer scripts
+tools/                   bundled HWP conversion tooling
 ```
 
-The bridge is intentionally conservative:
+## Testing
 
-- OCR text is treated as an external input for `pdf_to_hwpx`.
-- Non-text PDF content is summarized into per-page markers such as image count and vector operation count.
-- `hwpx_to_pdf` writes readable page text and page size first, instead of trying to fully reproduce every HWPX layout primitive.
-
-## What is jakal-hwpx?
-
-`jakal_hwpx` is a Python library for editing zip-based HWPX packages without tearing them apart by hand. It can open an existing document or start from a new blank in-memory document, exposes typed wrappers for the structures you usually want to change, and writes the package back out while preserving untouched parts as original bytes when they came from an existing file.
-
-The package covers metadata, paragraphs, styles, page settings, tables, images, headers and footers, notes, bookmarks, fields, equations, shapes, binary assets, and low-level XML access.
-
-## Why use it?
-
-HWPX is not just one XML file. A real document is a package of XML parts, manifest entries, binary assets, references, and layout data that all have to stay in sync.
-
-`jakal_hwpx` tries to make those edits safer:
-
-- It keeps untouched parts intact instead of regenerating everything.
-- It gives you typed helpers for common edits such as paragraph text, header/footer text, tables, fields, and styles.
-- It validates package structure and cross-part references before writing.
-- It still leaves an escape hatch through `HwpxXmlNode` when you need to edit something the typed wrappers do not cover yet.
-- It can preserve distribution-protected packages even when high-level editing is unavailable for encrypted sections.
-
-If you only need raw XML access, `lxml` may be enough. If you need programmatic edits to existing HWPX files, this library gives you a better starting point.
-
-## API
-
-### `HwpxDocument`
-
-`HwpxDocument` is the main entry point.
-
-#### Constructors
-
-| Signature | Returns | Description |
-|-----------|---------|-------------|
-| `HwpxDocument()` | `HwpxDocument` | Create a new blank document in memory. No file is written until you call `compile()` or `save()`. |
-| `HwpxDocument.blank()` | `HwpxDocument` | Alias for `HwpxDocument()` when you want an explicit blank-document factory. |
-| `HwpxDocument.open(path)` | `HwpxDocument` | Open a `.hwpx` file from disk. |
-| `HwpxDocument.from_bytes(raw_bytes)` | `HwpxDocument` | Open a package from in-memory bytes. |
-
-`HwpxDocument.open()` raises `FileNotFoundError` when the path does not exist.
-
-#### Core properties and part access
-
-| Member | Returns | Description |
-|--------|---------|-------------|
-| `mimetype` | `MimetypePart` | The raw `mimetype` entry. |
-| `content_hpf` | `ContentHpfPart` | `Contents/content.hpf`, including metadata and manifest helpers. |
-| `header` | `HeaderPart` | `Contents/header.xml`. |
-| `container` | `ContainerPart` | `META-INF/container.xml`. |
-| `preview_text` | `PreviewTextPart \| None` | `Preview/PrvText.txt` if present. |
-| `is_distribution_protected` | `bool` | `True` when the package uses protected encrypted parts. |
-| `sections` | `list[SectionPart]` | Sorted section XML parts. |
-| `get_part(path, expected_type=None)` | `HwpxPart` | Fetch any package part by path. |
-| `list_part_paths()` | `list[str]` | Current part order used when writing the zip. |
-| `add_part(path, raw_bytes)` | `HwpxPart` | Add or replace a package part directly. |
-| `remove_part(path)` | `None` | Remove a package part. |
-
-#### Feature accessors
-
-| Method | Returns | Description |
-|--------|---------|-------------|
-| `metadata()` | `DocumentMetadata` | Read document metadata. |
-| `headers(section_index=None)` | `list[HeaderFooterBlock]` | Header blocks across the document or in one section. |
-| `footers(section_index=None)` | `list[HeaderFooterBlock]` | Footer blocks across the document or in one section. |
-| `tables(section_index=None)` | `list[Table]` | Tables in the document. |
-| `pictures(section_index=None)` | `list[Picture]` | Picture objects in the document. |
-| `section_settings(section_index=0)` | `SectionSettings` | Page size and margin settings for a section. |
-| `notes(section_index=None)` | `list[Note]` | Footnotes and endnotes. |
-| `bookmarks(section_index=None)` | `list[Bookmark]` | Bookmark controls. |
-| `fields(section_index=None)` | `list[Field]` | All field controls. |
-| `hyperlinks(section_index=None)` | `list[Field]` | Hyperlink fields only. |
-| `mail_merge_fields(section_index=None)` | `list[Field]` | Mail merge fields only. |
-| `calculation_fields(section_index=None)` | `list[Field]` | Formula and calculation fields only. |
-| `cross_references(section_index=None)` | `list[Field]` | Cross-reference fields only. |
-| `auto_numbers(section_index=None)` | `list[AutoNumber]` | Automatic numbering controls. |
-| `equations(section_index=None)` | `list[Equation]` | Equation objects. |
-| `shapes(section_index=None)` | `list[ShapeObject]` | Generic shape objects, including textart. |
-| `styles()` | `list[StyleDefinition]` | Document styles from `header.xml`. |
-| `paragraph_styles()` | `list[ParagraphStyle]` | Paragraph style records. |
-| `character_styles()` | `list[CharacterStyle]` | Character style records. |
-| `get_style(style_id)` | `StyleDefinition` | Look up a style by id. |
-| `get_paragraph_style(style_id)` | `ParagraphStyle` | Look up a paragraph style by id. |
-| `get_character_style(style_id)` | `CharacterStyle` | Look up a character style by id. |
-
-#### Editing and output
-
-| Method | Returns | Description |
-|--------|---------|-------------|
-| `set_metadata(**values)` | `None` | Update title, language, creator, subject, description, dates, keyword, and related metadata. |
-| `get_document_text(section_separator="\n\n")` | `str` | Flatten section text for inspection. |
-| `replace_text(old, new, count=-1, include_header=True)` | `int` | Replace text across editable XML parts. |
-| `append_paragraph(text, section_index=0, ...)` | `HwpxXmlNode` | Add a paragraph to a section. |
-| `insert_paragraph(section_index, paragraph_index, text, ...)` | `HwpxXmlNode` | Insert a paragraph at a specific paragraph index. |
-| `set_paragraph_text(section_index, paragraph_index, text, ...)` | `HwpxXmlNode` | Replace the text of one paragraph. |
-| `delete_paragraph(section_index, paragraph_index)` | `None` | Remove a paragraph. |
-| `apply_style_to_paragraph(section_index, paragraph_index, ...)` | `None` | Attach style ids to one paragraph. |
-| `apply_style_batch(section_index=..., text_contains=..., regex=..., ...)` | `int` | Apply style ids to matching paragraphs. |
-| `add_section(clone_from=0, text=None)` | `SectionPart` | Create a new section. |
-| `remove_section(section_index)` | `None` | Delete a section and update package metadata. |
-| `set_preview_text(text)` | `PreviewTextPart` | Create or replace preview text. |
-| `add_or_replace_binary(name, data, media_type=None, manifest_id=None)` | `BinaryDataPart` | Store binary data and update the manifest. |
-| `append_bookmark(name, ...)` | `Bookmark` | Add a bookmark control. |
-| `append_field(field_type, ...)` | `Field` | Add a generic field control. |
-| `append_hyperlink(target, display_text, ...)` | `Field` | Add a hyperlink field. |
-| `append_mail_merge_field(name, display_text, ...)` | `Field` | Add a mail merge field. |
-| `append_calculation_field(expression, display_text, ...)` | `Field` | Add a formula field. |
-| `append_cross_reference(bookmark_name, display_text, ...)` | `Field` | Add a cross-reference field. |
-| `compile(validate=True)` | `bytes` | Build the current in-memory document into `.hwpx` bytes without writing a file. |
-| `save(path, validate=True)` | `Path` | Write the current in-memory document to disk. |
-
-#### Validation
-
-| Method | Returns | Description |
-|--------|---------|-------------|
-| `validation_errors()` | `list[str]` | Structural package checks for required parts, manifest entries, duplicate zip paths, and section counts. |
-| `validate()` | `None` | Raise `HwpxValidationError` if `validation_errors()` is not empty. |
-| `roundtrip_validate()` | `None` | Save to a temp directory, reopen, and validate again. |
-| `xml_validation_errors()` | `list[str]` | XML root-name and section/table sanity checks. |
-| `schema_validation_errors(schema_map)` | `list[str]` | Optional XSD validation for specific XML parts. |
-| `reference_validation_errors()` | `list[str]` | Style, manifest, bookmark, and field reference checks. |
-| `save_reopen_validation_errors()` | `list[str]` | Save, reopen, and report structural errors. |
-If `is_distribution_protected` is `True`, high-level section editing is intentionally blocked because the encrypted section data is not editable through the public helpers.
-
-### `DocumentMetadata`
-
-`DocumentMetadata` is a small dataclass returned by `HwpxDocument.metadata()`.
-
-```python
-DocumentMetadata(
-    title: str | None = None,
-    language: str | None = None,
-    creator: str | None = None,
-    subject: str | None = None,
-    description: str | None = None,
-    lastsaveby: str | None = None,
-    created: str | None = None,
-    modified: str | None = None,
-    date: str | None = None,
-    keyword: str | None = None,
-    extra: dict[str, str] = {},
-)
-```
-
-### Element wrappers
-
-These wrappers sit on top of XML nodes and cover the common editing paths.
-
-| Class | Use for | Key members |
-|-------|---------|-------------|
-| `HeaderFooterBlock` | Header and footer text | `kind`, `text`, `replace_text()`, `set_text()` |
-| `TableCell` | One table cell | `row`, `column`, `text`, `row_span`, `col_span`, `set_text()` |
-| `Table` | Table editing | `row_count`, `column_count`, `cells()`, `rows()`, `cell()`, `set_cell_text()`, `append_row()`, `merge_cells()` |
-| `Picture` | Image metadata and binary binding | `binary_item_id`, `shape_comment`, `binary_part_path()`, `binary_data()`, `replace_binary()`, `bind_binary_item()` |
-| `StyleDefinition` | Named document styles | `style_id`, `name`, `english_name`, `para_pr_id`, `char_pr_id`, `set_name()`, `set_english_name()`, `bind_refs()` |
-| `ParagraphStyle` | Paragraph formatting | `style_id`, `alignment_horizontal`, `line_spacing`, `set_alignment()`, `set_line_spacing()` |
-| `CharacterStyle` | Character formatting | `style_id`, `text_color`, `height`, `set_text_color()`, `set_height()` |
-| `SectionSettings` | Page setup | `page_width`, `page_height`, `landscape`, `margins()`, `set_page_size()`, `set_margins()` |
-| `Note` | Footnotes and endnotes | `kind`, `number`, `text`, `set_text()` |
-| `Bookmark` | Bookmark controls | `name`, `rename()` |
-| `Field` | Hyperlinks, mail merge, formulas, and cross references | `field_type`, `field_id`, `control_id`, `name`, `parameter_map()`, `get_parameter()`, `set_parameter()`, `display_text`, `set_display_text()`, `set_hyperlink_target()`, `configure_mail_merge()`, `configure_calculation()`, `configure_cross_reference()` |
-| `AutoNumber` | Automatic numbering controls | `kind`, `number`, `number_type`, `set_number()`, `set_number_type()` |
-| `Equation` | Equation editing | `script`, `shape_comment` |
-| `ShapeObject` | Shape comments and textart text | `kind`, `shape_comment`, `text`, `set_text()` |
-
-### Part classes
-
-The package also exports the lower-level part model.
-
-| Class | Represents |
-|-------|------------|
-| `HwpxPart` | Base class for every package part |
-| `GenericBinaryPart` | Arbitrary binary payload |
-| `MimetypePart` | `mimetype` |
-| `GenericTextPart` | Arbitrary UTF-8 text part |
-| `PreviewTextPart` | `Preview/PrvText.txt` |
-| `PreviewImagePart` | Preview image binary |
-| `BinaryDataPart` | `BinData/*` entries |
-| `ScriptPart` | Script text part |
-| `XmlPart` | Base class for XML-backed parts |
-| `GenericXmlPart` | Arbitrary XML part |
-| `VersionPart` | `version.xml` |
-| `ContainerPart` | `META-INF/container.xml` |
-| `ManifestPart` | `META-INF/manifest.xml` |
-| `ContainerRdfPart` | `META-INF/container.rdf` |
-| `ContentHpfPart` | `Contents/content.hpf` |
-| `HeaderPart` | `Contents/header.xml` |
-| `SettingsPart` | `settings.xml` |
-| `SectionPart` | `Contents/sectionN.xml` |
-
-### `HwpxXmlNode`
-
-`HwpxXmlNode` is the low-level escape hatch for namespace-aware XML editing.
-
-Use it when the typed wrappers do not cover what you need yet.
-
-```python
-from jakal_hwpx import HwpxDocument
-
-doc = HwpxDocument.open("example.hwpx")
-section = doc.sections[0]
-paragraph = section.paragraphs()[0]
-
-for node in paragraph.xpath(".//hp:t"):
-    if node.text:
-        node.text = node.text.replace("before", "after")
-
-doc.save("example-edited.hwpx")
-```
-
-### Exceptions
-
-| Exception | Raised when |
-|-----------|-------------|
-| `HwpxError` | Base package exception. |
-| `InvalidHwpxFileError` | The input exists but is not a valid zip-based HWPX package. |
-| `HwpxValidationError` | `validate()` finds one or more structural problems. |
-
-## Examples
-
-### Feature-level editing
-
-```python
-doc = HwpxDocument.open("example.hwpx")
-
-doc.headers()[0].set_text("Edited header")
-doc.footers()[0].set_text("Edited footer")
-
-section = doc.section_settings(0)
-section.set_page_size(width=60000, height=84000)
-section.set_margins(left=8500, right=8500)
-
-table = doc.tables()[0]
-table.set_cell_text(0, 0, "Edited cell")
-table.append_row()
-
-doc.append_bookmark("python_anchor")
-doc.append_hyperlink("https://example.com", display_text="Example")
-doc.append_mail_merge_field("customer_name", display_text="CUSTOMER_NAME")
-doc.append_calculation_field("40+2", display_text="42")
-doc.append_cross_reference("python_anchor", display_text="Anchor Ref")
-
-doc.save("example-edited.hwpx")
-```
-
-### Validation helpers
-
-```python
-doc = HwpxDocument.open("example.hwpx")
-
-print(doc.xml_validation_errors())
-print(doc.reference_validation_errors())
-print(doc.save_reopen_validation_errors())
-```
-
-## Maintainer workflows
-
-The repository includes a committed smoke corpus under `examples/output_smoke`, so the default test suite can run from a normal checkout. If you maintain a larger private corpus, point the tests and showcase script at it with `JAKAL_HWPX_SAMPLE_DIR`.
-
-Run the test suite with your current interpreter:
+Run the default test suite:
 
 ```bash
 python -m pip install -e .[dev]
-tox -e py
+python -m pytest -q
 ```
 
-Run the supported-version matrix locally when you have multiple interpreters installed:
+The tests first look for samples in:
 
-```bash
-tox
-```
+1. `JAKAL_HWPX_SAMPLE_DIR`
+2. `all_hwpx_flat/`
+3. `examples/output_smoke/`
+4. `examples/output/`
+5. `examples/samples/hwpx/`
 
-Build the showcase bundle against the default committed samples:
+## Sample Files
 
-```bash
-python examples/build_showcase_bundle.py --corpus-dir examples/output_smoke --output-dir examples/output
-```
+Repository sample inputs now live under `examples/samples/` instead of the repo root:
 
-Or override the sample corpus explicitly:
+- `examples/samples/hwpx/`
+- `examples/samples/hwp/`
+- `examples/samples/pdf/`
 
-```bash
-set JAKAL_HWPX_SAMPLE_DIR=<path-to-hwpx-corpus>
-tox -e py
-python examples/build_showcase_bundle.py --corpus-dir <path-to-hwpx-corpus> --output-dir <path-to-output>
-```
+Generated validation outputs belong under `build/validation/`.
 
-To build release artifacts locally before publishing:
+## More Docs
 
-```bash
-tox -e pkg
-```
-
-To run the fuller pre-release check that rebuilds `dist/`, validates metadata, and inspects the archive contents:
-
-```bash
-tox -e release
-```
-
-CI now runs tests on Python 3.11, 3.12, and 3.13, and the publish workflow supports:
-
-- manual `workflow_dispatch` uploads to TestPyPI or PyPI
-- GitHub Release based publishing to PyPI
-
-For manual uploads outside GitHub Actions:
-
-```bash
-python -m pip install --upgrade build twine
-python scripts/check_release.py
-python -m twine upload dist/*
-```
-
-See [`RELEASING.md`](./RELEASING.md) for the end-to-end PyPI release checklist, including TestPyPI and GitHub trusted publishing setup.
-
-## Further reading
-
-- [`HWPX_MODULE.md`](./HWPX_MODULE.md) for a shorter module overview.
-- [`examples/SHOWCASE.md`](./examples/SHOWCASE.md) for showcase generation details.
+- [HWPX_MODULE.md](./HWPX_MODULE.md): package structure, module roles, and API usage
+- [examples/SHOWCASE.md](./examples/SHOWCASE.md): showcase generation workflow
+- [RELEASING.md](./RELEASING.md): release checklist
 
 ## License
 
-This repository does not currently include a top-level license file. Choose a license and add a `LICENSE` file before the first public PyPI release or any redistribution.
+This repository does not currently include a top-level `LICENSE` file.

@@ -11,7 +11,9 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
 def _sample_pdf_path() -> Path:
-    pdfs = sorted(REPO_ROOT.glob("*.pdf"))
+    pdfs = sorted((REPO_ROOT / "examples" / "samples" / "pdf").glob("*.pdf"))
+    if not pdfs:
+        pdfs = sorted(REPO_ROOT.glob("*.pdf"))
     if not pdfs:
         raise AssertionError("No sample PDF file was found in the repository root.")
     return pdfs[0]

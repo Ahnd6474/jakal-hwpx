@@ -38,6 +38,11 @@ def _escape_pdf_text(value: str) -> str:
     return value.replace("\\", "\\\\").replace("(", "\\(").replace(")", "\\)")
 
 
+def _pdf_text_operand(value: str) -> str:
+    encoded = ("\ufeff" + value).encode("utf-16-be").hex().upper()
+    return f"<{encoded}>"
+
+
 def _wrap_text_for_page(text: str, *, usable_width: float, font_size: float) -> list[str]:
     if not text:
         return [""]
@@ -290,7 +295,10 @@ class PdfPage:
         for line in lines:
             if not first_line:
                 commands.append(f"0 {-resolved_leading:.2f} Td")
-            commands.append(f"({_escape_pdf_text(line)}) Tj")
+            if line.isascii():
+                commands.append(f"({_escape_pdf_text(line)}) Tj")
+            else:
+                commands.append(f"{_pdf_text_operand(line)} Tj")
             first_line = False
         commands.append("ET")
         self.document._append_content_stream(writer_page, ("\n".join(commands) + "\n").encode("utf-8"))

@@ -26,6 +26,7 @@ def _candidate_sample_roots() -> list[Path]:
             REPO_ROOT / "all_hwpx_flat",
             REPO_ROOT / "examples" / "output_smoke",
             REPO_ROOT / "examples" / "output",
+            REPO_ROOT / "examples" / "samples" / "hwpx",
             REPO_ROOT,
         ]
     )
