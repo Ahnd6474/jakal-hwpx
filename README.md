@@ -92,6 +92,10 @@ Generated validation outputs belong under `build/validation/`.
 - [RELEASING.md](./RELEASING.md): release checklist
 - [THIRD_PARTY_NOTICES.md](./THIRD_PARTY_NOTICES.md): scope notes for sample files, bundled tools, and HWPX-related naming
 
+## TODO
+pdf2hwpx
+enhance success rate to generate hwpx with ai
+
 ## License
 
 Original project-authored source code in this repository is available under the [MIT License](./LICENSE).
