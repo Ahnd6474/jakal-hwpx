@@ -9,7 +9,7 @@ description = "Round-trip safe HWPX reader/editor/writer for Python"
 readme = { file = "README.md", content-type = "text/markdown" }
 requires-python = ">=3.11"
 authors = [{ name = "Ahnd6474" }]
-dependencies = ["lxml>=5.0.0"]
+dependencies = ["lxml>=5.0.0,<6"]
 keywords = ["hwpx", "hancom", "document", "xml", "library"]
 classifiers = [
   "Development Status :: 3 - Alpha",
@@ -29,6 +29,7 @@ Homepage = "https://github.com/Ahnd6474/jakal-hwpx"
 Source = "https://github.com/Ahnd6474/jakal-hwpx"
 Issues = "https://github.com/Ahnd6474/jakal-hwpx/issues"
 Documentation = "https://github.com/Ahnd6474/jakal-hwpx#readme"
+Releases = "https://github.com/Ahnd6474/jakal-hwpx/releases"
 
 [project.optional-dependencies]
 dev = ["build>=1.2", "pytest>=8.0", "tox>=4.0", "twine>=5.0"]

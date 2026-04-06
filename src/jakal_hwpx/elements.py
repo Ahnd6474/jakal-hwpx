@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from copy import deepcopy
 from dataclasses import dataclass
 
 from lxml import etree
@@ -39,6 +40,40 @@ def _replace_text(element: etree._Element, old: str, new: str, count: int = -1) 
         if changed and remaining == 0:
             break
     return replaced
+
+
+def _paragraphs_affected_by_text_edit(element: etree._Element) -> list[etree._Element]:
+    paragraphs: list[etree._Element] = []
+    seen: set[int] = set()
+
+    def add(node: etree._Element) -> None:
+        marker = id(node)
+        if marker in seen:
+            return
+        seen.add(marker)
+        paragraphs.append(node)
+
+    if etree.QName(element).localname == "p":
+        add(element)
+
+    ancestors = element.xpath("ancestor::hp:p[1]", namespaces=NS)
+    if ancestors:
+        add(ancestors[0])
+
+    for paragraph in element.xpath(".//hp:p", namespaces=NS):
+        add(paragraph)
+
+    return paragraphs
+
+
+def _invalidate_paragraph_layout(element: etree._Element) -> None:
+    for paragraph in _paragraphs_affected_by_text_edit(element):
+        for line_seg_array in paragraph.xpath("./hp:linesegarray", namespaces=NS):
+            paragraph.remove(line_seg_array)
+
+
+def _paragraph_nodes(element: etree._Element) -> list[etree._Element]:
+    return list(element.xpath(".//hp:p", namespaces=NS))
 
 
 def _ensure_first_paragraph(element: etree._Element) -> etree._Element:
@@ -88,18 +123,110 @@ def _ensure_run_with_text(paragraph: etree._Element, text: str) -> etree._Elemen
     return run
 
 
+def _set_paragraph_text(paragraph: etree._Element, text: str) -> None:
+    for child in list(paragraph):
+        paragraph.remove(child)
+    _ensure_run_with_text(paragraph, text)
+
+
+def _clone_paragraph(paragraph: etree._Element) -> etree._Element:
+    clone = deepcopy(paragraph)
+    _set_paragraph_text(clone, "")
+    return clone
+
+
+def _split_score(text: str, index: int, target: int) -> tuple[int, int]:
+    penalty = abs(index - target) * 10
+    prev_char = text[index - 1] if index > 0 else ""
+    next_char = text[index] if index < len(text) else ""
+
+    if prev_char in ")]":
+        penalty -= 40
+    elif prev_char == ",":
+        penalty -= 30
+    elif prev_char == " ":
+        penalty -= 10
+
+    if next_char == "[":
+        penalty -= 25
+    elif next_char == "(":
+        penalty -= 10
+    elif next_char == " ":
+        penalty -= 5
+
+    return penalty, index
+
+
+def _snap_split_index(text: str, target: int, *, minimum: int, maximum: int) -> int:
+    if minimum >= maximum:
+        return minimum
+
+    target = min(max(target, minimum), maximum)
+    window = max(8, len(text) // 12)
+    search_start = max(minimum, target - window)
+    search_end = min(maximum, target + window)
+    candidates = range(search_start, search_end + 1)
+    return min(candidates, key=lambda index: _split_score(text, index, target))
+
+
+def _distribute_text_across_paragraphs(text: str, paragraphs: list[etree._Element]) -> list[str]:
+    if not paragraphs:
+        return [text]
+
+    if "\n" in text:
+        return text.split("\n")
+
+    if len(paragraphs) == 1:
+        return [text]
+
+    original_lengths = [len("".join(node.text or "" for node in paragraph.xpath(".//hp:t", namespaces=NS))) for paragraph in paragraphs]
+    total_length = sum(original_lengths)
+    if total_length <= 0:
+        return [text] + [""] * (len(paragraphs) - 1)
+
+    segments: list[str] = []
+    start = 0
+
+    for index in range(1, len(original_lengths)):
+        remaining_paragraphs = len(original_lengths) - index
+        minimum = start
+        maximum = len(text) - remaining_paragraphs
+        target = round(len(text) * (sum(original_lengths[:index]) / total_length))
+        split_at = _snap_split_index(text, target, minimum=minimum, maximum=maximum)
+        segments.append(text[start:split_at])
+        start = split_at
+
+    segments.append(text[start:])
+    return segments
+
+
 def _set_text(element: etree._Element, text: str) -> None:
+    paragraphs = _paragraph_nodes(element)
+    if paragraphs and (len(paragraphs) > 1 or "\n" in text):
+        parts = _distribute_text_across_paragraphs(text, paragraphs)
+        while len(paragraphs) < len(parts):
+            template = paragraphs[-1] if paragraphs else _ensure_first_paragraph(element)
+            clone = _clone_paragraph(template)
+            template.addnext(clone)
+            paragraphs = _paragraph_nodes(element)
+        for paragraph, value in zip(paragraphs, parts):
+            _set_paragraph_text(paragraph, value)
+        for paragraph in paragraphs[len(parts) :]:
+            _set_paragraph_text(paragraph, "")
+        _invalidate_paragraph_layout(element)
+        return
+
     text_nodes = _text_nodes(element)
     if text_nodes:
         text_nodes[0].text = text
         for extra in text_nodes[1:]:
             extra.text = ""
+        _invalidate_paragraph_layout(element)
         return
 
     paragraph = _ensure_first_paragraph(element)
-    for child in list(paragraph):
-        paragraph.remove(child)
-    _ensure_run_with_text(paragraph, text)
+    _set_paragraph_text(paragraph, text)
+    _invalidate_paragraph_layout(element)
 
 
 @dataclass

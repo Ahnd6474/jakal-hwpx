@@ -1,0 +1,78 @@
+# Releasing `jakal-hwpx`
+
+This project already includes GitHub Actions workflows for building and publishing packages. This guide captures the last manual checks so a PyPI release is repeatable and low-risk.
+
+## Before the first public release
+
+1. Choose the project's license and add a top-level `LICENSE` file.
+2. Create the `jakal-hwpx` project on TestPyPI and PyPI, or confirm that you own the existing project.
+3. Configure PyPI trusted publishing for this repository.
+4. Add the `pypi` and `testpypi` GitHub environments if they are not already configured.
+
+Without a real `LICENSE` file, packaging still builds, but the release is not ready for public redistribution.
+
+## Local validation
+
+Install the release tools:
+
+```bash
+python -m pip install --upgrade build twine tox
+```
+
+Run the full release check:
+
+```bash
+tox -e release
+```
+
+That command:
+
+- rebuilds `dist/`
+- runs `python -m twine check dist/*`
+- verifies the package version is consistent
+- checks the wheel and source distribution for required package files
+- warns if a top-level `LICENSE` file is still missing
+
+If you only want the lightweight packaging check used by CI:
+
+```bash
+tox -e pkg
+```
+
+## TestPyPI
+
+Use the publish workflow manually:
+
+1. Open GitHub Actions.
+2. Run the `Publish` workflow.
+3. Select `testpypi`.
+4. Install from TestPyPI and smoke-test the package:
+
+```bash
+python -m pip install --upgrade pip
+python -m pip install --index-url https://test.pypi.org/simple/ --extra-index-url https://pypi.org/simple jakal-hwpx
+python -c "from jakal_hwpx import HwpxDocument; print(HwpxDocument)"
+```
+
+## PyPI
+
+There are two supported release paths:
+
+1. Create a GitHub Release. The `Publish` workflow will publish to PyPI automatically.
+2. Run the `Publish` workflow manually and choose `pypi`.
+
+For a manual upload outside GitHub Actions:
+
+```bash
+python scripts/check_release.py
+python -m twine upload dist/*
+```
+
+## Suggested release sequence
+
+1. Update the version in `pyproject.toml` and `src/jakal_hwpx/__init__.py`.
+2. Run `tox -e py312` or the full test matrix you want before release.
+3. Run `tox -e release`.
+4. Publish to TestPyPI.
+5. Smoke-test installation from TestPyPI.
+6. Create the GitHub Release or run the PyPI publish workflow manually.

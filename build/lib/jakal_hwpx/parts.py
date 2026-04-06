@@ -9,6 +9,7 @@ from typing import Any
 
 from lxml import etree
 
+from .elements import _invalidate_paragraph_layout
 from .namespaces import NS, SECTION_PATTERN, qname
 from .xmlnode import HwpxXmlNode
 
@@ -565,12 +566,19 @@ class SectionPart(XmlPart):
         paragraph = paragraphs[index]
         if char_pr_id is None:
             char_pr_id = self._default_char_pr_id(paragraph)
+        preserved_runs = [
+            deepcopy(child)
+            for child in paragraph.xpath("./hp:run[hp:secPr]", namespaces=NS)
+        ]
         for child in list(paragraph):
             paragraph.remove(child)
+        for preserved in preserved_runs:
+            paragraph.append(preserved)
         run = etree.SubElement(paragraph, qname("hp", "run"))
         run.set("charPrIDRef", char_pr_id)
         text_node = etree.SubElement(run, qname("hp", "t"))
         text_node.text = text
+        _invalidate_paragraph_layout(paragraph)
         self.mark_modified()
         return HwpxXmlNode(paragraph, self)
 

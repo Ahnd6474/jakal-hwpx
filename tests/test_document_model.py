@@ -16,6 +16,32 @@ def test_open_exposes_expected_parts(sample_hwpx_path: Path) -> None:
     assert document.validation_errors() == []
 
 
+def test_default_constructor_builds_blank_document_in_memory() -> None:
+    document = HwpxDocument()
+    expected_part_paths = [
+        "mimetype",
+        "version.xml",
+        "Contents/content.hpf",
+        "Contents/header.xml",
+        "Contents/section0.xml",
+        "settings.xml",
+        "META-INF/container.xml",
+    ]
+
+    assert isinstance(document.content_hpf, ContentHpfPart)
+    assert isinstance(document.header, HeaderPart)
+    assert document.sections
+    assert all(isinstance(section, SectionPart) for section in document.sections)
+    assert document.list_part_paths() == expected_part_paths
+    assert document.source_path is None
+    assert document.validation_errors() == []
+    assert document.get_document_text() == ""
+
+    reopened = HwpxDocument.from_bytes(document.compile())
+    reopened.validate()
+    assert reopened.get_document_text() == ""
+
+
 def test_edit_save_and_reopen_roundtrip(sample_hwpx_path: Path, tmp_path: Path) -> None:
     document = HwpxDocument.open(sample_hwpx_path)
     original_section_count = len(document.sections)

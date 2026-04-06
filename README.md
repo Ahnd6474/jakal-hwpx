@@ -79,9 +79,21 @@ print(doc.validation_errors())
 # []
 ```
 
+To start from a new in-memory blank document instead of opening an existing file:
+
+```python
+from jakal_hwpx import HwpxDocument
+
+doc = HwpxDocument()
+doc.append_paragraph("First paragraph in a new document.", section_index=0)
+
+raw_bytes = doc.compile()
+doc.save("new-document.hwpx")
+```
+
 ## What is jakal-hwpx?
 
-`jakal_hwpx` is a Python library for editing zip-based HWPX packages without tearing them apart by hand. It opens an existing document, exposes typed wrappers for the structures you usually want to change, and writes the package back out while preserving untouched parts as original bytes.
+`jakal_hwpx` is a Python library for editing zip-based HWPX packages without tearing them apart by hand. It can open an existing document or start from a new blank in-memory document, exposes typed wrappers for the structures you usually want to change, and writes the package back out while preserving untouched parts as original bytes when they came from an existing file.
 
 The package covers metadata, paragraphs, styles, page settings, tables, images, headers and footers, notes, bookmarks, fields, equations, shapes, binary assets, and low-level XML access.
 
@@ -109,6 +121,8 @@ If you only need raw XML access, `lxml` may be enough. If you need programmatic 
 
 | Signature | Returns | Description |
 |-----------|---------|-------------|
+| `HwpxDocument()` | `HwpxDocument` | Create a new blank document in memory. No file is written until you call `compile()` or `save()`. |
+| `HwpxDocument.blank()` | `HwpxDocument` | Alias for `HwpxDocument()` when you want an explicit blank-document factory. |
 | `HwpxDocument.open(path)` | `HwpxDocument` | Open a `.hwpx` file from disk. |
 | `HwpxDocument.from_bytes(raw_bytes)` | `HwpxDocument` | Open a package from in-memory bytes. |
 
@@ -180,8 +194,8 @@ If you only need raw XML access, `lxml` may be enough. If you need programmatic 
 | `append_mail_merge_field(name, display_text, ...)` | `Field` | Add a mail merge field. |
 | `append_calculation_field(expression, display_text, ...)` | `Field` | Add a formula field. |
 | `append_cross_reference(bookmark_name, display_text, ...)` | `Field` | Add a cross-reference field. |
-| `compile(validate=True)` | `bytes` | Build the in-memory package into `.hwpx` bytes. |
-| `save(path, validate=True)` | `Path` | Write the package to disk. |
+| `compile(validate=True)` | `bytes` | Build the current in-memory document into `.hwpx` bytes without writing a file. |
+| `save(path, validate=True)` | `Path` | Write the current in-memory document to disk. |
 
 #### Validation
 
@@ -364,6 +378,12 @@ To build release artifacts locally before publishing:
 tox -e pkg
 ```
 
+To run the fuller pre-release check that rebuilds `dist/`, validates metadata, and inspects the archive contents:
+
+```bash
+tox -e release
+```
+
 CI now runs tests on Python 3.11, 3.12, and 3.13, and the publish workflow supports:
 
 - manual `workflow_dispatch` uploads to TestPyPI or PyPI
@@ -373,10 +393,11 @@ For manual uploads outside GitHub Actions:
 
 ```bash
 python -m pip install --upgrade build twine
-python -m build
-python -m twine check dist/*
+python scripts/check_release.py
 python -m twine upload dist/*
 ```
+
+See [`RELEASING.md`](./RELEASING.md) for the end-to-end PyPI release checklist, including TestPyPI and GitHub trusted publishing setup.
 
 ## Further reading
 
@@ -385,4 +406,4 @@ python -m twine upload dist/*
 
 ## License
 
-This repository does not currently include a top-level license file. Add one before publishing or redistributing the project.
+This repository does not currently include a top-level license file. Choose a license and add a `LICENSE` file before the first public PyPI release or any redistribution.
