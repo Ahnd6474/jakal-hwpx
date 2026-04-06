@@ -1,0 +1,41 @@
+{
+  "hwpx2pdf": {
+    "source_name": "math_template_2_formula_fixed.hwpx",
+    "output_name": "promo_hwpx2pdf_complex_layout.pdf",
+    "output_path": "examples\\promo\\output\\promo_hwpx2pdf_complex_layout.pdf",
+    "summary": {
+      "source_tables": 16,
+      "source_pictures": 9,
+      "source_shapes": 56,
+      "source_sections": 2,
+      "output_pages": 2,
+      "page1_non_text": {
+        "image_count": 2,
+        "annotation_count": 0,
+        "xobject_names": [
+          "/image",
+          "/image-0"
+        ],
+        "vector_summary": {
+          "path_operator_count": 16,
+          "paint_operator_count": 11,
+          "text_operator_count": 9,
+          "image_operator_count": 0
+        }
+      }
+    }
+  },
+  "pdf2hwpx": {
+    "source_name": "평가원 수학 양식 (2)-jakal_hwpx_수정.pdf",
+    "output_name": "promo_pdf2hwpx_weird_template.hwpx",
+    "output_path": "examples\\promo\\output\\promo_pdf2hwpx_weird_template.hwpx",
+    "summary": {
+      "source_pages": 20,
+      "source_page1_image_placements": 11,
+      "output_sections": 20,
+      "output_pictures": 129,
+      "output_validation_errors": [],
+      "output_preview_text": true
+    }
+  }
+}
