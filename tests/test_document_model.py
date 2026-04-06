@@ -84,3 +84,10 @@ def test_edit_save_and_reopen_roundtrip(sample_hwpx_path: Path, tmp_path: Path) 
 
     part = reopened.get_part("BinData/unit-test.bin", BinaryDataPart)
     assert part.data == b"abc123"
+
+
+def test_missing_preview_rootfile_reference_is_tolerated() -> None:
+    document = HwpxDocument()
+    document.container.ensure_rootfile("Preview/PrvText.txt", "text/plain")
+
+    assert document.validation_errors() == []

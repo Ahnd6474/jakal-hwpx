@@ -10,6 +10,7 @@ Korean version: [README.ko.md](./README.ko.md)
 
 - [Installation](#installation)
 - [Quick start](#quick-start)
+- [PDF bridge](#pdf-bridge)
 - [What is jakal-hwpx?](#what-is-jakal-hwpx)
 - [Why use it?](#why-use-it)
 - [API](#api)
@@ -90,6 +91,31 @@ doc.append_paragraph("First paragraph in a new document.", section_index=0)
 raw_bytes = doc.compile()
 doc.save("new-document.hwpx")
 ```
+
+## PDF bridge
+
+`jakal_hwpx` now also includes a lightweight PDF layer built on top of `pypdf` so you can read PDFs, create basic PDFs, and bridge between PDF pages and HWPX sections.
+
+```python
+from jakal_hwpx import PdfDocument, hwpx_to_pdf, pdf_to_hwpx
+
+pdf = PdfDocument.blank()
+page = pdf.add_page(width=595, height=842)
+page.add_text("Hello from PDF")
+pdf.save("hello.pdf")
+
+hwpx = pdf_to_hwpx("hello.pdf", ocr_text_by_page=["OCR text for page 1"])
+hwpx.save("from-pdf.hwpx")
+
+roundtrip_pdf = hwpx_to_pdf(hwpx)
+roundtrip_pdf.save("from-hwpx.pdf")
+```
+
+The bridge is intentionally conservative:
+
+- OCR text is treated as an external input for `pdf_to_hwpx`.
+- Non-text PDF content is summarized into per-page markers such as image count and vector operation count.
+- `hwpx_to_pdf` writes readable page text and page size first, instead of trying to fully reproduce every HWPX layout primitive.
 
 ## What is jakal-hwpx?
 

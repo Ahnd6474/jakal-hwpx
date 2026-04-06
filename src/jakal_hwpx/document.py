@@ -799,7 +799,6 @@ class HwpxDocument:
         part = self.preview_text
         if part is None:
             part = self.add_part("Preview/PrvText.txt", b"")
-            self.container.ensure_rootfile("Preview/PrvText.txt", "text/plain")
         assert isinstance(part, PreviewTextPart)
         part.text = text
         return part
@@ -1055,6 +1054,8 @@ class HwpxDocument:
             for rootfile_path in container.rootfile_paths():
                 normalized = _normalize_path(rootfile_path)
                 if normalized not in self._parts:
+                    if normalized == "Preview/PrvText.txt":
+                        continue
                     errors.append(f"container.xml references missing rootfile: {normalized}")
 
         if isinstance(content_hpf, ContentHpfPart):

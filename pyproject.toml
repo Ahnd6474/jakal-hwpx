@@ -9,7 +9,7 @@ description = "Round-trip safe HWPX reader/editor/writer for Python"
 readme = { file = "README.md", content-type = "text/markdown" }
 requires-python = ">=3.11"
 authors = [{ name = "Ahnd6474" }]
-dependencies = ["lxml>=5.0.0,<6"]
+dependencies = ["lxml>=5.0.0,<6", "pypdf>=6.9.0,<7"]
 keywords = ["hwpx", "hancom", "document", "xml", "library"]
 classifiers = [
   "Development Status :: 3 - Alpha",
