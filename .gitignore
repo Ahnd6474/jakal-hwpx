@@ -7,10 +7,13 @@ scripts/
 
 # Local build and temp artifacts
 .tmp/
+.codex-temp/
 build/
 dist/
 examples/output.zip
 vendor/
+pytest-cache-files-*/
+.pytest_cache/
 
 # Python cache
 __pycache__/

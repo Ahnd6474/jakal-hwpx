@@ -1,25 +1,25 @@
-# `jakal_hwpx` Module Notes
+# `jakal_hwpx` 모듈 설명
 
-This document describes the Python package under `src/jakal_hwpx/`.
+이 문서는 `src/jakal_hwpx/` 아래의 Python 패키지를 설명합니다.
 
-## Main Entry Point
+## 시작점
 
 ### `HwpxDocument`
 
-`HwpxDocument` is the primary public API.
+`HwpxDocument`는 이 패키지의 기본 진입점입니다.
 
-It supports:
+다음 작업을 맡습니다.
 
-- opening an existing `.hwpx`
-- creating a blank document
-- reading and updating package metadata
-- editing paragraph text
-- appending paragraphs
-- adding or replacing package parts
-- validating package structure and references
-- saving and round-tripping the package
+- 기존 `.hwpx` 열기
+- 빈 문서 만들기
+- 문서 메타데이터 읽기와 수정
+- 문단 텍스트 수정
+- 문단 추가
+- 패키지 파트 추가와 교체
+- 구조 및 참조 검증
+- 저장과 round-trip 확인
 
-Example:
+예제:
 
 ```python
 from jakal_hwpx import HwpxDocument
@@ -29,133 +29,133 @@ doc.replace_text("before", "after")
 doc.save("example-edited.hwpx")
 ```
 
-### `HwpxDocument` API Reference
+### `HwpxDocument` API 요약
 
-| Method | Returns | What it is for |
+| 메서드 | 반환값 | 용도 |
 | --- | --- | --- |
-| `open(path)` | `HwpxDocument` | Open an existing HWPX package |
-| `blank()` | `HwpxDocument` | Build a new blank package in memory |
-| `metadata()` | `DocumentMetadata` | Read title, creator, subject, keywords, and related metadata |
-| `set_metadata(**values)` | `None` | Update package metadata fields |
-| `get_document_text()` | `str` | Extract combined section text |
-| `set_paragraph_text(section_index, paragraph_index, text)` | wrapper for the edited paragraph | Replace one paragraph while preserving surrounding structure |
-| `append_paragraph(text, section_index=0)` | paragraph wrapper | Add a new paragraph to a section |
-| `replace_text(old, new, count=-1)` | `int` | Replace text across sections and, by default, headers |
-| `add_section(text=...)` | `SectionPart` | Append a new section to the document |
-| `section_settings(index)` | `SectionSettings` | Access page size and margin settings |
-| `tables()`, `pictures()`, `notes()`, `bookmarks()`, `fields()` | list of wrappers | Traverse rich content in the document |
-| `styles()`, `paragraph_styles()`, `character_styles()` | list of wrappers | Inspect or update style definitions |
-| `apply_style_to_paragraph(...)` | `None` | Bind a style to a single paragraph |
-| `apply_style_batch(...)` | `int` | Apply styles to paragraphs matching a text filter |
-| `append_bookmark(...)`, `append_hyperlink(...)`, `append_mail_merge_field(...)`, `append_calculation_field(...)`, `append_cross_reference(...)` | wrapper object | Create richer field-like content |
-| `add_or_replace_binary(...)` | `BinaryDataPart` | Add or replace an embedded package binary |
-| `compile(validate=True)` | `bytes` | Serialize the package in memory |
-| `save(path, validate=True)` | `Path` | Save the package to disk |
-| `validation_errors()` | `list[str]` | Check package-level validity |
-| `xml_validation_errors()` | `list[str]` | Check XML roots and structural XML expectations |
-| `reference_validation_errors()` | `list[str]` | Check references between styles, fields, bookmarks, and manifest items |
-| `save_reopen_validation_errors()` | `list[str]` | Save and reopen as a practical round-trip check |
+| `open(path)` | `HwpxDocument` | 기존 HWPX 패키지 열기 |
+| `blank()` | `HwpxDocument` | 기본 파트가 들어 있는 새 문서 만들기 |
+| `metadata()` | `DocumentMetadata` | 제목, 작성자, 주제, 키워드 같은 메타데이터 읽기 |
+| `set_metadata(**values)` | `None` | 메타데이터 수정 |
+| `get_document_text()` | `str` | 섹션 전체 본문 텍스트 추출 |
+| `set_paragraph_text(section_index, paragraph_index, text)` | 문단 래퍼 | 특정 문단 텍스트 교체 |
+| `append_paragraph(text, section_index=0)` | 문단 래퍼 | 섹션 끝에 문단 추가 |
+| `replace_text(old, new, count=-1)` | `int` | 문서 전체에서 문자열 치환 |
+| `add_section(text=...)` | `SectionPart` | 새 섹션 추가 |
+| `section_settings(index)` | `SectionSettings` | 페이지 크기와 여백 설정 접근 |
+| `tables()`, `pictures()`, `notes()`, `bookmarks()`, `fields()` | 래퍼 리스트 | 표, 그림, 주석, 북마크, 필드 순회 |
+| `styles()`, `paragraph_styles()`, `character_styles()` | 래퍼 리스트 | 스타일 정의 조회 및 수정 |
+| `apply_style_to_paragraph(...)` | `None` | 한 문단에 스타일 적용 |
+| `apply_style_batch(...)` | `int` | 조건에 맞는 여러 문단에 스타일 적용 |
+| `append_bookmark(...)`, `append_hyperlink(...)`, `append_mail_merge_field(...)`, `append_calculation_field(...)`, `append_cross_reference(...)` | 래퍼 객체 | 북마크와 필드 계열 요소 생성 |
+| `add_or_replace_binary(...)` | `BinaryDataPart` | 패키지 내부 바이너리 추가 또는 교체 |
+| `compile(validate=True)` | `bytes` | 메모리에서 패키지 직렬화 |
+| `save(path, validate=True)` | `Path` | 디스크에 저장 |
+| `validation_errors()` | `list[str]` | 패키지 구조 검증 |
+| `xml_validation_errors()` | `list[str]` | XML 루트 및 구조 점검 |
+| `reference_validation_errors()` | `list[str]` | 스타일, 필드, 북마크, manifest 참조 점검 |
+| `save_reopen_validation_errors()` | `list[str]` | 저장 후 재오픈 기준의 실용적 검증 |
 
-## Module Overview
+## 모듈 개요
 
-The package is small enough that most work starts in `document.py`, then moves into wrapper types from `elements.py` if you need more control.
+이 패키지는 크기가 아주 크지 않아서, 대부분의 작업은 `document.py`에서 시작한 뒤 필요할 때 `elements.py`의 래퍼 타입으로 내려가면 됩니다.
 
-| Module | What it does | When to use it |
+| 모듈 | 역할 | 언제 쓰는가 |
 | --- | --- | --- |
-| `document.py` | High-level document container and editing API | Start here for almost every workflow |
-| `elements.py` | Wrappers for tables, pictures, notes, fields, shapes, and styles | Use when `HwpxDocument` returns a richer object you want to inspect or mutate |
-| `parts.py` | Low-level package part classes for XML, text, binary, preview, and manifest content | Use when you need direct access to package internals |
-| `xmlnode.py` | Small XML helper abstraction used across the package | Mostly internal, but useful when extending behavior |
-| `namespaces.py` | Namespace map, QName helpers, and section matching constants | Useful when writing custom XPath or XML manipulation |
-| `exceptions.py` | Package-specific error types | Catch these when handling invalid or malformed HWPX files |
+| `document.py` | 고수준 문서 컨테이너와 편집 API | 거의 모든 작업의 시작점 |
+| `elements.py` | 표, 그림, 주석, 필드, 도형, 스타일 같은 요소 래퍼 | 특정 요소를 더 세밀하게 수정할 때 |
+| `parts.py` | XML, 텍스트, 바이너리, preview, manifest 파트 모델 | 패키지 내부 파트에 직접 접근할 때 |
+| `xmlnode.py` | XML 편의를 위한 작은 래퍼 | 확장 작업이나 내부 동작 이해가 필요할 때 |
+| `namespaces.py` | namespace 맵, QName helper, section 매칭 상수 | XPath나 XML 조작을 직접 쓸 때 |
+| `exceptions.py` | 패키지 전용 예외 타입 | 잘못된 HWPX 입력을 다룰 때 |
 
-## Package Layout
+## 패키지 구성
 
 ### `document.py`
 
-Core document container and editing logic.
+문서 컨테이너와 편집 흐름을 담당하는 핵심 모듈입니다.
 
-Key responsibilities:
+주요 책임:
 
-- open, build, compile, and save HWPX zip packages
-- expose high-level editing helpers
-- preserve and update internal package parts
-- perform structural validation
+- HWPX zip 패키지 열기, 생성, 컴파일, 저장
+- 고수준 편집 API 제공
+- 내부 파트 보존과 갱신
+- 구조 검증 수행
 
-Common entry points:
+자주 쓰는 진입점:
 
-- `HwpxDocument.open()` and `HwpxDocument.blank()`
+- `HwpxDocument.open()` / `HwpxDocument.blank()`
 - `set_metadata()`, `metadata()`, `get_document_text()`
 - `set_paragraph_text()`, `append_paragraph()`, `replace_text()`
 - `section_settings()`, `tables()`, `pictures()`, `notes()`, `fields()`
 - `validation_errors()`, `reference_validation_errors()`, `save_reopen_validation_errors()`
-- `compile()` and `save()`
-
-### `parts.py`
-
-Low-level package part model.
-
-Key responsibilities:
-
-- represent content parts such as `header.xml`, `section*.xml`, and `content.hpf`
-- distinguish XML, text, binary, and preview parts
-- expose metadata helpers for `content.hpf`
+- `compile()` / `save()`
 
 ### `elements.py`
 
-Wrappers over frequently edited XML structures.
+문서 안의 고급 요소를 다루는 래퍼가 들어 있습니다.
 
-Examples:
+예:
 
-- paragraph and character styles
-- tables and table cells
-- pictures
-- notes
-- equations
-- bookmarks and fields
-- headers and footers
+- 문단 스타일과 글자 스타일
+- 표와 셀
+- 그림
+- 각주와 미주
+- 수식
+- 북마크와 필드
+- 머리말과 꼬리말
 
-This is where most feature-specific editing lives. For example:
+주로 보게 되는 메서드:
 
-- `Table.set_cell_text()` and `Table.append_row()`
+- `Table.set_cell_text()` / `Table.append_row()`
 - `HeaderFooterBlock.set_text()`
-- `Field.set_display_text()` and `Field.set_hyperlink_target()`
-- `SectionSettings.set_page_size()` and `SectionSettings.set_margins()`
-- `CharacterStyle.set_text_color()` and `ParagraphStyle.set_alignment()`
+- `Field.set_display_text()` / `Field.set_hyperlink_target()`
+- `SectionSettings.set_page_size()` / `SectionSettings.set_margins()`
+- `CharacterStyle.set_text_color()` / `ParagraphStyle.set_alignment()`
 
-### Common wrapper types
+### 자주 보이는 래퍼 타입
 
-| Type | Key methods / properties | Notes |
+| 타입 | 주요 속성/메서드 | 설명 |
 | --- | --- | --- |
-| `HeaderFooterBlock` | `text`, `set_text()`, `replace_text()` | Returned by `headers()` and `footers()` |
-| `Table` | `row_count`, `column_count`, `cells()`, `cell()`, `set_cell_text()`, `append_row()`, `merge_cells()` | Main entry point for table editing |
-| `TableCell` | `row`, `column`, `text`, `row_span`, `col_span`, `set_text()` | Returned from `Table` helpers |
-| `Picture` | `binary_item_id`, `shape_comment`, `binary_data()`, `replace_binary()` | Lets you inspect or replace embedded image data |
-| `SectionSettings` | `page_width`, `page_height`, `landscape`, `margins()`, `set_page_size()`, `set_margins()` | Page layout per section |
-| `StyleDefinition` | `style_id`, `name`, `set_name()`, `bind_refs()` | Top-level style object |
-| `ParagraphStyle` | `alignment_horizontal`, `line_spacing`, `set_alignment()`, `set_line_spacing()` | Paragraph-level formatting |
-| `CharacterStyle` | `text_color`, `height`, `set_text_color()`, `set_height()` | Character-level formatting |
-| `Note` | `kind`, `number`, `text`, `set_text()` | Footnote and endnote wrapper |
-| `Bookmark` | `name`, `rename()` | Bookmark editing |
-| `Field` | `field_type`, `field_id`, `parameter_map()`, `set_parameter()`, `set_display_text()` | Covers hyperlink, mail merge, calculation, and cross-reference fields |
-| `Equation` | `script`, `shape_comment` | Exposes equation script text |
-| `ShapeObject` | `kind`, `shape_comment`, `text`, `set_text()` | Covers text art and other text-bearing shapes |
+| `HeaderFooterBlock` | `text`, `set_text()`, `replace_text()` | `headers()`와 `footers()`가 반환 |
+| `Table` | `row_count`, `column_count`, `cells()`, `cell()`, `set_cell_text()`, `append_row()`, `merge_cells()` | 표 편집의 시작점 |
+| `TableCell` | `row`, `column`, `text`, `row_span`, `col_span`, `set_text()` | 표 셀 래퍼 |
+| `Picture` | `binary_item_id`, `shape_comment`, `binary_data()`, `replace_binary()` | 포함된 이미지 데이터 조회 및 교체 |
+| `SectionSettings` | `page_width`, `page_height`, `landscape`, `margins()`, `set_page_size()`, `set_margins()` | 섹션별 페이지 레이아웃 |
+| `StyleDefinition` | `style_id`, `name`, `set_name()`, `bind_refs()` | 상위 스타일 객체 |
+| `ParagraphStyle` | `alignment_horizontal`, `line_spacing`, `set_alignment()`, `set_line_spacing()` | 문단 레벨 서식 |
+| `CharacterStyle` | `text_color`, `height`, `set_text_color()`, `set_height()` | 문자 레벨 서식 |
+| `Note` | `kind`, `number`, `text`, `set_text()` | 각주와 미주 래퍼 |
+| `Bookmark` | `name`, `rename()` | 북마크 수정 |
+| `Field` | `field_type`, `field_id`, `parameter_map()`, `set_parameter()`, `set_display_text()` | 하이퍼링크, 메일 머지, 계산식, 상호 참조를 포함 |
+| `Equation` | `script`, `shape_comment` | 수식 스크립트 접근 |
+| `ShapeObject` | `kind`, `shape_comment`, `text`, `set_text()` | 텍스트가 있는 도형 수정 |
+
+### `parts.py`
+
+패키지 내부 파트를 다루는 저수준 모델이 들어 있습니다.
+
+주요 책임:
+
+- `header.xml`, `section*.xml`, `content.hpf` 같은 파트 표현
+- XML, 텍스트, 바이너리, preview 파트 구분
+- `content.hpf` 메타데이터 helper 제공
 
 ### `xmlnode.py`
 
-Small XML convenience wrapper used by other modules.
+다른 모듈에서 공통으로 쓰는 작은 XML 래퍼입니다.
 
 ### `namespaces.py`
 
-Namespace constants, QName helpers, and section path matching.
+namespace 상수, QName helper, section 경로 매칭 로직이 들어 있습니다.
 
 ### `exceptions.py`
 
-Custom exception types for invalid packages and validation failures.
+잘못된 패키지나 검증 실패를 위한 커스텀 예외 타입입니다.
 
-## Validation Surfaces
+## 검증 계층
 
-The package exposes several complementary validation helpers:
+패키지는 서로 다른 성격의 검증 함수를 제공합니다.
 
 - `validation_errors()`
 - `xml_validation_errors()`
@@ -163,18 +163,16 @@ The package exposes several complementary validation helpers:
 - `save_reopen_validation_errors()`
 - `roundtrip_validate()`
 
-These checks catch different classes of failure: malformed XML, broken references, missing manifest entries, and packages that cannot be reopened after save.
+실무적으로는 이렇게 보면 됩니다.
 
-In practice:
+- `validation_errors()`는 패키지 구조 문제를 잡습니다.
+- `xml_validation_errors()`는 XML 루트와 기본 구조 문제를 잡습니다.
+- `reference_validation_errors()`는 스타일, 필드, 북마크, manifest 참조 문제를 잡습니다.
+- `save_reopen_validation_errors()`는 저장 후 다시 열리는지 확인하는 현실적인 smoke check입니다.
 
-- `validation_errors()` catches package-level structure problems
-- `xml_validation_errors()` catches malformed or unexpected XML roots
-- `reference_validation_errors()` catches broken style, field, bookmark, and manifest references
-- `save_reopen_validation_errors()` is a pragmatic round-trip smoke test
+## 공개 타입
 
-## Public Types Re-Exported from `jakal_hwpx`
-
-The package root re-exports:
+`jakal_hwpx` 루트에서 다시 export하는 타입은 아래와 같습니다.
 
 - `HwpxDocument`
 - `DocumentMetadata`
@@ -214,50 +212,50 @@ The package root re-exports:
 - `HwpxValidationError`
 - `InvalidHwpxFileError`
 
-### Error types
+### 예외 타입
 
-| Type | When you will see it |
+| 타입 | 언제 보게 되는가 |
 | --- | --- |
-| `InvalidHwpxFileError` | Input file is not a valid zip-based HWPX package |
-| `HwpxValidationError` | Validation failed while opening, compiling, or saving |
-| `HwpxError` | Base error type for package-specific failures |
+| `InvalidHwpxFileError` | 입력 파일이 zip 기반 HWPX가 아닐 때 |
+| `HwpxValidationError` | 열기, 컴파일, 저장 중 검증에 실패했을 때 |
+| `HwpxError` | 패키지 전용 오류의 상위 타입 |
 
-## Round-Trip and Editing Notes
+## round-trip과 편집 모델
 
-### Safe Editing Model
+### 안전한 편집 모델
 
-The package is designed around preserving package structure as much as possible:
+이 패키지는 가능한 한 원래 패키지 구조를 보존하는 방향으로 설계되어 있습니다.
 
-- existing parts are loaded and kept in memory
-- unknown parts are preserved by type inference
-- zip entry metadata is cloned on compile when possible
-- the document can be reopened and validated after save
+- 기존 파트를 메모리에 그대로 올립니다.
+- 알 수 없는 파트도 타입 추론을 통해 보존합니다.
+- 가능하면 zip entry 메타데이터도 유지합니다.
+- 저장 후 다시 열어서 검증할 수 있습니다.
 
-### Distribution-Protected Packages
+### 배포 보호(distribution protected) 문서
 
-If `content.hpf` marks the package as distribution-protected, editable section XML may not be present.
+`content.hpf`가 배포 보호 상태를 나타내면 편집 가능한 section XML이 없을 수 있습니다.
 
-In that case:
+이 경우:
 
-- the package can still be opened
-- structural validation still works
-- high-level editing APIs can be unavailable
+- 문서는 열 수 있습니다.
+- 구조 검증은 동작합니다.
+- 고수준 편집 API는 사용할 수 없을 수 있습니다.
 
-### Why the Package Uses Element Wrappers
+### 왜 element wrapper를 쓰는가
 
-HWPX editing often requires working across:
+HWPX 편집은 보통 여러 층을 함께 만집니다.
 
-- document metadata
-- package manifests
+- 문서 메타데이터
+- 패키지 manifest
 - section XML
-- style tables
-- embedded binaries
+- 스타일 테이블
+- 포함된 바이너리
 
-The wrappers in `elements.py` let the rest of the code expose domain-specific operations without pushing raw XPath and XML bookkeeping into every call site.
+`elements.py`의 래퍼는 이런 세부 XML 처리와 XPath 반복을 호출부 밖으로 밀어내고, 문서 도메인에 맞는 API를 제공합니다.
 
-## Typical Usage Patterns
+## 자주 쓰는 패턴
 
-### Inspect and validate a document
+### 문서 열기와 검증
 
 ```python
 from jakal_hwpx import HwpxDocument
@@ -269,7 +267,7 @@ print(doc.validation_errors())
 print(doc.reference_validation_errors())
 ```
 
-### Update text and save
+### 텍스트 수정과 저장
 
 ```python
 from jakal_hwpx import HwpxDocument
@@ -279,7 +277,7 @@ doc.replace_text("draft", "final")
 doc.save("example-final.hwpx")
 ```
 
-### Generate a blank document
+### 빈 문서 생성
 
 ```python
 from jakal_hwpx import HwpxDocument
@@ -290,7 +288,7 @@ doc.set_paragraph_text(0, 0, "Hello")
 doc.save("build/blank.hwpx")
 ```
 
-### Edit page settings and styles
+### 페이지 설정과 스타일 수정
 
 ```python
 from jakal_hwpx import HwpxDocument
@@ -319,7 +317,7 @@ doc.apply_style_to_paragraph(
 doc.save("build/styled.hwpx")
 ```
 
-### Work with tables, headers, and footers
+### 표와 머리말/꼬리말 수정
 
 ```python
 from jakal_hwpx import HwpxDocument
@@ -338,7 +336,7 @@ table.append_row()[0].set_text("Appended row")
 doc.save("build/structured-edit.hwpx")
 ```
 
-### Create bookmarks and dynamic fields
+### 북마크와 동적 필드 생성
 
 ```python
 from jakal_hwpx import HwpxDocument
@@ -355,7 +353,7 @@ assert doc.reference_validation_errors() == []
 doc.save("build/fields.hwpx")
 ```
 
-### Add binary data and keep package validation intact
+### 바이너리 추가
 
 ```python
 from jakal_hwpx import HwpxDocument
@@ -372,21 +370,21 @@ assert doc.validation_errors() == []
 doc.save("build/with-binary.hwpx")
 ```
 
-## Choosing an API Level
+## 어떤 수준의 API를 쓸지 고르기
 
-Use the highest-level API that fits the job.
+가능하면 가장 높은 수준의 API부터 쓰는 편이 낫습니다.
 
-- Start with `HwpxDocument` when you need to open, edit, validate, or save a document.
-- Use wrapper objects from `elements.py` when the document contains tables, fields, notes, pictures, or style objects you want to modify in place.
-- Drop to `parts.py` only when you need direct package access, such as custom binaries, preview parts, or raw part inspection.
+- 문서를 열고, 수정하고, 검증하고, 저장하는 작업은 `HwpxDocument`에서 시작하세요.
+- 표, 필드, 주석, 그림, 스타일 같은 특정 요소를 더 세밀하게 수정해야 하면 `elements.py` 래퍼를 쓰세요.
+- preview 파트, raw binary, custom package inspection처럼 패키지 내부 구조에 직접 접근해야 할 때만 `parts.py`로 내려가면 됩니다.
 
-## Related Repo Assets
+## 저장소 내 관련 자산
 
-This document is about the Python package itself. The repository also includes:
+이 문서는 Python 패키지 자체를 다룹니다. 저장소에는 이 외에도 아래 항목이 있습니다.
 
 - `examples/samples/`
 - `examples/output_smoke/`
 - `examples/output/`
 - `tools/`
 
-The Java-based `.hwp -> .hwpx` conversion helpers live under `tools/` and are not part of the importable Python package.
+`tools/` 아래의 Java 기반 `.hwp -> .hwpx` 보조 도구는 importable Python 패키지의 일부가 아닙니다.
