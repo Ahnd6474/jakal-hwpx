@@ -13,6 +13,7 @@
 ## 요구 사항
 
 - Python 3.11 이상
+- Git LFS 불필요
 
 ## 설치
 
@@ -35,6 +36,8 @@ python -m pip install .
 ```bash
 python -m pip install -e .[dev]
 ```
+
+샘플 `.hwp`/`.hwpx` 문서는 저장소에 일반 Git blob으로 포함되어 있으므로 클론 후 별도 `git lfs install` 또는 `git lfs pull` 단계가 필요하지 않습니다.
 
 - 패키지 이름: `jakal-hwpx`
 - import 경로: `jakal_hwpx`
