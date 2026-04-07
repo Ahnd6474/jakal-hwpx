@@ -385,6 +385,6 @@ doc.save("build/with-binary.hwpx")
 - `examples/samples/`
 - `examples/output_smoke/`
 - `examples/output/`
-- `tools/`
+- `examples/output/`
 
-`tools/` 아래의 Java 기반 `.hwp -> .hwpx` 보조 도구는 importable Python 패키지의 일부가 아닙니다.
+`examples/` 아래의 샘플과 생성 산출물은 테스트 및 참조 자산이며 importable Python 패키지의 일부는 아닙니다.

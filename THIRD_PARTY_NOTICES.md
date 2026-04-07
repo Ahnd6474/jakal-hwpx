@@ -14,19 +14,10 @@ Sample or fixture documents in this repository, including files under `examples/
 
 Unless a file explicitly says otherwise, treat those documents as test or reference assets only. They are not automatically relicensed under the project's MIT license.
 
-## Bundled Third-Party Tools
-
-- `tools/jdk-21.0.10+7/` and `tools/OpenJDK21U-jdk_x64_windows_hotspot_21.0.10_7.zip` are redistributed OpenJDK or Eclipse Temurin artifacts and remain under their own upstream license and notice files shipped with those assets.
-- `tools/lib/hwplib-1.1.10.jar` contains Maven metadata declaring Apache-2.0 for `kr.dogfoot:hwplib:1.1.10`.
-- `tools/lib/hwpxlib-1.0.8.jar` contains Maven metadata declaring Apache-2.0 for `kr.dogfoot:hwpxlib:1.0.8`.
-- `tools/hwp-batch-converter.jar` is a bundled Java converter artifact used for maintainer workflows. It should be treated as a separate toolchain artifact together with its bundled or referenced upstream components, not as blanket-MIT project source.
-- `tools/java-src/local/jakaldocs/HwpBatchConverterMain.java` is project-authored integration code and is covered by the MIT license unless noted otherwise.
-
 ## Redistribution Guidance
 
 If you redistribute this repository or a derivative:
 
 - keep the top-level `LICENSE` with project-authored code
-- keep upstream license and notice files for bundled third-party tools
 - confirm that you have the right to redistribute included sample documents
 - avoid using third-party product or trademark names in a way that suggests endorsement
