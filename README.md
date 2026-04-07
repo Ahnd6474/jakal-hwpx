@@ -77,6 +77,34 @@ Useful helper types exposed by the package include:
 
 See [HWPX_MODULE.md](./HWPX_MODULE.md) for the package structure and API notes.
 
+## Public API Contract
+
+The supported public API is the top-level `jakal_hwpx` import surface exported by `src/jakal_hwpx/__init__.py`.
+
+Stable entry points:
+
+- `HwpxDocument`, `DocumentMetadata`
+- `Table`, `TableCell`, `Picture`, `Note`, `Equation`, `Bookmark`, `Field`, `AutoNumber`
+- `HeaderFooterBlock`, `SectionSettings`, `StyleDefinition`, `ParagraphStyle`, `CharacterStyle`, `ShapeObject`
+- `HwpxPart`, `XmlPart`, `SectionPart`, `HeaderPart`, `ContentHpfPart`, `SettingsPart`, `VersionPart`, `MimetypePart`, `ContainerPart`, `ContainerRdfPart`, `ManifestPart`, `BinaryDataPart`, `GenericBinaryPart`, `GenericTextPart`, `GenericXmlPart`, `PreviewImagePart`, `PreviewTextPart`, `ScriptPart`
+- `HwpxError`, `HwpxValidationError`, `InvalidHwpxFileError`
+
+Imports from internal modules such as `jakal_hwpx.document` or `jakal_hwpx.parts` are implementation details and should not be treated as a compatibility promise.
+
+## Support Scope
+
+Supported:
+
+- Python 3.11, 3.12, and 3.13
+- Opening, editing, validating, compiling, and saving ZIP-based HWPX packages
+- Round-trip oriented document editing through `HwpxDocument` and the top-level exported helper types
+
+Not supported:
+
+- Legacy binary `.hwp` input files
+- Bundled `.hwp` to `.hwpx` conversion tooling
+- Compatibility guarantees for imports outside the top-level `jakal_hwpx` export surface
+
 ## Examples
 
 Open and validate a document:
@@ -142,13 +170,7 @@ python -m pip install -e .[dev]
 python -m pytest -q
 ```
 
-The test suite looks for sample HWPX files in this order:
-
-1. `JAKAL_HWPX_SAMPLE_DIR`
-2. `all_hwpx_flat/`
-3. `examples/output_smoke/`
-4. `examples/output/`
-5. `examples/samples/hwpx/`
+The test suite uses the repository fixture corpus at `examples/samples/hwpx/`. CI and local runs use that same fixed path so feature coverage stays deterministic.
 
 ## Additional Documents
 

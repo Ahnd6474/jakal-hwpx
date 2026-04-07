@@ -38,6 +38,24 @@ jobs:
       - name: Verify package metadata
         run: python -m twine check dist/*
 
+      - name: Smoke test wheel install
+        run: |
+          python -m venv .smoke-wheel
+          .smoke-wheel/bin/python -m pip install --upgrade pip
+          .smoke-wheel/bin/python -m pip install dist/*.whl
+          .smoke-wheel/bin/python scripts/check_installed_package.py \
+            --sample-path examples/samples/hwpx/math_template_2_formula_fixed.hwpx \
+            --output-dir build/publish-smoke-wheel
+
+      - name: Smoke test sdist install
+        run: |
+          python -m venv .smoke-sdist
+          .smoke-sdist/bin/python -m pip install --upgrade pip
+          .smoke-sdist/bin/python -m pip install dist/*.tar.gz
+          .smoke-sdist/bin/python scripts/check_installed_package.py \
+            --sample-path examples/samples/hwpx/math_template_2_formula_fixed.hwpx \
+            --output-dir build/publish-smoke-sdist
+
       - name: Upload distributions
         uses: actions/upload-artifact@v4
         with:

@@ -45,3 +45,21 @@ jobs:
 
       - name: Build distribution and validate metadata
         run: tox -e pkg
+
+      - name: Smoke test wheel install
+        run: |
+          python -m venv .smoke-wheel
+          .smoke-wheel/bin/python -m pip install --upgrade pip
+          .smoke-wheel/bin/python -m pip install dist/*.whl
+          .smoke-wheel/bin/python scripts/check_installed_package.py \
+            --sample-path examples/samples/hwpx/math_template_2_formula_fixed.hwpx \
+            --output-dir build/ci-smoke-wheel
+
+      - name: Smoke test sdist install
+        run: |
+          python -m venv .smoke-sdist
+          .smoke-sdist/bin/python -m pip install --upgrade pip
+          .smoke-sdist/bin/python -m pip install dist/*.tar.gz
+          .smoke-sdist/bin/python scripts/check_installed_package.py \
+            --sample-path examples/samples/hwpx/math_template_2_formula_fixed.hwpx \
+            --output-dir build/ci-smoke-sdist
