@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "jakal-hwpx"
-version = "0.1.0"
+version = "0.1.0b1"
 description = "Round-trip safe HWPX reader/editor/writer for Python"
 license = "MIT"
 license-files = ["LICENSE", "THIRD_PARTY_NOTICES.md"]
@@ -14,7 +14,7 @@ authors = [{ name = "Ahnd6474" }]
 dependencies = ["lxml>=5.0.0,<6"]
 keywords = ["hwpx", "hancom", "document", "xml", "library"]
 classifiers = [
-  "Development Status :: 3 - Alpha",
+  "Development Status :: 4 - Beta",
   "Intended Audience :: Developers",
   "Operating System :: OS Independent",
   "Programming Language :: Python :: 3",
