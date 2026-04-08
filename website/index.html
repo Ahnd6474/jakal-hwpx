@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>jakal-hwpx — Python으로 한글 문서 자동화</title>
+  <title>jakal-hwpx — 설치 없이 ChatGPT 한 줄로 한글 문서 자동화</title>
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@300;400;500;700;900&family=Fira+Code:wght@400;500&display=swap" rel="stylesheet" />
@@ -514,23 +514,36 @@
 <section class="hero">
   <div class="hero-badge">
     <span class="dot"></span>
-    PyPI 공식 배포 · MIT 라이선스
+    설치 불필요 · ChatGPT 프롬프트 한 줄
   </div>
   <h1>
     모든 한글 문서 과제를<br />
     <span class="click">딸깍</span> 하세요
   </h1>
   <p class="hero-sub">
-    Python으로 HWPX 문서를 열고, 채우고, 검증하고, 저장까지 — 단 몇 줄의 코드로.
-    ChatGPT에 붙여넣기 한 번으로 연구계획서·보고서·양식을 자동 완성합니다.
+    <strong style="color:#fff;">내 컴퓨터에 아무것도 설치 안 해도 됩니다.</strong><br />
+    ChatGPT에 프롬프트 한 줄 추가하면 끝 — 연구계획서·보고서·양식을 자동 완성합니다.
   </p>
-  <div class="hero-actions">
-    <a href="#chatgpt" class="btn-primary">5분 안에 시작하기</a>
-    <a href="https://github.com/jakal/jakal-hwpx" class="btn-secondary" target="_blank">GitHub →</a>
+
+  <!-- NO INSTALL CALLOUT -->
+  <div style="display:inline-block;background:rgba(34,197,94,0.15);border:1.5px solid rgba(34,197,94,0.4);border-radius:14px;padding:1rem 2rem;margin-bottom:2rem;">
+    <div style="font-size:1.05rem;font-weight:800;color:#4ade80;margin-bottom:0.3rem;">설치 0줄 · 코드 작성 0줄</div>
+    <div style="font-size:0.88rem;color:rgba(255,255,255,0.8);">ChatGPT가 설치부터 실행까지 전부 알아서 합니다</div>
   </div>
-  <div class="pip-install">
-    <span>pip install <strong>jakal-hwpx</strong></span>
-    <button class="pip-copy-btn" onclick="navigator.clipboard.writeText('pip install jakal-hwpx');this.textContent='✓ 복사됨'">복사</button>
+
+  <div class="hero-actions">
+    <a href="#chatgpt" class="btn-primary">프롬프트 보기 →</a>
+    <a href="https://pypi.org/project/jakal-hwpx/" class="btn-secondary" target="_blank">PyPI ↗</a>
+  </div>
+
+  <!-- ONE LINE PROMPT HERO -->
+  <div style="margin-top:2.5rem;max-width:680px;margin-left:auto;margin-right:auto;">
+    <div style="font-size:0.78rem;color:rgba(255,255,255,0.5);margin-bottom:0.5rem;font-family:'Fira Code',monospace;">ChatGPT에 이것만 붙여넣으세요</div>
+    <div style="background:rgba(0,0,0,0.4);border:1.5px solid rgba(250,191,36,0.5);border-radius:12px;padding:1rem 1.4rem;display:flex;align-items:center;gap:1rem;flex-wrap:wrap;justify-content:center;">
+      <span style="font-family:'Fira Code',monospace;font-size:0.9rem;color:#fbbf24;flex:1;text-align:left;min-width:200px;">python으로 jakal-hwpx을 반드시 설치 및 활용하고, xml 편집은 이용하지 말것. save(validate=True)로 해줘</span>
+      <button class="pip-copy-btn" style="white-space:nowrap;" onclick="navigator.clipboard.writeText('python으로 jakal-hwpx을 반드시 설치 및 활용하고, xml 편집은 이용하지 말것. save(validate=True)로 해줘');this.textContent='✓ 복사됨';setTimeout(()=>this.textContent='복사',2000)">복사</button>
+    </div>
+    <div style="font-size:0.78rem;color:rgba(255,255,255,0.4);margin-top:0.5rem;">+ 원하는 내용 입력 + hwpx 양식 파일 첨부 → 완료</div>
   </div>
 </section>
 
@@ -576,65 +589,133 @@ print(doc.<span class="fn">validation_errors</span>())  <span class="cm"># []</s
 <!-- CHATGPT SECTION -->
 <section class="chatgpt-section" id="chatgpt">
   <div class="container">
-    <div class="section-label">ChatGPT 연동</div>
-    <h2>ChatGPT에 붙여넣기, 그게 전부입니다</h2>
-    <p class="section-desc">
-      hwpx 양식 파일 + 참고 자료를 첨부하고 아래 프롬프트를 붙여넣으면 ChatGPT가 jakal-hwpx 코드를 작성해 실행합니다.
-    </p>
+    <div class="section-label">사용법</div>
+    <h2>내 컴퓨터엔 아무것도 설치 안 해도 됩니다</h2>
+
+    <!-- NO-INSTALL HERO BANNER -->
+    <div style="background:linear-gradient(135deg,#052e16,#14532d);border-radius:18px;padding:1.8rem 2rem;margin-bottom:2.5rem;display:flex;align-items:center;gap:2rem;flex-wrap:wrap;">
+      <div style="flex:1;min-width:220px;">
+        <div style="font-size:0.78rem;font-weight:700;letter-spacing:0.1em;text-transform:uppercase;color:#4ade80;margin-bottom:0.5rem;">핵심 포인트</div>
+        <div style="font-size:1.4rem;font-weight:900;color:#fff;line-height:1.3;margin-bottom:0.5rem;">
+          프롬프트 <span style="color:#fbbf24;">한 줄</span> 추가가 전부
+        </div>
+        <div style="font-size:0.9rem;color:rgba(255,255,255,0.7);">
+          ChatGPT(코드 실행 모드)가 jakal-hwpx 설치부터<br />
+          문서 작성·검증·저장까지 전부 알아서 합니다.
+        </div>
+      </div>
+      <div style="display:flex;flex-direction:column;gap:0.6rem;flex:0 0 auto;">
+        <div style="display:flex;align-items:center;gap:0.6rem;font-size:0.85rem;color:#86efac;">
+          <span style="font-size:1.1rem;">✅</span> 내 컴퓨터에 Python 설치 불필요
+        </div>
+        <div style="display:flex;align-items:center;gap:0.6rem;font-size:0.85rem;color:#86efac;">
+          <span style="font-size:1.1rem;">✅</span> 코드 한 줄 직접 쓸 필요 없음
+        </div>
+        <div style="display:flex;align-items:center;gap:0.6rem;font-size:0.85rem;color:#86efac;">
+          <span style="font-size:1.1rem;">✅</span> 프롬프트 한 줄 추가 후 파일 첨부만 하면 끝
+        </div>
+        <div style="display:flex;align-items:center;gap:0.6rem;font-size:0.85rem;color:#86efac;">
+          <span style="font-size:1.1rem;">✅</span> 검증된 hwpx 파일 즉시 다운로드
+        </div>
+      </div>
+    </div>
+
+    <!-- STEP FLOW -->
+    <div style="display:flex;align-items:stretch;margin-bottom:3rem;flex-wrap:wrap;gap:0.5rem;">
+      <div style="flex:1;min-width:140px;background:var(--gray-50);border:1.5px solid var(--gray-200);border-radius:14px;padding:1.2rem 1rem;text-align:center;">
+        <div style="font-size:2rem;margin-bottom:0.4rem;">📎</div>
+        <div style="font-size:0.78rem;font-weight:700;color:var(--blue);margin-bottom:0.3rem;">STEP 1</div>
+        <div style="font-size:0.88rem;font-weight:700;">hwpx 양식 파일<br />첨부</div>
+      </div>
+      <div style="display:flex;align-items:center;font-size:1.5rem;color:var(--gray-300);padding:0 0.2rem;">→</div>
+      <div style="flex:1;min-width:140px;background:var(--gray-50);border:1.5px solid var(--gray-200);border-radius:14px;padding:1.2rem 1rem;text-align:center;">
+        <div style="font-size:2rem;margin-bottom:0.4rem;">📄</div>
+        <div style="font-size:0.78rem;font-weight:700;color:var(--blue);margin-bottom:0.3rem;">STEP 2</div>
+        <div style="font-size:0.88rem;font-weight:700;">참고 자료<br />첨부 (PDF 등)</div>
+      </div>
+      <div style="display:flex;align-items:center;font-size:1.5rem;color:var(--gray-300);padding:0 0.2rem;">→</div>
+      <div style="flex:2;min-width:220px;background:#fefce8;border:1.5px solid #fbbf24;border-radius:14px;padding:1.2rem 1rem;text-align:center;">
+        <div style="font-size:2rem;margin-bottom:0.4rem;">💬</div>
+        <div style="font-size:0.78rem;font-weight:700;color:#b45309;margin-bottom:0.4rem;">STEP 3 — 이게 전부</div>
+        <div style="font-size:0.78rem;font-family:'Fira Code',monospace;color:#92400e;background:#fef3c7;border-radius:8px;padding:0.4rem 0.6rem;text-align:left;">python으로 jakal-hwpx을 반드시 설치 및 활용하고, xml 편집은 이용하지 말것. save(validate=True)로 해줘</div>
+        <div style="font-size:0.72rem;color:#b45309;margin-top:0.4rem;">+ 원하는 내용 입력</div>
+      </div>
+      <div style="display:flex;align-items:center;font-size:1.5rem;color:var(--gray-300);padding:0 0.2rem;">→</div>
+      <div style="flex:1;min-width:140px;background:#f0fdf4;border:1.5px solid #22c55e;border-radius:14px;padding:1.2rem 1rem;text-align:center;">
+        <div style="font-size:2rem;margin-bottom:0.4rem;">📥</div>
+        <div style="font-size:0.78rem;font-weight:700;color:#15803d;margin-bottom:0.3rem;">완료</div>
+        <div style="font-size:0.88rem;font-weight:700;color:#15803d;">검증된 hwpx<br />파일 다운로드</div>
+      </div>
+    </div>
+
     <div class="chatgpt-grid">
       <div>
         <div class="chat-window">
           <div class="chat-header">
             <div class="gpt-icon">G</div>
-            ChatGPT
+            ChatGPT (코드 실행 모드)
           </div>
           <div class="chat-body">
             <div style="display:flex;flex-direction:column;align-items:flex-end;gap:0.3rem;">
               <div class="chat-attach">📎 연구계획서(팀장이름).hwpx</div>
               <div class="chat-attach">📄 사키 보고서.pdf</div>
               <div class="chat-msg user">
-                사키 보고서를 바탕으로 연구계획서를 작성해줘.<br />
-                python으로 jakal-hwpx을 반드시 설치 및 활용하고,<br />
-                xml 편집은 이용하지 말 것.<br />
-                save(validate=True)로 해줘
+                사키 보고서를 바탕으로 연구계획서를 작성해줘.<br /><br />
+                <span style="background:rgba(255,255,255,0.2);border-radius:6px;padding:0.2rem 0.4rem;font-family:'Fira Code',monospace;font-size:0.78rem;display:block;margin-top:0.3rem;">python으로 jakal-hwpx을 반드시 설치 및 활용하고, xml 편집은 이용하지 말것. save(validate=True)로 해줘</span>
               </div>
             </div>
             <div class="chat-msg assistant">
-              알겠습니다! jakal-hwpx를 사용해<br />
-              연구계획서를 자동으로 채워드릴게요.<br />
+              <span style="color:var(--gray-500);font-size:0.78rem;font-family:'Fira Code',monospace;display:block;">▶ pip install jakal-hwpx ... ✓</span>
+              <span style="color:var(--gray-500);font-size:0.78rem;font-family:'Fira Code',monospace;display:block;">▶ 사키 보고서.pdf 분석 중... ✓</span>
+              <span style="color:var(--gray-500);font-size:0.78rem;font-family:'Fira Code',monospace;display:block;">▶ 연구계획서 표 항목 채움... ✓</span>
+              <span style="color:var(--gray-500);font-size:0.78rem;font-family:'Fira Code',monospace;display:block;">▶ validation_errors() → [] ✓</span>
               <br />
               <strong>생성된 파일:</strong> 연구계획서_완성.hwpx ✅<br />
-              <strong>검증 결과:</strong> validation_errors() → []<br />
-              <strong>참고 문서:</strong> 사키 보고서 내용 반영 완료
+              <span style="font-size:0.82rem;color:var(--gray-600);">검증 통과 · 다운로드 준비 완료</span>
             </div>
           </div>
+        </div>
+        <div style="margin-top:1rem;background:#fff7ed;border:1px solid #fed7aa;border-radius:12px;padding:0.9rem 1.1rem;">
+          <p style="font-size:0.82rem;color:#c2410c;font-weight:700;margin-bottom:0.4rem;">⚡ ChatGPT가 자동으로 하는 것들</p>
+          <ul style="font-size:0.8rem;color:#9a3412;padding-left:1.1rem;line-height:1.9;">
+            <li>jakal-hwpx 설치 (pip install)</li>
+            <li>첨부 파일 내용 분석</li>
+            <li>hwpx 양식 열고 항목 채우기</li>
+            <li>4단계 검증 실행</li>
+            <li>완성 파일 반환</li>
+          </ul>
         </div>
       </div>
       <div>
         <p style="font-size:0.9rem;font-weight:700;color:var(--gray-700);margin-bottom:0.75rem;">
-          📋 추천 프롬프트 (복사해서 사용)
+          📋 추천 프롬프트 — 복사해서 사용
         </p>
         <div class="chat-prompt-box">
           <div class="prompt-label">
-            <span>ChatGPT 프롬프트</span>
+            <span>프롬프트 한 줄 추가 템플릿</span>
             <button class="prompt-copy-btn" onclick="copyPrompt(this)">복사</button>
           </div>
-          <div class="prompt-text" id="promptText">python으로 jakal-hwpx을 반드시 설치 및 활용하고, xml 편집은 이용하지 말 것. save(validate=True)로 해줘.
+          <div class="prompt-text" id="promptText"><span style="color:#6b7280;"># 이 한 줄을 어떤 요청에든 붙여넣으세요</span>
+python으로 jakal-hwpx을 반드시 설치 및 활용하고,
+xml 편집은 이용하지 말것. save(validate=True)로 해줘.
 
 <span class="prompt-highlight">[원하는 내용을 여기에 입력]</span>
 
 예) "사키 보고서를 바탕으로 연구계획서를 작성해줘"
 예) "첨부한 양식에 오늘 날짜와 내 이름을 채워줘"
-예) "표의 각 항목을 PDF 내용으로 자동 채워줘"</div>
+예) "표의 각 항목을 PDF 내용으로 자동 채워줘"
+예) "수식 슬롯에 공식을 넣어줘"</div>
         </div>
-        <div style="margin-top:1.2rem;background:var(--blue-light);border-radius:12px;padding:1rem 1.2rem;">
-          <p style="font-size:0.85rem;font-weight:700;color:var(--blue-dark);margin-bottom:0.4rem;">💡 이렇게 작동합니다</p>
-          <ol style="font-size:0.82rem;color:var(--blue-dark);padding-left:1.2rem;line-height:1.8;">
-            <li>hwpx 양식 파일 + 참고 자료 첨부</li>
-            <li>프롬프트 붙여넣기</li>
-            <li>ChatGPT가 jakal-hwpx 코드 자동 생성 + 실행</li>
-            <li>검증된 hwpx 파일 즉시 다운로드</li>
-          </ol>
+        <div style="margin-top:1rem;background:#f0fdf4;border:1.5px solid #bbf7d0;border-radius:12px;padding:1rem 1.2rem;">
+          <p style="font-size:0.85rem;font-weight:700;color:#15803d;margin-bottom:0.5rem;">🙋 자주 묻는 질문</p>
+          <div style="font-size:0.82rem;color:#166534;line-height:1.85;">
+            <div style="font-weight:700;">Q. Python을 설치해야 하나요?</div>
+            <div style="margin-bottom:0.6rem;"><strong>A. 아니요.</strong> ChatGPT 코드 실행 환경에서 알아서 설치합니다.</div>
+            <div style="font-weight:700;">Q. 코드를 직접 써야 하나요?</div>
+            <div style="margin-bottom:0.6rem;"><strong>A. 아니요.</strong> 프롬프트 한 줄 추가가 전부입니다.</div>
+            <div style="font-weight:700;">Q. 어떤 ChatGPT 플랜에서 되나요?</div>
+            <div>A. 코드 실행(Code Interpreter)이 지원되는 플랜에서 사용하세요.</div>
+          </div>
         </div>
       </div>
     </div>
@@ -987,13 +1068,19 @@ reopen_errors = doc.<span class="fn">save_reopen_validation_errors</span>(
     <div class="section-label" style="color:#93c5fd;">지금 시작하기</div>
     <h2>모든 한글 과제를 딸깍 하세요</h2>
     <p class="section-desc">
-      연구계획서, 졸업논문, 공공서식, 수식 문서 — 어떤 hwpx 양식이든 Python 한 줄로 자동화.
+      설치도 코딩도 필요 없습니다. ChatGPT에 프롬프트 한 줄만 추가하세요.
     </p>
+    <!-- BIG PROMPT CALLOUT -->
+    <div style="max-width:700px;margin:0 auto 2rem;background:rgba(0,0,0,0.3);border:2px solid rgba(250,191,36,0.6);border-radius:16px;padding:1.2rem 1.6rem;display:flex;align-items:center;gap:1rem;flex-wrap:wrap;">
+      <div style="flex:1;font-family:'Fira Code',monospace;font-size:0.88rem;color:#fbbf24;text-align:left;">python으로 jakal-hwpx을 반드시 설치 및 활용하고, xml 편집은 이용하지 말것. save(validate=True)로 해줘</div>
+      <button style="background:#fbbf24;border:none;color:#1c1400;padding:0.4rem 1rem;border-radius:8px;font-weight:700;font-size:0.85rem;cursor:pointer;white-space:nowrap;"
+        onclick="navigator.clipboard.writeText('python으로 jakal-hwpx을 반드시 설치 및 활용하고, xml 편집은 이용하지 말것. save(validate=True)로 해줘');this.textContent='✓ 복사됨';setTimeout(()=>this.textContent='복사',2000)">복사</button>
+    </div>
+    <div style="font-size:0.82rem;color:rgba(255,255,255,0.45);margin-bottom:2rem;">이 한 줄 + 원하는 내용 + hwpx 양식 파일 첨부 = 완료</div>
     <div style="display:flex;gap:1rem;justify-content:center;flex-wrap:wrap;">
-      <a href="https://pypi.org/project/jakal-hwpx/" class="btn-primary" target="_blank" style="font-size:1.05rem;padding:0.85rem 2.2rem;">PyPI에서 설치 →</a>
+      <a href="https://pypi.org/project/jakal-hwpx/" class="btn-primary" target="_blank" style="font-size:1.05rem;padding:0.85rem 2.2rem;">PyPI 보기 →</a>
       <a href="https://github.com/jakal/jakal-hwpx" class="btn-secondary" target="_blank" style="font-size:1.05rem;padding:0.85rem 2.2rem;">GitHub 보기</a>
     </div>
-    <div class="cta-pip">pip install jakal-hwpx</div>
   </div>
 </section>
 
