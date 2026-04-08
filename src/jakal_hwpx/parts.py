@@ -9,7 +9,13 @@ from typing import Any
 
 from lxml import etree
 
-from .elements import _invalidate_paragraph_layout
+from .elements import (
+    _invalidate_paragraph_layout,
+    _missing_preserved_tokens,
+    _preserved_structure_signature,
+    _replace_paragraph_text_preserving_controls,
+)
+from .exceptions import ValidationIssue
 from .namespaces import NS, SECTION_PATTERN, qname
 from .xmlnode import HwpxXmlNode
 
@@ -57,6 +63,7 @@ class HwpxPart:
     path: str
     raw_bytes: bytes
     modified: bool = False
+    document: Any | None = field(default=None, repr=False, compare=False)
 
     def __post_init__(self) -> None:
         self.path = PurePosixPath(self.path).as_posix()
@@ -564,20 +571,36 @@ class SectionPart(XmlPart):
     ) -> HwpxXmlNode:
         paragraphs = self._root.xpath("./hp:p", namespaces=NS)
         paragraph = paragraphs[index]
-        if char_pr_id is None:
-            char_pr_id = self._default_char_pr_id(paragraph)
-        preserved_runs = [
-            deepcopy(child)
-            for child in paragraph.xpath("./hp:run[hp:secPr]", namespaces=NS)
-        ]
-        for child in list(paragraph):
-            paragraph.remove(child)
-        for preserved in preserved_runs:
-            paragraph.append(preserved)
-        run = etree.SubElement(paragraph, qname("hp", "run"))
-        run.set("charPrIDRef", char_pr_id)
-        text_node = etree.SubElement(run, qname("hp", "t"))
-        text_node.text = text
+        expected_signature = _preserved_structure_signature(paragraph)
+        _replace_paragraph_text_preserving_controls(paragraph, text, char_pr_id=char_pr_id)
+        if self.document is not None:
+            missing = _missing_preserved_tokens(expected_signature, _preserved_structure_signature(paragraph))
+            if expected_signature:
+                self.document._track_control_preservation_targets(
+                    [paragraph],
+                    [expected_signature],
+                    issues=[
+                        ValidationIssue(
+                            kind="control_preservation",
+                            message="",
+                            part_path=self.path,
+                            section_index=self.section_index(),
+                            paragraph_index=index,
+                        )
+                    ],
+                )
+            if missing:
+                self.document._record_control_preservation_errors(
+                    [
+                        ValidationIssue(
+                            kind="control_preservation",
+                            message=f"lost preserved nodes during set_paragraph_text: {', '.join(missing)}",
+                            part_path=self.path,
+                            section_index=self.section_index(),
+                            paragraph_index=index,
+                        )
+                    ]
+                )
         _invalidate_paragraph_layout(paragraph)
         self.mark_modified()
         return HwpxXmlNode(paragraph, self)
@@ -599,6 +622,13 @@ class SectionPart(XmlPart):
         char_pr_id: str | None = None,
     ) -> etree._Element:
         template = self._select_template_paragraph(template_index=template_index)
+        protected = _preserved_structure_signature(template)
+        if template_index is not None and protected:
+            protected_tokens = ", ".join(protected.elements())
+            raise ValueError(
+                "template_index refers to a paragraph containing preserved controls and cannot be used "
+                f"as a text paragraph template: {protected_tokens}"
+            )
         paragraph = deepcopy(template)
         paragraph.set("id", self._next_paragraph_id())
         if para_pr_id is not None:
@@ -626,8 +656,18 @@ class SectionPart(XmlPart):
             return paragraph
         if template_index is not None:
             return paragraphs[template_index]
+        safe_text_paragraphs = [
+            paragraph
+            for paragraph in reversed(paragraphs)
+            if paragraph.xpath(".//hp:t", namespaces=NS) and not _preserved_structure_signature(paragraph)
+        ]
+        if safe_text_paragraphs:
+            return safe_text_paragraphs[0]
         for paragraph in reversed(paragraphs):
             if paragraph.xpath(".//hp:t", namespaces=NS):
+                return paragraph
+        for paragraph in reversed(paragraphs):
+            if not _preserved_structure_signature(paragraph):
                 return paragraph
         return paragraphs[-1]
 

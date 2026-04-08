@@ -3,8 +3,9 @@ from __future__ import annotations
 from pathlib import Path
 
 from lxml import etree
+import pytest
 
-from jakal_hwpx import HwpxDocument
+from jakal_hwpx import HwpxDocument, HwpxValidationError, ValidationIssue
 from jakal_hwpx.elements import _replace_text, _set_text
 
 from conftest import find_sample_with_section_xpath
@@ -63,6 +64,198 @@ def test_set_paragraph_text_preserves_section_properties(valid_hwpx_files: list[
     reopened_paragraph = reopened.sections[0].root_element.xpath("./hp:p", namespaces=NS)[paragraph_index]
     assert reopened_paragraph.xpath("./hp:run/hp:secPr", namespaces=NS)
     assert "SECTION_SETTINGS_PRESERVED" in reopened.get_document_text()
+
+
+def test_set_paragraph_text_preserves_controls() -> None:
+    root = etree.fromstring(
+        """
+        <hs:sec xmlns:hs="http://www.hancom.co.kr/hwpml/2011/section"
+                xmlns:hp="http://www.hancom.co.kr/hwpml/2011/paragraph">
+          <hp:p id="0" paraPrIDRef="0" styleIDRef="0" pageBreak="0" columnBreak="0" merged="0">
+            <hp:run charPrIDRef="0"><hp:secPr /></hp:run>
+            <hp:run charPrIDRef="0"><hp:ctrl><hp:tbl /></hp:ctrl></hp:run>
+            <hp:run charPrIDRef="0"><hp:t>VISIBLE</hp:t></hp:run>
+            <hp:linesegarray />
+          </hp:p>
+        </hs:sec>
+        """
+    )
+
+    section = HwpxDocument.blank().sections[0]
+    section._root = root
+
+    section.set_paragraph_text(0, "UPDATED")
+
+    paragraph = section.root_element.xpath("./hp:p", namespaces=NS)[0]
+    assert paragraph.xpath("./hp:run/hp:secPr", namespaces=NS)
+    assert paragraph.xpath("./hp:run/hp:ctrl/hp:tbl", namespaces=NS)
+    assert "UPDATED" in "".join(paragraph.xpath(".//hp:t/text()", namespaces=NS))
+    assert not paragraph.xpath("./hp:linesegarray", namespaces=NS)
+
+
+def test_header_footer_set_text_preserves_controls() -> None:
+    document = HwpxDocument.blank()
+    section = document.sections[0]
+    block = etree.fromstring(
+        """
+        <hp:header xmlns:hp="http://www.hancom.co.kr/hwpml/2011/paragraph" applyPageType="BOTH">
+          <hp:subList id="" textDirection="HORIZONTAL" lineWrap="BREAK" vertAlign="TOP" linkListIDRef="0" linkListNextIDRef="0" textWidth="0" textHeight="0" hasTextRef="0" hasNumRef="0">
+            <hp:p id="10" paraPrIDRef="0" styleIDRef="0" pageBreak="0" columnBreak="0" merged="0">
+              <hp:run charPrIDRef="0"><hp:ctrl><hp:newNum num="1" numType="PAGE" /></hp:ctrl></hp:run>
+              <hp:run charPrIDRef="0"><hp:t>Header</hp:t></hp:run>
+            </hp:p>
+          </hp:subList>
+        </hp:header>
+        """
+    )
+
+    from jakal_hwpx.elements import HeaderFooterBlock
+
+    HeaderFooterBlock(document, section, block).set_text("Edited header")
+
+    assert block.xpath(".//hp:newNum", namespaces=NS)
+    assert document.control_preservation_validation_errors() == []
+
+
+def test_table_cell_set_text_preserves_controls() -> None:
+    document = HwpxDocument.blank()
+    section = document.sections[0]
+    table_root = etree.fromstring(
+        """
+        <hp:tbl xmlns:hp="http://www.hancom.co.kr/hwpml/2011/paragraph" rowCnt="1" colCnt="1">
+          <hp:tr>
+            <hp:tc>
+              <hp:subList id="" textDirection="HORIZONTAL" lineWrap="BREAK" vertAlign="CENTER" linkListIDRef="0" linkListNextIDRef="0" textWidth="0" textHeight="0" hasTextRef="0" hasNumRef="0">
+                <hp:p id="20" paraPrIDRef="0" styleIDRef="0" pageBreak="0" columnBreak="0" merged="0">
+                  <hp:run charPrIDRef="0"><hp:ctrl><hp:fieldBegin id="11" type="HYPERLINK" fieldid="22" /></hp:ctrl></hp:run>
+                  <hp:run charPrIDRef="0"><hp:t>Cell</hp:t></hp:run>
+                  <hp:run charPrIDRef="0"><hp:ctrl><hp:fieldEnd beginIDRef="11" fieldid="22" /></hp:ctrl></hp:run>
+                </hp:p>
+              </hp:subList>
+              <hp:cellAddr colAddr="0" rowAddr="0" />
+              <hp:cellSpan colSpan="1" rowSpan="1" />
+            </hp:tc>
+          </hp:tr>
+        </hp:tbl>
+        """
+    )
+
+    from jakal_hwpx.elements import Table
+
+    table = Table(document, section, table_root)
+    table.cell(0, 0).set_text("Edited cell")
+
+    assert table_root.xpath(".//hp:fieldBegin", namespaces=NS)
+    assert table_root.xpath(".//hp:fieldEnd", namespaces=NS)
+    assert document.control_preservation_validation_errors() == []
+
+
+def test_shape_set_text_preserves_drawtext_controls() -> None:
+    document = HwpxDocument.blank()
+    section = document.sections[0]
+    shape_root = etree.fromstring(
+        """
+        <hp:rect xmlns:hp="http://www.hancom.co.kr/hwpml/2011/paragraph">
+          <hp:drawText>
+            <hp:subList id="" textDirection="HORIZONTAL" lineWrap="BREAK" vertAlign="CENTER" linkListIDRef="0" linkListNextIDRef="0" textWidth="0" textHeight="0" hasTextRef="0" hasNumRef="0">
+              <hp:p id="30" paraPrIDRef="0" styleIDRef="0" pageBreak="0" columnBreak="0" merged="0">
+                <hp:run charPrIDRef="0"><hp:ctrl><hp:bookmark name="anchor" /></hp:ctrl></hp:run>
+                <hp:run charPrIDRef="0"><hp:t>Shape text</hp:t></hp:run>
+              </hp:p>
+            </hp:subList>
+          </hp:drawText>
+        </hp:rect>
+        """
+    )
+
+    from jakal_hwpx.elements import ShapeObject
+
+    ShapeObject(document, section, shape_root).set_text("Edited shape")
+
+    assert shape_root.xpath(".//hp:bookmark", namespaces=NS)
+    assert document.control_preservation_validation_errors() == []
+
+
+def test_validate_reports_control_preservation_failures(tmp_path: Path) -> None:
+    document = HwpxDocument.blank()
+    field = document.append_hyperlink("https://example.com", display_text="Example", section_index=0)
+    paragraph = field.element.xpath("ancestor::hp:p[1]", namespaces=NS)[0]
+    paragraph_index = next(
+        index for index, node in enumerate(document.sections[0].root_element.xpath("./hp:p", namespaces=NS)) if node is paragraph
+    )
+
+    document.set_paragraph_text(0, paragraph_index, "Still safe")
+
+    run_with_field_end = paragraph.xpath("./hp:run[hp:ctrl/hp:fieldEnd]", namespaces=NS)[0]
+    paragraph.remove(run_with_field_end)
+
+    errors = document.control_preservation_validation_errors()
+    assert all(isinstance(error, ValidationIssue) for error in errors)
+    assert any(error.part_path == "Contents/section0.xml" and error.paragraph_index is not None for error in errors)
+    assert any("ctrl/fieldEnd" in error.message for error in errors)
+
+    with pytest.raises(HwpxValidationError) as exc_info:
+        document.save(tmp_path / "should_fail.hwpx", validate=True)
+
+    assert all(isinstance(error, ValidationIssue) for error in exc_info.value.errors)
+    assert all(error.code for error in exc_info.value.errors)
+    assert exc_info.value.to_dicts()[0]["code"] == exc_info.value.errors[0].code
+    assert "Contents/section0.xml paragraph" in str(exc_info.value)
+    assert "ctrl/fieldEnd" in str(exc_info.value)
+
+
+def test_append_row_rejects_template_rows_with_controls() -> None:
+    document = HwpxDocument.blank()
+    section = document.sections[0]
+    table_root = etree.fromstring(
+        """
+        <hp:tbl xmlns:hp="http://www.hancom.co.kr/hwpml/2011/paragraph" rowCnt="1" colCnt="1">
+          <hp:tr>
+            <hp:tc>
+              <hp:subList id="" textDirection="HORIZONTAL" lineWrap="BREAK" vertAlign="CENTER" linkListIDRef="0" linkListNextIDRef="0" textWidth="0" textHeight="0" hasTextRef="0" hasNumRef="0">
+                <hp:p id="40" paraPrIDRef="0" styleIDRef="0" pageBreak="0" columnBreak="0" merged="0">
+                  <hp:run charPrIDRef="0"><hp:ctrl><hp:bookmark name="row-anchor" /></hp:ctrl></hp:run>
+                  <hp:run charPrIDRef="0"><hp:t>Cell</hp:t></hp:run>
+                </hp:p>
+              </hp:subList>
+              <hp:cellAddr colAddr="0" rowAddr="0" />
+              <hp:cellSpan colSpan="1" rowSpan="1" />
+            </hp:tc>
+          </hp:tr>
+        </hp:tbl>
+        """
+    )
+
+    from jakal_hwpx.elements import Table
+
+    table = Table(document, section, table_root)
+    with pytest.raises(ValueError) as exc_info:
+        table.append_row()
+
+    assert "preserved controls" in str(exc_info.value)
+    assert "ctrl/bookmark" in str(exc_info.value)
+
+
+def test_append_paragraph_rejects_controlled_template_index() -> None:
+    document = HwpxDocument.blank()
+    section = document.sections[0]
+    paragraph = section.root_element.xpath("./hp:p", namespaces=NS)[0]
+
+    bookmark_run = etree.SubElement(paragraph, "{http://www.hancom.co.kr/hwpml/2011/paragraph}run")
+    bookmark_run.set("charPrIDRef", "0")
+    ctrl = etree.SubElement(bookmark_run, "{http://www.hancom.co.kr/hwpml/2011/paragraph}ctrl")
+    bookmark = etree.SubElement(ctrl, "{http://www.hancom.co.kr/hwpml/2011/paragraph}bookmark")
+    bookmark.set("name", "template-anchor")
+    text_run = etree.SubElement(paragraph, "{http://www.hancom.co.kr/hwpml/2011/paragraph}run")
+    text_run.set("charPrIDRef", "0")
+    etree.SubElement(text_run, "{http://www.hancom.co.kr/hwpml/2011/paragraph}t").text = "Template"
+    section.mark_modified()
+
+    with pytest.raises(ValueError) as exc_info:
+        document.append_paragraph("New paragraph", section_index=0, template_index=0)
+
+    assert "preserved controls" in str(exc_info.value)
+    assert "ctrl/bookmark" in str(exc_info.value)
 
 
 def test_set_text_honors_newline_paragraphs() -> None:

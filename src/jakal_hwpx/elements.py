@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+from collections import Counter
 from copy import deepcopy
 from dataclasses import dataclass
 
 from lxml import etree
 
+from .exceptions import ValidationIssue
 from .namespaces import NS, qname
 
 
@@ -125,15 +127,70 @@ def _ensure_run_with_text(paragraph: etree._Element, text: str) -> etree._Elemen
     return run
 
 
-def _set_paragraph_text(paragraph: etree._Element, text: str) -> None:
+def _reset_paragraph_text(paragraph: etree._Element, text: str) -> None:
     for child in list(paragraph):
         paragraph.remove(child)
     _ensure_run_with_text(paragraph, text)
 
 
+def _replace_paragraph_text_preserving_controls(
+    paragraph: etree._Element,
+    text: str,
+    *,
+    char_pr_id: str | None = None,
+) -> None:
+    resolved_char_pr_id = char_pr_id or _default_char_pr_id(paragraph)
+    preserved_runs = [
+        deepcopy(child)
+        for child in paragraph.xpath("./hp:run[hp:secPr or hp:ctrl]", namespaces=NS)
+    ]
+    for preserved_run in preserved_runs:
+        for text_node in preserved_run.xpath("./hp:t", namespaces=NS):
+            preserved_run.remove(text_node)
+    for child in list(paragraph):
+        paragraph.remove(child)
+    for preserved in preserved_runs:
+        paragraph.append(preserved)
+    run = etree.SubElement(paragraph, qname("hp", "run"))
+    run.set("charPrIDRef", resolved_char_pr_id)
+    text_node = etree.SubElement(run, qname("hp", "t"))
+    text_node.text = text
+
+
+def _preserved_structure_signature(paragraph: etree._Element) -> Counter[str]:
+    signature: Counter[str] = Counter()
+    for node in paragraph.xpath("./hp:run/hp:secPr | ./hp:run/hp:ctrl/*", namespaces=NS):
+        local_name = etree.QName(node).localname
+        parent_local_name = etree.QName(node.getparent()).localname if node.getparent() is not None else ""
+        label = f"{parent_local_name}/{local_name}" if parent_local_name == "ctrl" else local_name
+        attributes = []
+        for key in ("id", "fieldid", "beginIDRef", "name", "instid", "num", "numType", "type"):
+            value = node.get(key)
+            if value:
+                attributes.append(f"{key}={value}")
+        if attributes:
+            label = f"{label}[{', '.join(attributes)}]"
+        signature[label] += 1
+    return signature
+
+
+def _capture_protected_paragraph_signatures(element: etree._Element) -> tuple[list[etree._Element], list[Counter[str]]]:
+    paragraphs = _paragraph_nodes(element)
+    return paragraphs, [_preserved_structure_signature(paragraph) for paragraph in paragraphs]
+
+
+def _missing_preserved_tokens(expected: Counter[str], actual: Counter[str]) -> list[str]:
+    missing: list[str] = []
+    for token, count in expected.items():
+        deficit = count - actual.get(token, 0)
+        if deficit > 0:
+            missing.extend([token] * deficit)
+    return missing
+
+
 def _clone_paragraph(paragraph: etree._Element) -> etree._Element:
     clone = deepcopy(paragraph)
-    _set_paragraph_text(clone, "")
+    _reset_paragraph_text(clone, "")
     return clone
 
 
@@ -212,9 +269,9 @@ def _set_text(element: etree._Element, text: str) -> None:
             template.addnext(clone)
             paragraphs = _paragraph_nodes(element)
         for paragraph, value in zip(paragraphs, parts):
-            _set_paragraph_text(paragraph, value)
+            _replace_paragraph_text_preserving_controls(paragraph, value)
         for paragraph in paragraphs[len(parts) :]:
-            _set_paragraph_text(paragraph, "")
+            _replace_paragraph_text_preserving_controls(paragraph, "")
         _invalidate_paragraph_layout(element)
         return
 
@@ -227,7 +284,7 @@ def _set_text(element: etree._Element, text: str) -> None:
         return
 
     paragraph = _ensure_first_paragraph(element)
-    _set_paragraph_text(paragraph, text)
+    _replace_paragraph_text_preserving_controls(paragraph, text)
     _invalidate_paragraph_layout(element)
 
 
@@ -254,8 +311,24 @@ class HeaderFooterBlock:
         return _replace_text(self.element, old, new, count=count)
 
     def set_text(self, text: str) -> None:
+        paragraphs, signatures = _capture_protected_paragraph_signatures(self.element)
         self.section.mark_modified()
         _set_text(self.element, text)
+        self.document._track_control_preservation_targets(
+            paragraphs,
+            signatures,
+            issues=[
+                ValidationIssue(
+                    kind="control_preservation",
+                    message="",
+                    part_path=self.section.path,
+                    section_index=self.section.section_index(),
+                    paragraph_index=index,
+                    context=f"{self.kind}(applyPageType={self.apply_page_type or 'UNKNOWN'})",
+                )
+                for index, _ in enumerate(paragraphs)
+            ],
+        )
 
 
 @dataclass
@@ -288,8 +361,26 @@ class TableCell:
         return int(span[0]) if span else 1
 
     def set_text(self, text: str) -> None:
+        paragraphs, signatures = _capture_protected_paragraph_signatures(self.element)
         self.table.section.mark_modified()
         _set_text(self.element, text)
+        self.table.document._track_control_preservation_targets(
+            paragraphs,
+            signatures,
+            issues=[
+                ValidationIssue(
+                    kind="control_preservation",
+                    message="",
+                    part_path=self.table.section.path,
+                    section_index=self.table.section.section_index(),
+                    paragraph_index=index,
+                    cell_row=self.row,
+                    cell_column=self.column,
+                    context=f"table cell(row={self.row}, column={self.column})",
+                )
+                for index, _ in enumerate(paragraphs)
+            ],
+        )
 
 
 @dataclass
@@ -331,6 +422,16 @@ class Table:
         if not rows:
             raise ValueError("Table does not contain rows.")
         template = rows[-1]
+        protected = [
+            token
+            for paragraph in template.xpath(".//hp:p", namespaces=NS)
+            for token in _preserved_structure_signature(paragraph).elements()
+        ]
+        if protected:
+            raise ValueError(
+                "append_row() cannot clone a template row containing preserved controls. "
+                f"Unsupported template row nodes: {', '.join(protected)}"
+            )
         new_row = etree.fromstring(etree.tostring(template))
         next_row_index = max((cell.row for cell in self.cells()), default=-1) + 1
         for column_index, cell in enumerate(new_row.xpath("./hp:tc", namespaces=NS)):
@@ -602,8 +703,24 @@ class Note:
         return _extract_text(self.element)
 
     def set_text(self, text: str) -> None:
+        paragraphs, signatures = _capture_protected_paragraph_signatures(self.element)
         self.section.mark_modified()
         _set_text(self.element, text)
+        self.document._track_control_preservation_targets(
+            paragraphs,
+            signatures,
+            issues=[
+                ValidationIssue(
+                    kind="control_preservation",
+                    message="",
+                    part_path=self.section.path,
+                    section_index=self.section.section_index(),
+                    paragraph_index=index,
+                    context=f"{self.kind}(number={self.number or 'UNKNOWN'})",
+                )
+                for index, _ in enumerate(paragraphs)
+            ],
+        )
 
 
 @dataclass
@@ -881,9 +998,41 @@ class ShapeObject:
 
         draw_text_nodes = self.element.xpath("./hp:drawText", namespaces=NS)
         if draw_text_nodes:
+            paragraphs, signatures = _capture_protected_paragraph_signatures(draw_text_nodes[0])
             _set_text(draw_text_nodes[0], value)
             self.section.mark_modified()
+            self.document._track_control_preservation_targets(
+                paragraphs,
+                signatures,
+                issues=[
+                    ValidationIssue(
+                        kind="control_preservation",
+                        message="",
+                        part_path=self.section.path,
+                        section_index=self.section.section_index(),
+                        paragraph_index=index,
+                        context=f"{self.kind} drawText",
+                    )
+                    for index, _ in enumerate(paragraphs)
+                ],
+            )
             return
 
+        paragraphs, signatures = _capture_protected_paragraph_signatures(self.element)
         _set_text(self.element, value)
         self.section.mark_modified()
+        self.document._track_control_preservation_targets(
+            paragraphs,
+            signatures,
+            issues=[
+                ValidationIssue(
+                    kind="control_preservation",
+                    message="",
+                    part_path=self.section.path,
+                    section_index=self.section.section_index(),
+                    paragraph_index=index,
+                    context=self.kind,
+                )
+                for index, _ in enumerate(paragraphs)
+            ],
+        )

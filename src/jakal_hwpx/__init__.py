@@ -15,7 +15,7 @@ from .elements import (
     Table,
     TableCell,
 )
-from .exceptions import HwpxError, HwpxValidationError, InvalidHwpxFileError
+from .exceptions import HwpxError, HwpxValidationError, InvalidHwpxFileError, ValidationIssue
 from .parts import (
     BinaryDataPart,
     ContainerPart,
@@ -78,6 +78,7 @@ __all__ = [
     "Table",
     "TableCell",
     "VersionPart",
+    "ValidationIssue",
     "XmlPart",
     "__version__",
 ]

@@ -11,9 +11,12 @@ scripts/
 build/
 dist/
 examples/output.zip
+examples/output_stability_lab/
 vendor/
 pytest-cache-files-*/
 .pytest_cache/
+.pytest-temp-*/
+.pytest-temp-validation-issue/
 
 # Python cache
 __pycache__/

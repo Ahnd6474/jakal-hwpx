@@ -63,6 +63,7 @@ doc.save("build/hello.hwpx")
 - `HwpxDocument.blank()`: 최소 구성의 새 문서 만들기
 - `metadata()` / `set_metadata()`: 문서 메타데이터 조회 및 수정
 - `get_document_text()`: 본문 텍스트 추출
+  - 주의: 이 출력은 검색/미리보기용 평탄화 텍스트이며, 편집 대상 문단 인덱스와 1:1로 대응하지 않습니다.
 - `set_paragraph_text()`: 특정 문단 텍스트 교체
 - `append_paragraph()`: 문단 추가
 - `replace_text()`: 문서 전체 텍스트 치환
@@ -70,6 +71,9 @@ doc.save("build/hello.hwpx")
 - `tables()`, `pictures()`, `notes()`, `fields()`: 구조화된 요소 접근
 - `validation_errors()`: 문서 구조 검증
 - `save(path)`: 파일 저장
+  - `append_row()` now fails fast when the template row contains preserved controls such as bookmarks or fields.
+  - `append_paragraph(..., template_index=...)` now fails fast when the selected template paragraph contains preserved controls.
+  - `validate=True` 기본값은 제어문 보존 검사까지 포함합니다. 실패 시 예외 메시지에 섹션 경로와 누락된 제어문 종류가 함께 표시됩니다.
 
 자주 쓰는 helper 타입:
 
@@ -171,13 +175,28 @@ doc.save("build/fields.hwpx")
 ```bash
 python -m pip install -e .[dev]
 python -m pytest -q
+python scripts/run_stability_lab.py
 ```
+
+Windows Hancom smoke validation:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts/setup_hancom_security_module.ps1 -DownloadIfMissing
+powershell -ExecutionPolicy Bypass -File scripts/run_hancom_smoke_validation.ps1 -InputPath examples\samples\hwpx\AI와_특이점_보고서.hwpx -OutputPath .codex-temp\hancom-smoke\sample.roundtrip.hwpx
+powershell -ExecutionPolicy Bypass -File scripts/run_hancom_corpus_smoke_validation.ps1
+```
+
+The Hancom smoke validator registers the official security module, calls `RegisterModule("FilePathCheckDLL", "FilePathCheckerModuleExample")`, and emits a structured `.run.json` log. It also fails fast when existing `Hwp.exe` processes would make COM validation unreliable.
 
 테스트는 `examples/samples/hwpx/` 아래의 고정 fixture corpus를 사용합니다. 로컬과 CI가 같은 경로를 사용하도록 고정해 두었기 때문에 테스트 커버리지가 실행 환경에 따라 흔들리지 않습니다.
 
 ## 추가 문서
 
 - [HWPX_MODULE.md](./HWPX_MODULE.md): 패키지 구조와 API 설명
+- [scripts/run_stability_lab.py](./scripts/run_stability_lab.py): synthetic paragraph/container matrix round-trip harness
+- [scripts/setup_hancom_security_module.ps1](./scripts/setup_hancom_security_module.ps1): install and register the official Hancom automation security module
+- [scripts/run_hancom_smoke_validation.ps1](./scripts/run_hancom_smoke_validation.ps1): single-file Hancom `Open()` / `SaveAs()` smoke validation with fast-fail diagnostics
+- [scripts/run_hancom_corpus_smoke_validation.ps1](./scripts/run_hancom_corpus_smoke_validation.ps1): corpus-wide Hancom smoke validation runner
 - [examples/SHOWCASE.md](./examples/SHOWCASE.md): showcase 생성 흐름
 - [RELEASING.md](./RELEASING.md): 배포 체크리스트
 - [THIRD_PARTY_NOTICES.md](./THIRD_PARTY_NOTICES.md): 샘플 문서와 재배포 관련 고지

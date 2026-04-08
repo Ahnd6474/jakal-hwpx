@@ -37,7 +37,7 @@ doc.save("example-edited.hwpx")
 | `blank()` | `HwpxDocument` | 기본 파트가 들어 있는 새 문서 만들기 |
 | `metadata()` | `DocumentMetadata` | 제목, 작성자, 주제, 키워드 같은 메타데이터 읽기 |
 | `set_metadata(**values)` | `None` | 메타데이터 수정 |
-| `get_document_text()` | `str` | 섹션 전체 본문 텍스트 추출 |
+| `get_document_text()` | `str` | 섹션 전체 본문 텍스트 추출. 검색/미리보기용이며 문단 인덱스 매핑용이 아님 |
 | `set_paragraph_text(section_index, paragraph_index, text)` | 문단 래퍼 | 특정 문단 텍스트 교체 |
 | `append_paragraph(text, section_index=0)` | 문단 래퍼 | 섹션 끝에 문단 추가 |
 | `replace_text(old, new, count=-1)` | `int` | 문서 전체에서 문자열 치환 |
@@ -50,11 +50,11 @@ doc.save("example-edited.hwpx")
 | `append_bookmark(...)`, `append_hyperlink(...)`, `append_mail_merge_field(...)`, `append_calculation_field(...)`, `append_cross_reference(...)` | 래퍼 객체 | 북마크와 필드 계열 요소 생성 |
 | `add_or_replace_binary(...)` | `BinaryDataPart` | 패키지 내부 바이너리 추가 또는 교체 |
 | `compile(validate=True)` | `bytes` | 메모리에서 패키지 직렬화 |
-| `save(path, validate=True)` | `Path` | 디스크에 저장 |
-| `validation_errors()` | `list[str]` | 패키지 구조 검증 |
-| `xml_validation_errors()` | `list[str]` | XML 루트 및 구조 점검 |
-| `reference_validation_errors()` | `list[str]` | 스타일, 필드, 북마크, manifest 참조 점검 |
-| `save_reopen_validation_errors()` | `list[str]` | 저장 후 재오픈 기준의 실용적 검증 |
+| `save(path, validate=True)` | `Path` | 디스크에 저장. 기본 검증에 제어문 보존 검사 포함 |
+| `validation_errors()` | `list[ValidationIssue]` | 패키지 구조 검증 |
+| `xml_validation_errors()` | `list[ValidationIssue]` | XML 루트 및 구조 점검 |
+| `reference_validation_errors()` | `list[ValidationIssue]` | 스타일, 필드, 북마크, manifest 참조 점검 |
+| `save_reopen_validation_errors()` | `list[ValidationIssue]` | 저장 후 재오픈 기준의 실용적 검증 |
 
 ## 모듈 개요
 
@@ -113,6 +113,11 @@ doc.save("example-edited.hwpx")
 - `SectionSettings.set_page_size()` / `SectionSettings.set_margins()`
 - `CharacterStyle.set_text_color()` / `ParagraphStyle.set_alignment()`
 
+Safety boundaries:
+
+- `Table.append_row()` fails fast if the template row contains preserved controls such as bookmarks, fields, or numbering controls.
+- `append_paragraph(..., template_index=...)` fails fast if the selected template paragraph contains preserved controls.
+
 ### 자주 보이는 래퍼 타입
 
 | 타입 | 주요 속성/메서드 | 설명 |
@@ -160,6 +165,7 @@ namespace 상수, QName helper, section 경로 매칭 로직이 들어 있습니
 - `validation_errors()`
 - `xml_validation_errors()`
 - `reference_validation_errors()`
+- `control_preservation_validation_errors()`
 - `save_reopen_validation_errors()`
 - `roundtrip_validate()`
 
@@ -168,7 +174,21 @@ namespace 상수, QName helper, section 경로 매칭 로직이 들어 있습니
 - `validation_errors()`는 패키지 구조 문제를 잡습니다.
 - `xml_validation_errors()`는 XML 루트와 기본 구조 문제를 잡습니다.
 - `reference_validation_errors()`는 스타일, 필드, 북마크, manifest 참조 문제를 잡습니다.
+- `control_preservation_validation_errors()`는 텍스트 편집 과정에서 보존되어야 할 `hp:ctrl`, `hp:secPr` 계열 구조가 사라졌는지 추적합니다.
 - `save_reopen_validation_errors()`는 저장 후 다시 열리는지 확인하는 현실적인 smoke check입니다.
+
+## Stability Lab
+
+`scripts/run_stability_lab.py` builds a synthetic matrix of generic paragraph/container combinations, runs baseline round-trip saves, applies edit APIs, and verifies control signatures after `save(validate=True)`.
+
+Current matrix coverage:
+
+- top-level section paragraphs
+- headers and footers
+- table cells
+- shape drawText containers
+- footnotes and endnotes
+- mixtures of plain text, bookmarks, field begin/end pairs, and numbering controls
 
 ## 공개 타입
 

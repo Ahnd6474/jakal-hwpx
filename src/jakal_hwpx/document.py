@@ -7,11 +7,15 @@ import shutil
 import tempfile
 import time
 import zipfile
+from collections import Counter
+from dataclasses import replace
 from pathlib import Path, PurePosixPath
 
 from lxml import etree
 
 from .elements import (
+    _missing_preserved_tokens,
+    _preserved_structure_signature,
     AutoNumber,
     Bookmark,
     CharacterStyle,
@@ -26,7 +30,7 @@ from .elements import (
     StyleDefinition,
     Table,
 )
-from .exceptions import HwpxValidationError, InvalidHwpxFileError
+from .exceptions import HwpxValidationError, InvalidHwpxFileError, ValidationIssue
 from .namespaces import NS, SECTION_PATTERN, qname
 from .parts import (
     BinaryDataPart,
@@ -47,6 +51,35 @@ from .parts import (
 
 def _normalize_path(path: str) -> str:
     return PurePosixPath(path).as_posix()
+
+
+def _issue(
+    kind: str,
+    message: str,
+    *,
+    part_path: str | None = None,
+    section_index: int | None = None,
+    paragraph_index: int | None = None,
+    cell_row: int | None = None,
+    cell_column: int | None = None,
+    xpath: str | None = None,
+    line: int | None = None,
+    column: int | None = None,
+    context: str | None = None,
+) -> ValidationIssue:
+    return ValidationIssue(
+        kind=kind,
+        message=message,
+        part_path=part_path,
+        section_index=section_index,
+        paragraph_index=paragraph_index,
+        cell_row=cell_row,
+        cell_column=cell_column,
+        xpath=xpath,
+        line=line,
+        column=column,
+        context=context,
+    )
 
 
 def _clone_zip_info(source: zipfile.ZipInfo, filename: str) -> zipfile.ZipInfo:
@@ -352,6 +385,10 @@ class HwpxDocument:
         self._zip_infos = zip_infos
         self.source_path = source_path
         self.duplicate_entries = duplicate_entries or []
+        self._control_preservation_expectations: dict[int, tuple[etree._Element, Counter[str], ValidationIssue]] = {}
+        self._control_preservation_errors: list[ValidationIssue] = []
+        for part in self._parts.values():
+            part.document = self
 
     @classmethod
     def blank(cls) -> "HwpxDocument":
@@ -466,6 +503,7 @@ class HwpxDocument:
         normalized = _normalize_path(path)
         part_cls = infer_part_class(normalized, raw_bytes)
         part = part_cls(normalized, raw_bytes)
+        part.document = self
         self._parts[normalized] = part
         if normalized not in self._part_order:
             if normalized == "mimetype":
@@ -632,6 +670,34 @@ class HwpxDocument:
     def get_document_text(self, section_separator: str = "\n\n") -> str:
         return section_separator.join(section.extract_text() for section in self.sections)
 
+    def _track_control_preservation_targets(
+        self,
+        paragraphs: list[etree._Element],
+        signatures: list[Counter[str]],
+        *,
+        issues: list[ValidationIssue],
+    ) -> None:
+        for paragraph, signature, issue in zip(paragraphs, signatures, issues):
+            if not signature:
+                continue
+            self._control_preservation_expectations[id(paragraph)] = (paragraph, signature, issue)
+
+    def _record_control_preservation_errors(self, errors: list[ValidationIssue]) -> None:
+        for error in errors:
+            if error not in self._control_preservation_errors:
+                self._control_preservation_errors.append(error)
+
+    def control_preservation_validation_errors(self) -> list[ValidationIssue]:
+        errors = list(self._control_preservation_errors)
+        for marker, (paragraph, expected_signature, issue) in self._control_preservation_expectations.items():
+            if paragraph.getparent() is None:
+                missing = list(expected_signature.elements())
+            else:
+                missing = _missing_preserved_tokens(expected_signature, _preserved_structure_signature(paragraph))
+            if missing:
+                errors.append(replace(issue, message=f"lost preserved nodes after edit: {', '.join(missing)}"))
+        return errors
+
     def replace_text(self, old: str, new: str, count: int = -1, include_header: bool = True) -> int:
         targets: list[XmlPart] = list(self.sections)
         if include_header:
@@ -763,6 +829,7 @@ class HwpxDocument:
         source = self.sections[clone_from]
         next_path = self.content_hpf.next_section_path()
         new_section = SectionPart.from_root(next_path, source.clone_root())
+        new_section.document = self
         new_section.mark_modified()
         self._parts[next_path] = new_section
         if next_path not in self._part_order:
@@ -1019,8 +1086,8 @@ class HwpxDocument:
         output_path.write_bytes(self.compile(validate=validate))
         return output_path
 
-    def validation_errors(self) -> list[str]:
-        errors: list[str] = []
+    def validation_errors(self) -> list[ValidationIssue]:
+        errors: list[ValidationIssue] = []
         content_hpf = self._parts.get("Contents/content.hpf")
         is_distribution_protected = isinstance(content_hpf, ContentHpfPart) and content_hpf.is_distribution_protected
         required = [
@@ -1033,21 +1100,30 @@ class HwpxDocument:
             required.append("Contents/header.xml")
         for path in required:
             if path not in self._parts:
-                errors.append(f"Missing required part: {path}")
+                errors.append(_issue("missing_part", f"Missing required part: {path}", part_path=path))
 
         if self.duplicate_entries:
-            errors.append(f"Duplicate zip entries found: {', '.join(sorted(set(self.duplicate_entries)))}")
+            errors.append(
+                _issue(
+                    "duplicate_zip_entry",
+                    f"Duplicate zip entries found: {', '.join(sorted(set(self.duplicate_entries)))}",
+                )
+            )
 
         mimetype = self._parts.get("mimetype")
         if isinstance(mimetype, MimetypePart) and mimetype.mime.strip() != "application/hwp+zip":
-            errors.append("mimetype must be application/hwp+zip")
+            errors.append(
+                _issue("mimetype", "mimetype must be application/hwp+zip", part_path="mimetype")
+            )
 
         xml_parts = [part for part in self._parts.values() if isinstance(part, XmlPart)]
         for part in xml_parts:
             try:
                 part.to_bytes()
             except Exception as exc:  # noqa: BLE001
-                errors.append(f"Invalid XML part {part.path}: {exc}")
+                errors.append(
+                    _issue("xml_serialization", f"Invalid XML part serialization: {exc}", part_path=part.path)
+                )
 
         container = self._parts.get("META-INF/container.xml")
         if isinstance(container, ContainerPart):
@@ -1056,7 +1132,13 @@ class HwpxDocument:
                 if normalized not in self._parts:
                     if normalized == "Preview/PrvText.txt":
                         continue
-                    errors.append(f"container.xml references missing rootfile: {normalized}")
+                    errors.append(
+                        _issue(
+                            "container_reference",
+                            f"container.xml references missing rootfile: {normalized}",
+                            part_path="META-INF/container.xml",
+                        )
+                    )
 
         if isinstance(content_hpf, ContentHpfPart):
             manifest_ids: set[str] = set()
@@ -1064,34 +1146,75 @@ class HwpxDocument:
                 item_id = item.get("id")
                 href = item.get("href")
                 if not item_id:
-                    errors.append("content.hpf manifest item is missing id")
+                    errors.append(
+                        _issue(
+                            "manifest_item",
+                            "content.hpf manifest item is missing id",
+                            part_path="Contents/content.hpf",
+                        )
+                    )
                 elif item_id in manifest_ids:
-                    errors.append(f"Duplicate content.hpf manifest id: {item_id}")
+                    errors.append(
+                        _issue(
+                            "manifest_item",
+                            f"Duplicate content.hpf manifest id: {item_id}",
+                            part_path="Contents/content.hpf",
+                        )
+                    )
                 else:
                     manifest_ids.add(item_id)
                 if not href:
-                    errors.append("content.hpf manifest item is missing href")
+                    errors.append(
+                        _issue(
+                            "manifest_item",
+                            "content.hpf manifest item is missing href",
+                            part_path="Contents/content.hpf",
+                        )
+                    )
                     continue
                 if _normalize_path(href) not in self._parts:
-                    errors.append(f"content.hpf manifest references missing part: {href}")
+                    errors.append(
+                        _issue(
+                            "manifest_reference",
+                            f"content.hpf manifest references missing part: {href}",
+                            part_path="Contents/content.hpf",
+                        )
+                    )
 
             for itemref in content_hpf.spine_itemrefs():
                 item_id = itemref.get("idref")
                 if not item_id:
-                    errors.append("content.hpf spine itemref is missing idref")
+                    errors.append(
+                        _issue(
+                            "spine_itemref",
+                            "content.hpf spine itemref is missing idref",
+                            part_path="Contents/content.hpf",
+                        )
+                    )
                 elif item_id not in manifest_ids:
-                    errors.append(f"content.hpf spine references unknown manifest id: {item_id}")
+                    errors.append(
+                        _issue(
+                            "spine_itemref",
+                            f"content.hpf spine references unknown manifest id: {item_id}",
+                            part_path="Contents/content.hpf",
+                        )
+                    )
 
         header = self._parts.get("Contents/header.xml")
         if isinstance(header, HeaderPart):
             if header.section_count and header.section_count != len(self.sections):
                 errors.append(
-                    f"header.xml secCnt={header.section_count} does not match section count={len(self.sections)}"
+                    _issue(
+                        "header_section_count",
+                        f"header.xml secCnt={header.section_count} does not match section count={len(self.sections)}",
+                        part_path="Contents/header.xml",
+                    )
                 )
 
         if not is_distribution_protected and not self.sections:
-            errors.append("Document must contain at least one section part")
+            errors.append(_issue("document_structure", "Document must contain at least one section part"))
 
+        errors.extend(self.control_preservation_validation_errors())
         return errors
 
     def validate(self) -> None:
@@ -1109,8 +1232,8 @@ class HwpxDocument:
         finally:
             self._cleanup_temp_dir(temp_dir)
 
-    def xml_validation_errors(self) -> list[str]:
-        errors: list[str] = []
+    def xml_validation_errors(self) -> list[ValidationIssue]:
+        errors: list[ValidationIssue] = []
         expected_roots = {
             "version.xml": "HCFVersion",
             "Contents/content.hpf": "package",
@@ -1125,34 +1248,80 @@ class HwpxDocument:
             if part is None:
                 continue
             if not isinstance(part, XmlPart):
-                errors.append(f"{path} is expected to be XML but is loaded as {type(part).__name__}")
+                errors.append(
+                    _issue(
+                        "xml_part_type",
+                        f"{path} is expected to be XML but is loaded as {type(part).__name__}",
+                        part_path=path,
+                    )
+                )
                 continue
             actual = part.root.local_name
             if actual != expected_local_name:
-                errors.append(f"{path} root element must be {expected_local_name}, got {actual}")
-        for section in self.sections:
+                errors.append(
+                    _issue(
+                        "xml_root",
+                        f"{path} root element must be {expected_local_name}, got {actual}",
+                        part_path=path,
+                    )
+                )
+        for section_index, section in enumerate(self.sections):
             if section.root.local_name != "sec":
-                errors.append(f"{section.path} root element must be sec, got {section.root.local_name}")
+                errors.append(
+                    _issue(
+                        "xml_root",
+                        f"{section.path} root element must be sec, got {section.root.local_name}",
+                        part_path=section.path,
+                        section_index=section_index,
+                    )
+                )
             if not section.root_element.xpath("./hp:p", namespaces=NS):
-                errors.append(f"{section.path} must contain at least one paragraph")
-            for table in self.tables(section_index=self.sections.index(section)):
+                errors.append(
+                    _issue(
+                        "section_structure",
+                        f"{section.path} must contain at least one paragraph",
+                        part_path=section.path,
+                        section_index=section_index,
+                    )
+                )
+            for table in self.tables(section_index=section_index):
                 if table.row_count < 1 or table.column_count < 1:
-                    errors.append(f"{section.path} contains a table with invalid row/column count")
+                    errors.append(
+                        _issue(
+                            "table_structure",
+                            f"{section.path} contains a table with invalid row/column count",
+                            part_path=section.path,
+                            section_index=section_index,
+                        )
+                    )
                 for cell in table.cells():
                     if cell.row_span < 1 or cell.col_span < 1:
-                        errors.append(f"{section.path} table cell has invalid span at ({cell.row}, {cell.column})")
+                        errors.append(
+                            _issue(
+                                "table_cell_span",
+                                f"{section.path} table cell has invalid span",
+                                part_path=section.path,
+                                section_index=section_index,
+                                cell_row=cell.row,
+                                cell_column=cell.column,
+                            )
+                        )
         return errors
 
-    def schema_validation_errors(self, schema_map: dict[str, str | os.PathLike[str]]) -> list[str]:
+    def schema_validation_errors(self, schema_map: dict[str, str | os.PathLike[str]]) -> list[ValidationIssue]:
         validators: dict[Path, etree.XMLSchema] = {}
-        errors: list[str] = []
+        errors: list[ValidationIssue] = []
         for part_path, schema_path in schema_map.items():
             part = self._parts.get(_normalize_path(part_path))
             if part is None:
-                errors.append(f"Schema configured for missing part: {part_path}")
+                errors.append(
+                    _issue("schema_validation", f"Schema configured for missing part: {part_path}", part_path=part_path)
+                )
                 continue
             if not isinstance(part, XmlPart):
-                errors.append(f"Schema validation requires XML part: {part_path}")
+                errors.append(
+                    _issue("schema_validation", f"Schema validation requires XML part: {part_path}", part_path=part_path)
+                )
                 continue
             resolved_schema_path = Path(schema_path)
             if resolved_schema_path not in validators:
@@ -1161,10 +1330,18 @@ class HwpxDocument:
             validator = validators[resolved_schema_path]
             if not validator.validate(part._root):
                 for entry in validator.error_log:
-                    errors.append(f"{part_path}: {entry.message}")
+                    errors.append(
+                        _issue(
+                            "schema_validation",
+                            entry.message,
+                            part_path=part_path,
+                            line=entry.line,
+                            column=entry.column,
+                        )
+                    )
         return errors
 
-    def reference_validation_errors(self) -> list[str]:
+    def reference_validation_errors(self) -> list[ValidationIssue]:
         errors = self.validation_errors()
         style_ids = {style.style_id for style in self.styles() if style.style_id is not None} if not self.is_distribution_protected else set()
         para_pr_ids = {
@@ -1180,63 +1357,123 @@ class HwpxDocument:
 
         for bookmark in self.bookmarks():
             if not bookmark.name:
-                errors.append("bookmark is missing name")
+                errors.append(_issue("bookmark", "bookmark is missing name"))
                 continue
             if bookmark.name in bookmark_names:
-                errors.append(f"duplicate bookmark name: {bookmark.name}")
+                errors.append(_issue("bookmark", f"duplicate bookmark name: {bookmark.name}"))
             bookmark_names.add(bookmark.name)
 
         for field in self.fields():
             if field.control_id:
                 if field.control_id in field_begin_ids:
-                    errors.append(f"duplicate fieldBegin id: {field.control_id}")
+                    errors.append(_issue("field_reference", f"duplicate fieldBegin id: {field.control_id}"))
                 field_begin_ids[field.control_id] = field.field_id or ""
             if field.field_id:
                 if field.field_id in field_id_map:
-                    errors.append(f"duplicate fieldid: {field.field_id}")
+                    errors.append(_issue("field_reference", f"duplicate fieldid: {field.field_id}"))
                 field_id_map[field.field_id] = field.control_id or ""
 
-        for section in self.sections:
-            for paragraph in section.root_element.xpath("./hp:p", namespaces=NS):
+        for section_index, section in enumerate(self.sections):
+            for paragraph_index, paragraph in enumerate(section.root_element.xpath("./hp:p", namespaces=NS)):
                 style_id = paragraph.get("styleIDRef")
                 para_pr_id = paragraph.get("paraPrIDRef")
                 if style_id and style_ids and style_id not in style_ids:
-                    errors.append(f"{section.path} paragraph references unknown styleIDRef={style_id}")
+                    errors.append(
+                        _issue(
+                            "style_reference",
+                            f"paragraph references unknown styleIDRef={style_id}",
+                            part_path=section.path,
+                            section_index=section_index,
+                            paragraph_index=paragraph_index,
+                        )
+                    )
                 if para_pr_id and para_pr_ids and para_pr_id not in para_pr_ids:
-                    errors.append(f"{section.path} paragraph references unknown paraPrIDRef={para_pr_id}")
+                    errors.append(
+                        _issue(
+                            "style_reference",
+                            f"paragraph references unknown paraPrIDRef={para_pr_id}",
+                            part_path=section.path,
+                            section_index=section_index,
+                            paragraph_index=paragraph_index,
+                        )
+                    )
                 for run in paragraph.xpath("./hp:run", namespaces=NS):
                     char_pr_id = run.get("charPrIDRef")
                     if char_pr_id and char_pr_ids and char_pr_id not in char_pr_ids:
-                        errors.append(f"{section.path} run references unknown charPrIDRef={char_pr_id}")
-            for picture in self.pictures(section_index=self.sections.index(section)):
+                        errors.append(
+                            _issue(
+                                "style_reference",
+                                f"run references unknown charPrIDRef={char_pr_id}",
+                                part_path=section.path,
+                                section_index=section_index,
+                                paragraph_index=paragraph_index,
+                            )
+                        )
+            for picture in self.pictures(section_index=section_index):
                 if picture.binary_item_id and picture.binary_item_id not in manifest_ids:
-                    errors.append(f"{section.path} picture references unknown manifest id {picture.binary_item_id}")
-            for shape in self.shapes(section_index=self.sections.index(section)):
+                    errors.append(
+                        _issue(
+                            "binary_reference",
+                            f"picture references unknown manifest id {picture.binary_item_id}",
+                            part_path=section.path,
+                            section_index=section_index,
+                        )
+                    )
+            for shape in self.shapes(section_index=section_index):
                 binary_refs = shape.element.xpath("./@binaryItemIDRef", namespaces=NS)
                 for binary_ref in binary_refs:
                     if binary_ref not in manifest_ids:
-                        errors.append(f"{section.path} shape references unknown manifest id {binary_ref}")
+                        errors.append(
+                            _issue(
+                                "binary_reference",
+                                f"shape references unknown manifest id {binary_ref}",
+                                part_path=section.path,
+                                section_index=section_index,
+                            )
+                        )
             for field_end in section.root_element.xpath(".//hp:fieldEnd", namespaces=NS):
                 begin_id = field_end.get("beginIDRef")
                 field_id = field_end.get("fieldid")
                 if not begin_id:
-                    errors.append(f"{section.path} fieldEnd is missing beginIDRef")
+                    errors.append(
+                        _issue(
+                            "field_reference",
+                            "fieldEnd is missing beginIDRef",
+                            part_path=section.path,
+                            section_index=section_index,
+                            xpath=".//hp:fieldEnd",
+                        )
+                    )
                     continue
                 if begin_id not in field_begin_ids:
-                    errors.append(f"{section.path} fieldEnd references unknown fieldBegin id {begin_id}")
+                    errors.append(
+                        _issue(
+                            "field_reference",
+                            f"fieldEnd references unknown fieldBegin id {begin_id}",
+                            part_path=section.path,
+                            section_index=section_index,
+                            xpath=".//hp:fieldEnd",
+                        )
+                    )
                     continue
                 expected_field_id = field_begin_ids[begin_id]
                 if field_id and expected_field_id and field_id != expected_field_id:
                     errors.append(
-                        f"{section.path} fieldEnd fieldid={field_id} does not match fieldBegin fieldid={expected_field_id}"
+                        _issue(
+                            "field_reference",
+                            f"fieldEnd fieldid={field_id} does not match fieldBegin fieldid={expected_field_id}",
+                            part_path=section.path,
+                            section_index=section_index,
+                            xpath=".//hp:fieldEnd",
+                        )
                     )
         for field in self.cross_references():
             target = field.get_parameter("BookmarkName") or field.get_parameter("Path") or field.name
             if target and target not in bookmark_names:
-                errors.append(f"cross reference points to unknown bookmark: {target}")
+                errors.append(_issue("cross_reference", f"cross reference points to unknown bookmark: {target}"))
         return errors
 
-    def save_reopen_validation_errors(self) -> list[str]:
+    def save_reopen_validation_errors(self) -> list[ValidationIssue]:
         temp_dir = Path(tempfile.mkdtemp(prefix="jakal_hwpx_reopen_"))
         try:
             temp_path = temp_dir / "validation.hwpx"
@@ -1244,7 +1481,9 @@ class HwpxDocument:
             reopened = HwpxDocument.open(temp_path)
             return reopened.validation_errors()
         except Exception as exc:  # noqa: BLE001
-            return [str(exc)]
+            if isinstance(exc, HwpxValidationError):
+                return exc.errors
+            return [_issue("save_reopen_validation", str(exc))]
         finally:
             self._cleanup_temp_dir(temp_dir)
 

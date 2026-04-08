@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from jakal_hwpx import BinaryDataPart, ContentHpfPart, HeaderPart, HwpxDocument, PreviewTextPart, SectionPart
+from jakal_hwpx import BinaryDataPart, ContentHpfPart, HeaderPart, HwpxDocument, PreviewTextPart, SectionPart, ValidationIssue
 
 
 def test_open_exposes_expected_parts(sample_hwpx_path: Path) -> None:
@@ -91,3 +91,19 @@ def test_missing_preview_rootfile_reference_is_tolerated() -> None:
     document.container.ensure_rootfile("Preview/PrvText.txt", "text/plain")
 
     assert document.validation_errors() == []
+
+
+def test_validation_errors_return_structured_issues() -> None:
+    document = HwpxDocument()
+    document.remove_part("Contents/header.xml")
+
+    issues = document.validation_errors()
+
+    assert issues
+    assert all(isinstance(issue, ValidationIssue) for issue in issues)
+    missing_header = next(issue for issue in issues if issue.part_path == "Contents/header.xml")
+    assert missing_header.kind == "missing_part"
+    assert missing_header.code == "missing_part"
+    assert "Missing required part" in missing_header.message
+    assert missing_header.to_dict()["code"] == "missing_part"
+    assert missing_header.to_dict()["part_path"] == "Contents/header.xml"
