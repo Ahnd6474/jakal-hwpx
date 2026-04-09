@@ -5,7 +5,27 @@ from typing import Any
 
 from lxml import etree
 
-from .namespaces import NS, local_name, resolve_tag
+from .namespaces import NS, local_name, qname, resolve_tag
+
+
+def _parse_xml_fragment(xml: str | bytes) -> etree._Element:
+    if isinstance(xml, str):
+        raw = xml.encode("utf-8")
+    else:
+        raw = xml
+
+    wrapped = (
+        b"<hwpunitchar:wrapper "
+        + b" ".join(f'xmlns:{prefix}="{uri}"'.encode("utf-8") for prefix, uri in NS.items())
+        + b">"
+        + raw
+        + b"</hwpunitchar:wrapper>"
+    )
+    parsed = etree.fromstring(wrapped)
+    children = list(parsed)
+    if len(children) != 1:
+        raise ValueError("XML fragment must contain exactly one root node.")
+    return children[0]
 
 
 class HwpxXmlNode:
@@ -134,6 +154,18 @@ class HwpxXmlNode:
         if attributes:
             for key, value in attributes.items():
                 child.set(key, str(value))
+        self._element.insert(index, child)
+        return HwpxXmlNode(child, self._part)
+
+    def append_xml(self, xml: str | bytes) -> "HwpxXmlNode":
+        self._part.mark_modified()
+        child = _parse_xml_fragment(xml)
+        self._element.append(child)
+        return HwpxXmlNode(child, self._part)
+
+    def insert_xml(self, index: int, xml: str | bytes) -> "HwpxXmlNode":
+        self._part.mark_modified()
+        child = _parse_xml_fragment(xml)
         self._element.insert(index, child)
         return HwpxXmlNode(child, self._part)
 

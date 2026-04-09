@@ -51,6 +51,7 @@ from .parts import (
     XmlPart,
     infer_part_class,
 )
+from .xmlnode import HwpxXmlNode
 
 
 def _normalize_path(path: str) -> str:
@@ -511,6 +512,22 @@ class HwpxDocument:
             raise TypeError(f"{normalized} is not a {expected_type.__name__}.")
         return part
 
+    def xml_part(self, path: str) -> HwpxXmlNode:
+        part = self.get_part(path, XmlPart)
+        return part.root
+
+    def section_xml(self, section_index: int = 0) -> HwpxXmlNode:
+        return self.sections[section_index].root
+
+    def header_xml(self) -> HwpxXmlNode:
+        return self.header.root
+
+    def content_hpf_xml(self) -> HwpxXmlNode:
+        return self.content_hpf.root
+
+    def settings_xml(self) -> HwpxXmlNode:
+        return self.get_part("settings.xml", SettingsPart).root
+
     def list_part_paths(self) -> list[str]:
         seen = set()
         ordered = []
@@ -940,6 +957,37 @@ class HwpxDocument:
             isEmbeded=is_embedded_value,
         )
         return part
+
+    def append_control_xml(
+        self,
+        xml: str | bytes,
+        *,
+        section_index: int = 0,
+        paragraph_index: int | None = None,
+        char_pr_id: str | None = None,
+    ) -> HwpxXmlNode:
+        self._ensure_editable_sections()
+        paragraph = self._resolve_paragraph_for_insert(section_index=section_index, paragraph_index=paragraph_index)
+        run = self._append_run(paragraph, char_pr_id=char_pr_id)
+        ctrl = etree.SubElement(run, qname("hp", "ctrl"))
+        node = HwpxXmlNode(ctrl, self.sections[section_index]).append_xml(xml)
+        _invalidate_paragraph_layout(paragraph)
+        return node
+
+    def append_run_xml(
+        self,
+        xml: str | bytes,
+        *,
+        section_index: int = 0,
+        paragraph_index: int | None = None,
+        char_pr_id: str | None = None,
+    ) -> HwpxXmlNode:
+        self._ensure_editable_sections()
+        paragraph = self._resolve_paragraph_for_insert(section_index=section_index, paragraph_index=paragraph_index)
+        run = self._append_run(paragraph, char_pr_id=char_pr_id)
+        node = HwpxXmlNode(run, self.sections[section_index]).append_xml(xml)
+        _invalidate_paragraph_layout(paragraph)
+        return node
 
     def append_header(
         self,

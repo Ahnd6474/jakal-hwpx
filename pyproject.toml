@@ -11,7 +11,7 @@ license-files = ["LICENSE", "THIRD_PARTY_NOTICES.md"]
 readme = { file = "README.md", content-type = "text/markdown" }
 requires-python = ">=3.11"
 authors = [{ name = "Ahnd6474" }]
-dependencies = ["lxml>=5.0.0,<6"]
+dependencies = ["lxml>=5.0.0,<6", "olefile>=0.47,<1"]
 keywords = ["hwpx", "hancom", "document", "xml", "library"]
 classifiers = [
   "Development Status :: 4 - Beta",

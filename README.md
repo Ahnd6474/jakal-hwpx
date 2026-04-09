@@ -53,7 +53,24 @@ doc.set_paragraph_text(0, 0, "Hello HWPX")
 doc.save("build/hello.hwpx")
 ```
 
-이 패키지는 ZIP 기반 HWPX 패키지를 대상으로 동작합니다. `.hwp -> .hwpx` 변환기는 번들하지 않습니다.
+이 패키지는 ZIP 기반 HWPX 패키지를 주 대상으로 동작합니다. `.hwp -> .hwpx` 변환기는 여전히 번들하지 않습니다.
+
+실험적 저수준 `.hwp` 지원도 포함합니다. `HwpBinaryDocument`는 Compound File 기반 legacy HWP 문서에서 `FileHeader`, `DocInfo`, `BodyText/Section*`, `PrvText`를 읽고, 기존 스트림 크기를 보존하는 범위에서 미리보기 텍스트와 본문 텍스트의 same-length 치환을 저장할 수 있습니다.
+
+객체 기반 실험 API인 `HwpDocument`도 포함합니다. 이 레이어는 `HwpSection`, `HwpParagraphObject`를 통해 `.hwp` 문서를 `HwpxDocument`와 비슷한 방식으로 다루도록 맞춘 래퍼입니다.
+
+```python
+from jakal_hwpx import HwpBinaryDocument, HwpDocument
+
+binary_doc = HwpBinaryDocument.open("input.hwp")
+print(binary_doc.file_header().version)
+print(binary_doc.preview_text())
+
+doc = HwpDocument.open("input.hwp")
+paragraph = next(p for p in doc.section(0).paragraphs() if "2027" in p.text)
+paragraph.replace_text_same_length("2027", "2028", count=1)
+doc.save("build/edited.hwp")
+```
 
 ## 주요 API
 
@@ -93,8 +110,10 @@ doc.save("build/hello.hwpx")
 - `HwpxDocument`, `DocumentMetadata`
 - `Table`, `TableCell`, `Picture`, `Note`, `Equation`, `Bookmark`, `Field`, `AutoNumber`
 - `HeaderFooterBlock`, `SectionSettings`, `StyleDefinition`, `ParagraphStyle`, `CharacterStyle`, `ShapeObject`
+- `HwpBinaryDocument`, `HwpBinaryFileHeader`, `HwpRecord`, `HwpParagraph`
+- `HwpDocument`, `HwpSection`, `HwpParagraphObject`, `HwpDocumentProperties`
 - `HwpxPart`, `XmlPart`, `SectionPart`, `HeaderPart`, `ContentHpfPart`, `SettingsPart`, `VersionPart`, `MimetypePart`, `ContainerPart`, `ContainerRdfPart`, `ManifestPart`, `BinaryDataPart`, `GenericBinaryPart`, `GenericTextPart`, `GenericXmlPart`, `PreviewImagePart`, `PreviewTextPart`, `ScriptPart`
-- `HwpxError`, `HwpxValidationError`, `InvalidHwpxFileError`
+- `HwpxError`, `HwpxValidationError`, `InvalidHwpxFileError`, `InvalidHwpFileError`, `HwpBinaryEditError`
 
 반대로 `jakal_hwpx.document`, `jakal_hwpx.parts` 같은 내부 모듈 경로 import는 구현 세부사항이며, 호환성 계약 대상으로 보지 않습니다.
 
@@ -104,12 +123,13 @@ doc.save("build/hello.hwpx")
 
 - Python `3.11`, `3.12`, `3.13`
 - ZIP 기반 `HWPX` 패키지의 열기, 수정, 검증, 컴파일, 저장
+- legacy binary `.hwp` 파일의 저수준 열기, 스트림 파싱, 미리보기/본문 same-length 수정, 저장
 - `jakal_hwpx` top-level export를 통한 문서 편집 흐름
 
 비지원:
 
-- legacy binary `.hwp` 입력 파일
 - `.hwp -> .hwpx` 변환기 번들 제공
+- 새로운 `.hwp` 문서 blank 생성이나 전체 OLE Compound File 재작성
 - top-level `jakal_hwpx` export 밖의 내부 import 경로에 대한 호환성 보장
 
 ## 예제

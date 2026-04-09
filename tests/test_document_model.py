@@ -3,10 +3,15 @@ from __future__ import annotations
 import base64
 from pathlib import Path
 
-from jakal_hwpx import BinaryDataPart, ContentHpfPart, HeaderPart, HwpxDocument, PreviewTextPart, SectionPart, ValidationIssue
+import pytest
+
+from jakal_hwpx import BinaryDataPart, ContentHpfPart, HeaderPart, HwpxDocument, OleObject, PreviewTextPart, SectionPart, ValidationIssue
 
 
 HEAD_NS = {"hh": "http://www.hancom.co.kr/hwpml/2011/head", "hc": "http://www.hancom.co.kr/hwpml/2011/core"}
+REPO_ROOT = Path(__file__).resolve().parents[1]
+OLE_SAMPLE_PATH = REPO_ROOT / "ole_test.hwpx"
+UNICODE_STRESS_TEXT = "안성민은 자칼이다つㄹשׁשׁㄹㅇㄹㅇ 😱🎅🏦🌩⏩💵🔥"
 
 
 def test_open_exposes_expected_parts(sample_hwpx_path: Path) -> None:
@@ -95,6 +100,26 @@ def test_missing_preview_rootfile_reference_is_tolerated() -> None:
     document.container.ensure_rootfile("Preview/PrvText.txt", "text/plain")
 
     assert document.validation_errors() == []
+
+
+def test_open_exposes_ole_objects_from_real_sample() -> None:
+    if not OLE_SAMPLE_PATH.exists():
+        pytest.skip("ole_test.hwpx sample is not available in this workspace.")
+
+    document = HwpxDocument.open(OLE_SAMPLE_PATH)
+
+    oles = document.oles()
+    assert len(oles) == 1
+    ole = oles[0]
+    assert isinstance(ole, OleObject)
+    assert ole.kind == "ole"
+    assert ole.binary_item_id == "ole1"
+    assert ole.object_type == "EMBEDDED"
+    assert ole.draw_aspect == "CONTENT"
+    assert ole.has_moniker is False
+    assert ole.extent() == {"x": 42001, "y": 13501}
+    assert ole.binary_data()
+    assert any(isinstance(shape, OleObject) for shape in document.shapes())
 
 
 def test_append_table_picture_and_shape_roundtrip(tmp_path: Path) -> None:
@@ -204,6 +229,301 @@ def test_append_shape_supports_additional_kinds(tmp_path: Path) -> None:
     assert "textart" in kinds
     assert "container" in kinds
     assert any(shape.kind == "textart" and shape.text == "Banner" for shape in reopened.shapes())
+
+
+def test_append_ole_roundtrip(tmp_path: Path) -> None:
+    payload = b"JAKAL_OLE_PAYLOAD"
+
+    document = HwpxDocument.blank()
+    ole = document.append_ole(
+        "sample.ole",
+        payload,
+        width=42001,
+        height=13501,
+        shape_comment="Inserted OLE",
+        allow_overlap=True,
+        vert_align="CENTER",
+        horz_align="RIGHT",
+        vert_offset=111,
+        horz_offset=222,
+        out_margin_left=10,
+        out_margin_right=20,
+        out_margin_top=30,
+        out_margin_bottom=40,
+    )
+
+    assert ole.binary_data() == payload
+
+    output_path = tmp_path / "inserted_ole.hwpx"
+    document.save(output_path)
+
+    reopened = HwpxDocument.open(output_path)
+    reopened.validate()
+    assert reopened.reference_validation_errors() == []
+
+    reopened_ole = reopened.oles()[0]
+    assert reopened_ole.binary_data() == payload
+    assert reopened_ole.binary_item_id == "sample"
+    assert reopened_ole.object_type == "EMBEDDED"
+    assert reopened_ole.draw_aspect == "CONTENT"
+    assert reopened_ole.extent() == {"x": 42001, "y": 13501}
+    assert reopened_ole.shape_comment == "Inserted OLE"
+    assert reopened_ole.layout()["allowOverlap"] == "1"
+    assert reopened_ole.layout()["vertAlign"] == "CENTER"
+    assert reopened_ole.layout()["horzAlign"] == "RIGHT"
+    assert reopened_ole.layout()["vertOffset"] == "111"
+    assert reopened_ole.layout()["horzOffset"] == "222"
+    assert reopened_ole.out_margins() == {"left": 10, "right": 20, "top": 30, "bottom": 40}
+    manifest_item = next(item for item in reopened.content_hpf.manifest_items() if item.get("id") == reopened_ole.binary_item_id)
+    assert manifest_item.get("media-type") == "application/ole"
+    assert manifest_item.get("isEmbeded") == "0"
+    assert isinstance(reopened.shapes()[0], OleObject)
+
+
+def test_low_level_authoring_roundtrip(tmp_path: Path) -> None:
+    image_bytes = base64.b64decode(
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO8B3ioAAAAASUVORK5CYII="
+    )
+
+    document = HwpxDocument.blank()
+    para_style = document.append_paragraph_style()
+    para_style.set_auto_spacing(e_asian_eng=True, e_asian_num=False)
+    char_style = document.append_character_style()
+    char_style.set_effects(shade_color="#EEEEEE", use_font_space=True, use_kerning=True, sym_mark="DOT_ABOVE")
+
+    settings = document.section_settings(0)
+    settings.set_grid(line_grid=42, char_grid=21, wonggoji_format=True)
+    settings.set_start_numbers(page_starts_on="ODD", page=7, pic=8, tbl=9, equation=10)
+
+    picture = document.append_picture("pixel-lowlevel.png", image_bytes, width=2400, height=2400)
+    picture.set_size(width=3333, height=4444, original_width=5555, original_height=6666, current_width=3333, current_height=4444)
+    picture.set_rotation(angle=15, center_x=111, center_y=222, rotate_image=False)
+    picture.set_image_adjustment(bright=5, contrast=6, effect="GRAY_SCALE", alpha=7)
+
+    shape = document.append_shape(kind="rect", text="shape", width=5000, height=2000)
+    shape.set_size(width=5100, height=2200, original_width=5300, original_height=2400, current_width=5100, current_height=2200)
+    shape.set_rotation(angle=25, center_x=333, center_y=444)
+    shape.set_line_style(color="#112233", width=55, style="SOLID", alpha=9)
+    shape.set_fill_style(face_color="#ABCDEF", hatch_color="#123456", alpha=11)
+    shape.set_text_margins(left=1, right=2, top=3, bottom=4)
+
+    equation = document.append_equation("x=y", width=3000, height=1800)
+    equation.set_size(width=3200, height=1900)
+    equation.set_rotation(angle=35, center_x=555, center_y=666)
+
+    ole = document.append_ole("lowlevel.ole", b"OLE_LOW_LEVEL", width=42001, height=13501)
+    ole.set_size(width=43000, height=14000, original_width=43000, original_height=14000, current_width=123, current_height=456)
+    ole.set_rotation(angle=45, center_x=777, center_y=888)
+    ole.set_line_style(color="#445566", width=77, style="DASH")
+    ole.set_object_metadata(object_type="LINK", draw_aspect="ICON", has_moniker=True, eq_baseline=12)
+    ole.set_extent(x=43000, y=14000)
+
+    output_path = tmp_path / "low_level_authoring.hwpx"
+    document.save(output_path)
+
+    reopened = HwpxDocument.open(output_path)
+    reopened.validate()
+
+    reopened_para_style = reopened.get_paragraph_style(para_style.style_id or "")
+    reopened_char_style = reopened.get_character_style(char_style.style_id or "")
+    reopened_settings = reopened.section_settings(0)
+    reopened_picture = reopened.pictures()[0]
+    reopened_shape = next(item for item in reopened.shapes() if item.kind == "rect")
+    reopened_equation = reopened.equations()[0]
+    reopened_ole = reopened.oles()[0]
+
+    assert reopened_para_style.element.xpath("./hh:autoSpacing/@eAsianEng", namespaces=HEAD_NS)[0] == "1"
+    assert reopened_para_style.element.xpath("./hh:autoSpacing/@eAsianNum", namespaces=HEAD_NS)[0] == "0"
+    assert reopened_char_style.element.get("shadeColor") == "#EEEEEE"
+    assert reopened_char_style.element.get("useFontSpace") == "1"
+    assert reopened_char_style.element.get("useKerning") == "1"
+    assert reopened_char_style.element.get("symMark") == "DOT_ABOVE"
+
+    assert reopened_settings.grid() == {"lineGrid": 42, "charGrid": 21, "wonggojiFormat": 1}
+    assert reopened_settings.start_numbers() == {
+        "pageStartsOn": "ODD",
+        "page": "7",
+        "pic": "8",
+        "tbl": "9",
+        "equation": "10",
+    }
+
+    assert reopened_picture.size() == {"width": 3333, "height": 4444}
+    assert reopened_picture.rotation()["angle"] == "15"
+    assert reopened_picture.rotation()["rotateimage"] == "0"
+    assert reopened_picture.image_adjustment() == {"bright": "5", "contrast": "6", "effect": "GRAY_SCALE", "alpha": "7"}
+
+    assert reopened_shape.size() == {"width": 5100, "height": 2200}
+    assert reopened_shape.rotation()["angle"] == "25"
+    assert reopened_shape.line_style()["color"] == "#112233"
+    assert reopened_shape.line_style()["width"] == "55"
+    assert reopened_shape.fill_style() == {"faceColor": "#ABCDEF", "hatchColor": "#123456", "alpha": "11"}
+    assert reopened_shape.text_margins() == {"left": 1, "right": 2, "top": 3, "bottom": 4}
+
+    assert reopened_equation.size() == {"width": 3200, "height": 1900}
+    assert reopened_equation.rotation()["angle"] == "35"
+
+    assert reopened_ole.size() == {"width": 43000, "height": 14000}
+    assert reopened_ole.rotation()["angle"] == "45"
+    assert reopened_ole.line_style()["color"] == "#445566"
+    assert reopened_ole.object_type == "LINK"
+    assert reopened_ole.draw_aspect == "ICON"
+    assert reopened_ole.has_moniker is True
+    assert reopened_ole.extent() == {"x": 43000, "y": 14000}
+
+
+def test_hard_example_like_generation_roundtrip(tmp_path: Path) -> None:
+    image_bytes = base64.b64decode(
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO8B3ioAAAAASUVORK5CYII="
+    )
+
+    document = HwpxDocument.blank()
+    document.set_paragraph_text(0, 0, f" {UNICODE_STRESS_TEXT}")
+    document.append_paragraph("너 안성민")
+    document.append_paragraph("")
+    document.append_paragraph("너 안성민은 안성민이 아니다")
+    document.append_footnote(f"각주: {UNICODE_STRESS_TEXT}", number=1)
+    document.append_hyperlink("https://example.com/hard", display_text="hard-link")
+    document.append_auto_number(number=1, number_type="FIGURE", kind="autoNum")
+    document.append_equation("x=1+2", shape_comment="Hard-like equation", treat_as_char=False, allow_overlap=True)
+    document.append_picture(
+        "hard-like.bmp",
+        image_bytes,
+        width=4200,
+        height=4200,
+        shape_comment="Hard-like picture",
+        treat_as_char=False,
+        allow_overlap=True,
+    )
+    document.append_shape(
+        kind="rect",
+        text=f"rect: {UNICODE_STRESS_TEXT}",
+        width=12000,
+        height=2600,
+        shape_comment="Hard-like rect",
+        treat_as_char=False,
+        allow_overlap=True,
+    )
+    document.append_shape(
+        kind="textart",
+        text="너 안성민",
+        width=9000,
+        height=2400,
+        shape_comment="Hard-like textart",
+    )
+    document.append_ole(
+        "hard-like.ole",
+        b"HARD_LIKE_OLE",
+        width=42001,
+        height=13501,
+        shape_comment="Hard-like OLE",
+        treat_as_char=False,
+    )
+
+    output_path = tmp_path / "hard_like.hwpx"
+    document.save(output_path)
+
+    reopened = HwpxDocument.open(output_path)
+    reopened.validate()
+    assert reopened.reference_validation_errors() == []
+
+    assert UNICODE_STRESS_TEXT in reopened.get_document_text()
+    assert len(reopened.pictures()) == 1
+    assert len(reopened.oles()) == 1
+    assert len(reopened.equations()) == 1
+    assert any(note.kind == "footNote" for note in reopened.notes())
+    assert len(reopened.fields()) == 1
+    assert len(reopened.auto_numbers()) == 1
+    kinds = [shape.kind for shape in reopened.shapes()]
+    assert "rect" in kinds
+    assert "textart" in kinds
+    assert "ole" in kinds
+
+
+def test_generic_xml_authoring_supports_unsupported_features_roundtrip(tmp_path: Path) -> None:
+    document = HwpxDocument.blank()
+
+    section_xml = document.section_xml(0)
+    header_xml = document.header_xml()
+    settings_xml = document.settings_xml()
+    content_hpf_xml = document.content_hpf_xml()
+
+    assert section_xml.local_name == "sec"
+    assert header_xml.local_name == "head"
+    assert settings_xml.local_name == "HWPApplicationSetting"
+    assert content_hpf_xml.local_name == "package"
+    assert document.xml_part("Contents/section0.xml").local_name == "sec"
+
+    line_number_shape = section_xml.find(".//hp:lineNumberShape")
+    assert line_number_shape is not None
+    line_number_shape.set_attr("countBy", 3).set_attr("distance", 150)
+
+    sec_pr = section_xml.find(".//hp:secPr")
+    assert sec_pr is not None
+
+    footnote_placement = section_xml.find(".//hp:footNotePr/hp:placement")
+    if footnote_placement is None:
+        sec_pr.append_xml(
+            '<hp:footNotePr xmlns:hp="http://www.hancom.co.kr/hwpml/2011/paragraph">'
+            '<hp:autoNumFormat type="DIGIT" userChar="" prefixChar="" suffixChar=")" supscript="0"/>'
+            '<hp:noteLine length="-1" type="SOLID" width="0.12 mm" color="#000000"/>'
+            '<hp:noteSpacing betweenNotes="283" belowLine="567" aboveLine="850"/>'
+            '<hp:numbering type="CONTINUOUS" newNum="1"/>'
+            '<hp:placement place="EACH_COLUMN" beneathText="0"/>'
+            '</hp:footNotePr>'
+        )
+        footnote_placement = section_xml.find(".//hp:footNotePr/hp:placement")
+    assert footnote_placement is not None
+    footnote_placement.set_attr("place", "END_OF_DOCUMENT").set_attr("beneathText", 1)
+
+    page_border_fill = section_xml.find(".//hp:pageBorderFill[@type='BOTH']")
+    if page_border_fill is None:
+        sec_pr.append_xml(
+            '<hp:pageBorderFill xmlns:hp="http://www.hancom.co.kr/hwpml/2011/paragraph" '
+            'type="BOTH" borderFillIDRef="1" textBorder="PAPER" headerInside="0" footerInside="0" fillArea="PAPER">'
+            '<hp:offset left="1417" right="1417" top="1417" bottom="1417"/>'
+            '</hp:pageBorderFill>'
+        )
+        page_border_fill = section_xml.find(".//hp:pageBorderFill[@type='BOTH']")
+    assert page_border_fill is not None
+    page_border_fill.set_attr("fillArea", "BORDER")
+    page_border_offset = page_border_fill.find("./hp:offset")
+    assert page_border_offset is not None
+    page_border_offset.set_attr("left", 2222).set_attr("right", 3333)
+
+    inserted_colpr = document.append_control_xml(
+        '<hp:colPr xmlns:hp="http://www.hancom.co.kr/hwpml/2011/paragraph" '
+        'id="" type="NEWSPAPER" layout="LEFT" colCount="2" sameSz="1" sameGap="0"/>'
+    )
+    assert inserted_colpr.local_name == "colPr"
+
+    output_path = tmp_path / "generic_xml_authoring.hwpx"
+    document.save(output_path)
+
+    reopened = HwpxDocument.open(output_path)
+    reopened.validate()
+
+    reopened_section_xml = reopened.section_xml(0)
+    reopened_line_number = reopened_section_xml.find(".//hp:lineNumberShape")
+    assert reopened_line_number is not None
+    assert reopened_line_number.get_attr("countBy") == "3"
+    assert reopened_line_number.get_attr("distance") == "150"
+
+    reopened_footnote_placement = reopened_section_xml.find(".//hp:footNotePr/hp:placement")
+    assert reopened_footnote_placement is not None
+    assert reopened_footnote_placement.get_attr("place") == "END_OF_DOCUMENT"
+    assert reopened_footnote_placement.get_attr("beneathText") == "1"
+
+    reopened_page_border = reopened_section_xml.find(".//hp:pageBorderFill[@type='BOTH']")
+    assert reopened_page_border is not None
+    assert reopened_page_border.get_attr("fillArea") == "BORDER"
+    reopened_offset = reopened_page_border.find("./hp:offset")
+    assert reopened_offset is not None
+    assert reopened_offset.get_attr("left") == "2222"
+    assert reopened_offset.get_attr("right") == "3333"
+
+    colpr_nodes = reopened_section_xml.findall(".//hp:colPr")
+    assert any(node.get_attr("colCount") == "2" for node in colpr_nodes)
 
 
 def test_append_header_footer_notes_number_equation_and_styles_roundtrip(tmp_path: Path) -> None:

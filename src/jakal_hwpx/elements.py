@@ -119,6 +119,181 @@ def _set_margin_values(
     _set_optional_attributes(margin, left=left, right=right, top=top, bottom=bottom)
 
 
+def _graphic_size(element: etree._Element) -> dict[str, int]:
+    size = _first_node(element, "./hp:sz")
+    if size is None:
+        return {}
+    return {
+        "width": int(size.get("width", "0")),
+        "height": int(size.get("height", "0")),
+    }
+
+
+def _set_graphic_size(
+    element: etree._Element,
+    *,
+    width: int | str | None = None,
+    height: int | str | None = None,
+    original_width: int | str | None = None,
+    original_height: int | str | None = None,
+    current_width: int | str | None = None,
+    current_height: int | str | None = None,
+    extent_x: int | str | None = None,
+    extent_y: int | str | None = None,
+) -> None:
+    _set_optional_attributes(_first_node(element, "./hp:sz"), width=width, height=height)
+    _set_optional_attributes(_first_node(element, "./hp:orgSz"), width=original_width, height=original_height)
+    _set_optional_attributes(_first_node(element, "./hp:curSz"), width=current_width, height=current_height)
+    _set_optional_attributes(_first_node(element, "./hc:extent"), x=extent_x, y=extent_y)
+
+
+def _graphic_rotation(element: etree._Element) -> dict[str, str]:
+    node = _first_node(element, "./hp:rotationInfo")
+    if node is None:
+        return {}
+    return {
+        key: node.get(key, "")
+        for key in ("angle", "centerX", "centerY", "rotateimage")
+    }
+
+
+def _set_graphic_rotation(
+    element: etree._Element,
+    *,
+    angle: int | str | None = None,
+    center_x: int | str | None = None,
+    center_y: int | str | None = None,
+    rotate_image: bool | None = None,
+) -> None:
+    node = _first_node(element, "./hp:rotationInfo")
+    if node is None:
+        node = etree.SubElement(element, qname("hp", "rotationInfo"))
+    _set_optional_attributes(
+        node,
+        angle=angle,
+        centerX=center_x,
+        centerY=center_y,
+        rotateimage=rotate_image,
+    )
+
+
+def _line_style(element: etree._Element) -> dict[str, str]:
+    node = _first_node(element, "./hp:lineShape")
+    if node is None:
+        return {}
+    return {
+        key: node.get(key, "")
+        for key in (
+            "color",
+            "width",
+            "style",
+            "endCap",
+            "headStyle",
+            "tailStyle",
+            "headfill",
+            "tailfill",
+            "headSz",
+            "tailSz",
+            "outlineStyle",
+            "alpha",
+        )
+    }
+
+
+def _set_line_style(
+    element: etree._Element,
+    *,
+    color: str | None = None,
+    width: int | str | None = None,
+    style: str | None = None,
+    end_cap: str | None = None,
+    head_style: str | None = None,
+    tail_style: str | None = None,
+    head_fill: bool | None = None,
+    tail_fill: bool | None = None,
+    head_size: str | None = None,
+    tail_size: str | None = None,
+    outline_style: str | None = None,
+    alpha: int | str | None = None,
+) -> None:
+    _set_optional_attributes(
+        _first_node(element, "./hp:lineShape"),
+        color=color,
+        width=width,
+        style=style,
+        endCap=end_cap,
+        headStyle=head_style,
+        tailStyle=tail_style,
+        headfill=head_fill,
+        tailfill=tail_fill,
+        headSz=head_size,
+        tailSz=tail_size,
+        outlineStyle=outline_style,
+        alpha=alpha,
+    )
+
+
+def _fill_style(element: etree._Element) -> dict[str, str]:
+    node = _first_node(element, "./hc:fillBrush/hc:winBrush")
+    if node is None:
+        return {}
+    return {
+        key: node.get(key, "")
+        for key in ("faceColor", "hatchColor", "alpha")
+    }
+
+
+def _set_fill_style(
+    element: etree._Element,
+    *,
+    face_color: str | None = None,
+    hatch_color: str | None = None,
+    alpha: int | str | None = None,
+) -> None:
+    _set_optional_attributes(
+        _first_node(element, "./hc:fillBrush/hc:winBrush"),
+        faceColor=face_color,
+        hatchColor=hatch_color,
+        alpha=alpha,
+    )
+
+
+def _text_margin(element: etree._Element) -> dict[str, int]:
+    return _margin_values(element, "./hp:drawText/hp:textMargin")
+
+
+def _set_text_margin(
+    element: etree._Element,
+    *,
+    left: int | str | None = None,
+    right: int | str | None = None,
+    top: int | str | None = None,
+    bottom: int | str | None = None,
+) -> None:
+    _set_margin_values(element, "./hp:drawText/hp:textMargin", left=left, right=right, top=top, bottom=bottom)
+
+
+def _image_adjustment(element: etree._Element) -> dict[str, str]:
+    node = _first_node(element, "./hc:img")
+    if node is None:
+        return {}
+    return {
+        key: node.get(key, "")
+        for key in ("bright", "contrast", "effect", "alpha")
+    }
+
+
+def _set_image_adjustment(
+    element: etree._Element,
+    *,
+    bright: int | str | None = None,
+    contrast: int | str | None = None,
+    effect: str | None = None,
+    alpha: int | str | None = None,
+) -> None:
+    _set_optional_attributes(_first_node(element, "./hc:img"), bright=bright, contrast=contrast, effect=effect, alpha=alpha)
+
+
 def _extract_text(element: etree._Element) -> str:
     return "".join(node.text or "" for node in _text_nodes(element))
 
@@ -644,8 +819,17 @@ class Picture:
     def layout(self) -> dict[str, str]:
         return _graphic_layout(self.element)
 
+    def size(self) -> dict[str, int]:
+        return _graphic_size(self.element)
+
+    def rotation(self) -> dict[str, str]:
+        return _graphic_rotation(self.element)
+
     def out_margins(self) -> dict[str, int]:
         return _margin_values(self.element, "./hp:outMargin")
+
+    def image_adjustment(self) -> dict[str, str]:
+        return _image_adjustment(self.element)
 
     def set_layout(
         self,
@@ -691,6 +875,55 @@ class Picture:
         bottom: int | str | None = None,
     ) -> None:
         _set_margin_values(self.element, "./hp:outMargin", left=left, right=right, top=top, bottom=bottom)
+        self.section.mark_modified()
+
+    def set_size(
+        self,
+        *,
+        width: int | str | None = None,
+        height: int | str | None = None,
+        original_width: int | str | None = None,
+        original_height: int | str | None = None,
+        current_width: int | str | None = None,
+        current_height: int | str | None = None,
+    ) -> None:
+        _set_graphic_size(
+            self.element,
+            width=width,
+            height=height,
+            original_width=original_width,
+            original_height=original_height,
+            current_width=current_width,
+            current_height=current_height,
+        )
+        self.section.mark_modified()
+
+    def set_rotation(
+        self,
+        *,
+        angle: int | str | None = None,
+        center_x: int | str | None = None,
+        center_y: int | str | None = None,
+        rotate_image: bool | None = None,
+    ) -> None:
+        _set_graphic_rotation(
+            self.element,
+            angle=angle,
+            center_x=center_x,
+            center_y=center_y,
+            rotate_image=rotate_image,
+        )
+        self.section.mark_modified()
+
+    def set_image_adjustment(
+        self,
+        *,
+        bright: int | str | None = None,
+        contrast: int | str | None = None,
+        effect: str | None = None,
+        alpha: int | str | None = None,
+    ) -> None:
+        _set_image_adjustment(self.element, bright=bright, contrast=contrast, effect=effect, alpha=alpha)
         self.section.mark_modified()
 
 
@@ -848,6 +1081,14 @@ class ParagraphStyle:
         )
         self.header_part.mark_modified()
 
+    def set_auto_spacing(self, *, e_asian_eng: bool | None = None, e_asian_num: bool | None = None) -> None:
+        _set_optional_attributes(
+            _first_node(self.element, "./hh:autoSpacing"),
+            eAsianEng=e_asian_eng,
+            eAsianNum=e_asian_num,
+        )
+        self.header_part.mark_modified()
+
 
 @dataclass
 class CharacterStyle:
@@ -932,6 +1173,23 @@ class CharacterStyle:
     ) -> None:
         node = _first_node(self.element, "./hh:underline")
         _set_optional_attributes(node, type=underline_type, shape=shape, color=color)
+        self.header_part.mark_modified()
+
+    def set_effects(
+        self,
+        *,
+        shade_color: str | None = None,
+        use_font_space: bool | None = None,
+        use_kerning: bool | None = None,
+        sym_mark: str | None = None,
+    ) -> None:
+        _set_optional_attributes(
+            self.element,
+            shadeColor=shade_color,
+            useFontSpace=use_font_space,
+            useKerning=use_kerning,
+            symMark=sym_mark,
+        )
         self.header_part.mark_modified()
 
 
@@ -1023,6 +1281,58 @@ class SectionSettings:
             fill=fill,
             hideFirstPageNum=hide_first_page_num,
             hideFirstEmptyLine=hide_first_empty_line,
+        )
+        self.section.mark_modified()
+
+    def grid(self) -> dict[str, int]:
+        node = _first_node(self.element, "./hp:grid")
+        if node is None:
+            return {}
+        return {
+            key: int(node.get(key, "0"))
+            for key in ("lineGrid", "charGrid", "wonggojiFormat")
+        }
+
+    def set_grid(
+        self,
+        *,
+        line_grid: int | str | None = None,
+        char_grid: int | str | None = None,
+        wonggoji_format: bool | None = None,
+    ) -> None:
+        _set_optional_attributes(
+            _first_node(self.element, "./hp:grid"),
+            lineGrid=line_grid,
+            charGrid=char_grid,
+            wonggojiFormat=wonggoji_format,
+        )
+        self.section.mark_modified()
+
+    def start_numbers(self) -> dict[str, str]:
+        node = _first_node(self.element, "./hp:startNum")
+        if node is None:
+            return {}
+        return {
+            key: node.get(key, "")
+            for key in ("pageStartsOn", "page", "pic", "tbl", "equation")
+        }
+
+    def set_start_numbers(
+        self,
+        *,
+        page_starts_on: str | None = None,
+        page: int | str | None = None,
+        pic: int | str | None = None,
+        tbl: int | str | None = None,
+        equation: int | str | None = None,
+    ) -> None:
+        _set_optional_attributes(
+            _first_node(self.element, "./hp:startNum"),
+            pageStartsOn=page_starts_on,
+            page=page,
+            pic=pic,
+            tbl=tbl,
+            equation=equation,
         )
         self.section.mark_modified()
 
@@ -1304,6 +1614,12 @@ class Equation:
     def layout(self) -> dict[str, str]:
         return _graphic_layout(self.element)
 
+    def size(self) -> dict[str, int]:
+        return _graphic_size(self.element)
+
+    def rotation(self) -> dict[str, str]:
+        return _graphic_rotation(self.element)
+
     def out_margins(self) -> dict[str, int]:
         return _margin_values(self.element, "./hp:outMargin")
 
@@ -1351,6 +1667,32 @@ class Equation:
         bottom: int | str | None = None,
     ) -> None:
         _set_margin_values(self.element, "./hp:outMargin", left=left, right=right, top=top, bottom=bottom)
+        self.section.mark_modified()
+
+    def set_size(
+        self,
+        *,
+        width: int | str | None = None,
+        height: int | str | None = None,
+    ) -> None:
+        _set_graphic_size(self.element, width=width, height=height)
+        self.section.mark_modified()
+
+    def set_rotation(
+        self,
+        *,
+        angle: int | str | None = None,
+        center_x: int | str | None = None,
+        center_y: int | str | None = None,
+        rotate_image: bool | None = None,
+    ) -> None:
+        _set_graphic_rotation(
+            self.element,
+            angle=angle,
+            center_x=center_x,
+            center_y=center_y,
+            rotate_image=rotate_image,
+        )
         self.section.mark_modified()
 
 
@@ -1436,8 +1778,23 @@ class ShapeObject:
     def layout(self) -> dict[str, str]:
         return _graphic_layout(self.element)
 
+    def size(self) -> dict[str, int]:
+        return _graphic_size(self.element)
+
+    def rotation(self) -> dict[str, str]:
+        return _graphic_rotation(self.element)
+
     def out_margins(self) -> dict[str, int]:
         return _margin_values(self.element, "./hp:outMargin")
+
+    def line_style(self) -> dict[str, str]:
+        return _line_style(self.element)
+
+    def fill_style(self) -> dict[str, str]:
+        return _fill_style(self.element)
+
+    def text_margins(self) -> dict[str, int]:
+        return _text_margin(self.element)
 
     def set_layout(
         self,
@@ -1483,6 +1840,98 @@ class ShapeObject:
         bottom: int | str | None = None,
     ) -> None:
         _set_margin_values(self.element, "./hp:outMargin", left=left, right=right, top=top, bottom=bottom)
+        self.section.mark_modified()
+
+    def set_size(
+        self,
+        *,
+        width: int | str | None = None,
+        height: int | str | None = None,
+        original_width: int | str | None = None,
+        original_height: int | str | None = None,
+        current_width: int | str | None = None,
+        current_height: int | str | None = None,
+    ) -> None:
+        _set_graphic_size(
+            self.element,
+            width=width,
+            height=height,
+            original_width=original_width,
+            original_height=original_height,
+            current_width=current_width,
+            current_height=current_height,
+        )
+        self.section.mark_modified()
+
+    def set_rotation(
+        self,
+        *,
+        angle: int | str | None = None,
+        center_x: int | str | None = None,
+        center_y: int | str | None = None,
+        rotate_image: bool | None = None,
+    ) -> None:
+        _set_graphic_rotation(
+            self.element,
+            angle=angle,
+            center_x=center_x,
+            center_y=center_y,
+            rotate_image=rotate_image,
+        )
+        self.section.mark_modified()
+
+    def set_line_style(
+        self,
+        *,
+        color: str | None = None,
+        width: int | str | None = None,
+        style: str | None = None,
+        end_cap: str | None = None,
+        head_style: str | None = None,
+        tail_style: str | None = None,
+        head_fill: bool | None = None,
+        tail_fill: bool | None = None,
+        head_size: str | None = None,
+        tail_size: str | None = None,
+        outline_style: str | None = None,
+        alpha: int | str | None = None,
+    ) -> None:
+        _set_line_style(
+            self.element,
+            color=color,
+            width=width,
+            style=style,
+            end_cap=end_cap,
+            head_style=head_style,
+            tail_style=tail_style,
+            head_fill=head_fill,
+            tail_fill=tail_fill,
+            head_size=head_size,
+            tail_size=tail_size,
+            outline_style=outline_style,
+            alpha=alpha,
+        )
+        self.section.mark_modified()
+
+    def set_fill_style(
+        self,
+        *,
+        face_color: str | None = None,
+        hatch_color: str | None = None,
+        alpha: int | str | None = None,
+    ) -> None:
+        _set_fill_style(self.element, face_color=face_color, hatch_color=hatch_color, alpha=alpha)
+        self.section.mark_modified()
+
+    def set_text_margins(
+        self,
+        *,
+        left: int | str | None = None,
+        right: int | str | None = None,
+        top: int | str | None = None,
+        bottom: int | str | None = None,
+    ) -> None:
+        _set_text_margin(self.element, left=left, right=right, top=top, bottom=bottom)
         self.section.mark_modified()
 
 
@@ -1534,4 +1983,25 @@ class OleObject(ShapeObject):
 
     def bind_binary_item(self, item_id: str) -> None:
         self.element.set("binaryItemIDRef", item_id)
+        self.section.mark_modified()
+
+    def set_object_metadata(
+        self,
+        *,
+        object_type: str | None = None,
+        draw_aspect: str | None = None,
+        has_moniker: bool | None = None,
+        eq_baseline: int | str | None = None,
+    ) -> None:
+        _set_optional_attributes(
+            self.element,
+            objectType=object_type,
+            drawAspect=draw_aspect,
+            hasMoniker=has_moniker,
+            eqBaseLine=eq_baseline,
+        )
+        self.section.mark_modified()
+
+    def set_extent(self, *, x: int | str | None = None, y: int | str | None = None) -> None:
+        _set_graphic_size(self.element, extent_x=x, extent_y=y)
         self.section.mark_modified()

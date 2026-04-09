@@ -16,7 +16,16 @@ from .elements import (
     Table,
     TableCell,
 )
-from .exceptions import HwpxError, HwpxValidationError, InvalidHwpxFileError, ValidationIssue
+from .exceptions import (
+    HwpBinaryEditError,
+    HwpxError,
+    HwpxValidationError,
+    InvalidHwpFileError,
+    InvalidHwpxFileError,
+    ValidationIssue,
+)
+from .hwp_binary import HwpBinaryDocument, HwpBinaryFileHeader, HwpDocumentProperties, HwpParagraph, HwpRecord
+from .hwp_document import HwpDocument, HwpParagraphObject, HwpSection
 from .parts import (
     BinaryDataPart,
     ContainerPart,
@@ -57,11 +66,21 @@ __all__ = [
     "GenericXmlPart",
     "HeaderPart",
     "HeaderFooterBlock",
+    "HwpBinaryDocument",
+    "HwpBinaryEditError",
+    "HwpBinaryFileHeader",
+    "HwpDocument",
+    "HwpDocumentProperties",
+    "HwpParagraphObject",
+    "HwpParagraph",
+    "HwpRecord",
+    "HwpSection",
     "HwpxDocument",
     "HwpxError",
     "HwpxPart",
     "HwpxValidationError",
     "HwpxXmlNode",
+    "InvalidHwpFileError",
     "InvalidHwpxFileError",
     "ManifestPart",
     "MimetypePart",
