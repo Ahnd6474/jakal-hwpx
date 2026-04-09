@@ -1,18 +1,27 @@
 from __future__ import annotations
 
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Callable
 
+from ._hancom import convert_document
+from .document import HwpxDocument
 from .hwp_binary import HwpBinaryDocument, HwpBinaryFileHeader, HwpDocumentProperties, HwpParagraph
+
+HancomConverter = Callable[[str | Path, str | Path, str], Path]
 
 
 class HwpDocument:
-    def __init__(self, binary_document: HwpBinaryDocument):
+    def __init__(self, binary_document: HwpBinaryDocument, *, converter: HancomConverter | None = None):
         self._binary_document = binary_document
+        self._converter = converter or convert_document
+        self._bridge_document: HwpxDocument | None = None
+        self._bridge_temp_dir: Path | None = None
 
     @classmethod
-    def open(cls, path: str | Path) -> "HwpDocument":
-        return cls(HwpBinaryDocument.open(path))
+    def open(cls, path: str | Path, *, converter: HancomConverter | None = None) -> "HwpDocument":
+        return cls(HwpBinaryDocument.open(path), converter=converter)
 
     @property
     def source_path(self) -> Path:
@@ -58,8 +67,59 @@ class HwpDocument:
     ) -> int:
         return self._binary_document.replace_text_same_length(old, new, section_index=section_index, count=count)
 
+    def to_hwpx_document(self, *, force_refresh: bool = False) -> HwpxDocument:
+        if self._bridge_document is not None and not force_refresh:
+            return self._bridge_document
+
+        workspace = self._ensure_bridge_workspace()
+        source_hwp = workspace / "bridge_source.hwp"
+        output_hwpx = workspace / "bridge_output.hwpx"
+        self._binary_document.save_copy(source_hwp)
+        self._converter(source_hwp, output_hwpx, "HWPX")
+        self._bridge_document = HwpxDocument.open(output_hwpx)
+        return self._bridge_document
+
+    def save_as_hwpx(self, path: str | Path) -> Path:
+        target_path = Path(path).expanduser().resolve()
+        target_path.parent.mkdir(parents=True, exist_ok=True)
+        if self._bridge_document is not None:
+            self._bridge_document.save(target_path)
+            return target_path
+
+        workspace = self._ensure_bridge_workspace()
+        source_hwp = workspace / "export_source.hwp"
+        self._binary_document.save_copy(source_hwp)
+        self._converter(source_hwp, target_path, "HWPX")
+        return target_path
+
     def save(self, path: str | Path | None = None) -> Path:
-        return self._binary_document.save(path)
+        if path is not None:
+            target_path = Path(path).expanduser().resolve()
+            if target_path.suffix.lower() == ".hwpx":
+                return self.save_as_hwpx(target_path)
+        else:
+            target_path = self.source_path
+
+        if self._bridge_document is None:
+            return self._binary_document.save(path)
+
+        workspace = self._ensure_bridge_workspace()
+        temp_hwpx = workspace / "bridge_save.hwpx"
+        self._bridge_document.save(temp_hwpx)
+        self._converter(temp_hwpx, target_path, "HWP")
+        self._binary_document = HwpBinaryDocument.open(target_path)
+        return target_path
+
+    def __getattr__(self, name: str):
+        if name.startswith("_"):
+            raise AttributeError(name)
+        bridge_document = self.to_hwpx_document()
+        return getattr(bridge_document, name)
+
+    def _ensure_bridge_workspace(self) -> Path:
+        if self._bridge_temp_dir is None:
+            self._bridge_temp_dir = Path(tempfile.mkdtemp(prefix="jakal_hwp_bridge_"))
+        return self._bridge_temp_dir
 
 
 @dataclass(frozen=True)

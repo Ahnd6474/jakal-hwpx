@@ -57,7 +57,7 @@ doc.save("build/hello.hwpx")
 
 실험적 저수준 `.hwp` 지원도 포함합니다. `HwpBinaryDocument`는 Compound File 기반 legacy HWP 문서에서 `FileHeader`, `DocInfo`, `BodyText/Section*`, `PrvText`를 읽고, 기존 스트림 크기를 보존하는 범위에서 미리보기 텍스트와 본문 텍스트의 same-length 치환을 저장할 수 있습니다.
 
-객체 기반 실험 API인 `HwpDocument`도 포함합니다. 이 레이어는 `HwpSection`, `HwpParagraphObject`를 통해 `.hwp` 문서를 `HwpxDocument`와 비슷한 방식으로 다루도록 맞춘 래퍼입니다.
+객체 기반 실험 API인 `HwpDocument`도 포함합니다. 이 레이어는 `HwpSection`, `HwpParagraphObject`를 통해 `.hwp` 문서를 `HwpxDocument`와 비슷한 방식으로 다루도록 맞춘 래퍼입니다. Windows에서 한컴오피스 자동화가 가능한 환경이라면 내부적으로 `.hwp -> .hwpx -> HwpxDocument` 브리지를 사용해 `tables()`, `pictures()`, `append_paragraph()`, `append_table()` 같은 고수준 API도 그대로 위임할 수 있습니다.
 
 ```python
 from jakal_hwpx import HwpBinaryDocument, HwpDocument
@@ -70,6 +70,12 @@ doc = HwpDocument.open("input.hwp")
 paragraph = next(p for p in doc.section(0).paragraphs() if "2027" in p.text)
 paragraph.replace_text_same_length("2027", "2028", count=1)
 doc.save("build/edited.hwp")
+
+# Hancom automation is available:
+doc = HwpDocument.open("input.hwp")
+doc.append_paragraph("Bridge paragraph")
+doc.append_hyperlink("https://example.com", display_text="Example")
+doc.save("build/edited_via_bridge.hwp")
 ```
 
 ## 주요 API
@@ -124,12 +130,14 @@ doc.save("build/edited.hwp")
 - Python `3.11`, `3.12`, `3.13`
 - ZIP 기반 `HWPX` 패키지의 열기, 수정, 검증, 컴파일, 저장
 - legacy binary `.hwp` 파일의 저수준 열기, 스트림 파싱, 미리보기/본문 same-length 수정, 저장
+- Windows + Hancom automation 환경에서 `.hwp`의 high-level HWPX bridge editing
 - `jakal_hwpx` top-level export를 통한 문서 편집 흐름
 
 비지원:
 
 - `.hwp -> .hwpx` 변환기 번들 제공
 - 새로운 `.hwp` 문서 blank 생성이나 전체 OLE Compound File 재작성
+- Hancom automation이 없는 환경에서 `.hwp`에 대한 HWPX 수준의 고수준 편집
 - top-level `jakal_hwpx` export 밖의 내부 import 경로에 대한 호환성 보장
 
 ## 예제

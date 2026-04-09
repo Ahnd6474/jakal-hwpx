@@ -19,6 +19,10 @@ class HwpBinaryEditError(HwpxError):
     pass
 
 
+class HancomInteropError(HwpxError):
+    pass
+
+
 @dataclass(frozen=True)
 class ValidationIssue:
     kind: str

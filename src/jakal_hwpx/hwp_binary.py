@@ -91,6 +91,13 @@ class HwpRecord:
     offset: int
     payload: bytes
 
+    def to_bytes(self) -> bytes:
+        if self.header_size == 8 or self.size >= 0xFFF:
+            header = (self.tag_id & 0x3FF) | ((self.level & 0x3FF) << 10) | (0xFFF << 20)
+            return header.to_bytes(4, "little") + self.size.to_bytes(4, "little") + self.payload
+        header = (self.tag_id & 0x3FF) | ((self.level & 0x3FF) << 10) | ((self.size & 0xFFF) << 20)
+        return header.to_bytes(4, "little") + self.payload
+
 
 @dataclass(frozen=True)
 class HwpDocumentProperties:
@@ -308,6 +315,11 @@ class HwpBinaryDocument:
         path = self.section_stream_paths()[section_index]
         return list(_iter_records(self.read_stream(path)))
 
+    def replace_section_records(self, section_index: int, records: list[HwpRecord]) -> None:
+        path = self.section_stream_paths()[section_index]
+        raw = b"".join(record.to_bytes() for record in records)
+        self.write_stream(path, raw, compress=True)
+
     def paragraphs(self, section_index: int = 0) -> list[HwpParagraph]:
         paragraphs: list[HwpParagraph] = []
         current: dict[str, int | str] | None = None
@@ -522,33 +534,14 @@ class HwpBinaryDocument:
 
     def save(self, path: str | Path | None = None) -> Path:
         target_path = self.source_path if path is None else Path(path).expanduser().resolve()
-        if path is not None and target_path != self.source_path:
-            target_path.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(self.source_path, target_path)
+        self._write_to_path(target_path)
+        if path is not None:
+            self.source_path = target_path
+        return target_path
 
-        if path is None:
-            # Write in place via a temporary copy to avoid leaving a half-written OLE file on failure.
-            temp_dir = Path(tempfile.mkdtemp(prefix="jakal_hwp_"))
-            temp_path = temp_dir / self.source_path.name
-            shutil.copy2(self.source_path, temp_path)
-            write_target = temp_path
-        else:
-            write_target = target_path
-
-        with olefile.OleFileIO(str(write_target), write_mode=True) as ole:
-            for stream_path, data in self._streams.items():
-                if len(data) != self._original_sizes[stream_path]:
-                    raise HwpBinaryEditError(
-                        f"{stream_path} changed size from {self._original_sizes[stream_path]} to {len(data)} bytes."
-                    )
-                ole.write_stream(_stream_components(stream_path), data)
-
-        if path is None:
-            shutil.copy2(write_target, self.source_path)
-            shutil.rmtree(temp_dir, ignore_errors=True)
-            return self.source_path
-
-        self.source_path = target_path
+    def save_copy(self, path: str | Path) -> Path:
+        target_path = Path(path).expanduser().resolve()
+        self._write_to_path(target_path)
         return target_path
 
     def _stream_is_compressed(self, path: str) -> bool:
@@ -565,3 +558,20 @@ class HwpBinaryDocument:
                 f"{path} compressed to {len(compressed)} bytes and no longer fits in its original {original_size}-byte stream."
             )
         return compressed + (b"\x00" * (original_size - len(compressed)))
+
+    def _write_to_path(self, target_path: Path) -> None:
+        target_path.parent.mkdir(parents=True, exist_ok=True)
+        temp_dir = Path(tempfile.mkdtemp(prefix="jakal_hwp_"))
+        temp_path = temp_dir / target_path.name
+        shutil.copy2(self.source_path, temp_path)
+
+        with olefile.OleFileIO(str(temp_path), write_mode=True) as ole:
+            for stream_path, data in self._streams.items():
+                if len(data) != self._original_sizes[stream_path]:
+                    raise HwpBinaryEditError(
+                        f"{stream_path} changed size from {self._original_sizes[stream_path]} to {len(data)} bytes."
+                    )
+                ole.write_stream(_stream_components(stream_path), data)
+
+        shutil.copy2(temp_path, target_path)
+        shutil.rmtree(temp_dir, ignore_errors=True)

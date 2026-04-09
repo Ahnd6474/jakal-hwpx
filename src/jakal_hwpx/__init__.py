@@ -17,6 +17,7 @@ from .elements import (
     TableCell,
 )
 from .exceptions import (
+    HancomInteropError,
     HwpBinaryEditError,
     HwpxError,
     HwpxValidationError,
@@ -24,8 +25,23 @@ from .exceptions import (
     InvalidHwpxFileError,
     ValidationIssue,
 )
+from .hwp_collection import (
+    HwpDonorSummary,
+    find_best_hyperlink_donor,
+    find_best_picture_donor,
+    find_best_table_donor,
+    scan_hwp_collection,
+)
 from .hwp_binary import HwpBinaryDocument, HwpBinaryFileHeader, HwpDocumentProperties, HwpParagraph, HwpRecord
 from .hwp_document import HwpDocument, HwpParagraphObject, HwpSection
+from .hwp_template_lab import (
+    HwpControlOccurrence,
+    HwpTemplateCandidate,
+    build_minimal_control_candidate,
+    find_control_occurrences,
+    pick_best_donor_for_feature,
+    run_template_lab,
+)
 from .parts import (
     BinaryDataPart,
     ContainerPart,
@@ -64,8 +80,11 @@ __all__ = [
     "GenericBinaryPart",
     "GenericTextPart",
     "GenericXmlPart",
+    "HancomInteropError",
     "HeaderPart",
     "HeaderFooterBlock",
+    "HwpControlOccurrence",
+    "HwpDonorSummary",
     "HwpBinaryDocument",
     "HwpBinaryEditError",
     "HwpBinaryFileHeader",
@@ -75,6 +94,7 @@ __all__ = [
     "HwpParagraph",
     "HwpRecord",
     "HwpSection",
+    "HwpTemplateCandidate",
     "HwpxDocument",
     "HwpxError",
     "HwpxPart",
@@ -101,5 +121,13 @@ __all__ = [
     "VersionPart",
     "ValidationIssue",
     "XmlPart",
+    "build_minimal_control_candidate",
+    "find_best_hyperlink_donor",
+    "find_best_picture_donor",
+    "find_best_table_donor",
+    "find_control_occurrences",
+    "pick_best_donor_for_feature",
+    "run_template_lab",
+    "scan_hwp_collection",
     "__version__",
 ]

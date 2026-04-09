@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from jakal_hwpx import HwpDocument, HwpDocumentProperties, HwpParagraphObject, HwpSection
+from jakal_hwpx import HwpDocument, HwpDocumentProperties, HwpParagraphObject, HwpSection, HwpxDocument
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -64,3 +64,39 @@ def test_hwp_section_object_can_scope_same_length_replacements(sample_hwp_path: 
 
     reopened = HwpDocument.open(output_path)
     assert "2029학년도" in reopened.get_document_text()
+
+
+def test_hwp_document_can_bridge_to_hwpx_high_level_api(
+    sample_hwp_path: Path,
+    sample_hwpx_path: Path,
+    tmp_path: Path,
+) -> None:
+    conversions: list[tuple[str, str, str]] = []
+
+    def fake_converter(input_path: str | Path, output_path: str | Path, output_format: str) -> Path:
+        source = Path(input_path)
+        target = Path(output_path)
+        conversions.append((str(source), str(target), output_format))
+        if output_format == "HWPX":
+            target.write_bytes(sample_hwpx_path.read_bytes())
+        elif output_format == "HWP":
+            target.write_bytes(sample_hwp_path.read_bytes())
+        else:
+            raise AssertionError(output_format)
+        return target
+
+    document = HwpDocument.open(sample_hwp_path, converter=fake_converter)
+    bridge = document.to_hwpx_document()
+    assert isinstance(bridge, HwpxDocument)
+    assert document.metadata().title == bridge.metadata().title
+
+    output_hwpx = tmp_path / "bridged.hwpx"
+    document.save(output_hwpx)
+    assert output_hwpx.exists()
+
+    output_hwp = tmp_path / "bridged.hwp"
+    document.append_paragraph("Bridge paragraph")
+    document.save(output_hwp)
+    assert output_hwp.exists()
+    assert any(item[2] == "HWPX" for item in conversions)
+    assert any(item[2] == "HWP" for item in conversions)
