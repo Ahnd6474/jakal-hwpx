@@ -14,8 +14,11 @@ from pathlib import Path, PurePosixPath
 from lxml import etree
 
 from .elements import (
+    _invalidate_paragraph_layout,
     _missing_preserved_tokens,
     _preserved_structure_signature,
+    _set_graphic_layout,
+    _set_margin_values,
     AutoNumber,
     Bookmark,
     CharacterStyle,
@@ -23,6 +26,7 @@ from .elements import (
     Field,
     HeaderFooterBlock,
     Note,
+    OleObject,
     ParagraphStyle,
     Picture,
     SectionSettings,
@@ -47,6 +51,7 @@ from .parts import (
     XmlPart,
     infer_part_class,
 )
+from .xmlnode import HwpxXmlNode
 
 
 def _normalize_path(path: str) -> str:
@@ -100,6 +105,26 @@ def _clone_zip_info(source: zipfile.ZipInfo, filename: str) -> zipfile.ZipInfo:
 
 def _full_nsmap() -> dict[str, str]:
     return dict(NS)
+
+
+_GRAPHIC_CONTROL_TAGS = (
+    "tbl",
+    "pic",
+    "rect",
+    "line",
+    "ellipse",
+    "arc",
+    "polygon",
+    "curve",
+    "connectLine",
+    "textart",
+    "container",
+    "ole",
+)
+
+
+def _graphic_attribute_xpath(attribute: str) -> str:
+    return " | ".join(f".//hp:{tag}/@{attribute}" for tag in _GRAPHIC_CONTROL_TAGS)
 
 
 def _build_blank_version_part() -> VersionPart:
@@ -487,6 +512,22 @@ class HwpxDocument:
             raise TypeError(f"{normalized} is not a {expected_type.__name__}.")
         return part
 
+    def xml_part(self, path: str) -> HwpxXmlNode:
+        part = self.get_part(path, XmlPart)
+        return part.root
+
+    def section_xml(self, section_index: int = 0) -> HwpxXmlNode:
+        return self.sections[section_index].root
+
+    def header_xml(self) -> HwpxXmlNode:
+        return self.header.root
+
+    def content_hpf_xml(self) -> HwpxXmlNode:
+        return self.content_hpf.root
+
+    def settings_xml(self) -> HwpxXmlNode:
+        return self.get_part("settings.xml", SettingsPart).root
+
     def list_part_paths(self) -> list[str]:
         seen = set()
         ordered = []
@@ -557,6 +598,14 @@ class HwpxDocument:
             for node in section.root_element.xpath(".//hp:pic", namespaces=NS):
                 pictures.append(Picture(self, section, node))
         return pictures
+
+    def oles(self, section_index: int | None = None) -> list[OleObject]:
+        sections = self.sections if section_index is None else [self.sections[section_index]]
+        values: list[OleObject] = []
+        for section in sections:
+            for node in section.root_element.xpath(".//hp:ole", namespaces=NS):
+                values.append(OleObject(self, section, node))
+        return values
 
     def section_settings(self, section_index: int = 0) -> SectionSettings:
         self._ensure_editable_sections()
@@ -637,7 +686,10 @@ class HwpxDocument:
         for section in sections:
             for tag in shape_tags:
                 for node in section.root_element.xpath(f".//{tag}", namespaces=NS):
-                    values.append(ShapeObject(self, section, node))
+                    if etree.QName(node).localname == "ole":
+                        values.append(OleObject(self, section, node))
+                    else:
+                        values.append(ShapeObject(self, section, node))
         return values
 
     def styles(self) -> list[StyleDefinition]:
@@ -877,6 +929,7 @@ class HwpxDocument:
         *,
         media_type: str | None = None,
         manifest_id: str | None = None,
+        is_embedded: bool | int | str = True,
     ) -> BinaryDataPart:
         import mimetypes
 
@@ -893,13 +946,1096 @@ class HwpxDocument:
             media_type = mimetypes.guess_type(normalized_name)[0] or "application/octet-stream"
         if manifest_id is None:
             manifest_id = self.content_hpf.next_manifest_id(PurePosixPath(normalized_name).stem or "bindata")
+        if isinstance(is_embedded, bool):
+            is_embedded_value: str | int | str = "1" if is_embedded else "0"
+        else:
+            is_embedded_value = is_embedded
         self.content_hpf.ensure_manifest_item(
             manifest_id,
             part_path,
             media_type,
-            isEmbeded="1",
+            isEmbeded=is_embedded_value,
         )
         return part
+
+    def append_control_xml(
+        self,
+        xml: str | bytes,
+        *,
+        section_index: int = 0,
+        paragraph_index: int | None = None,
+        char_pr_id: str | None = None,
+    ) -> HwpxXmlNode:
+        self._ensure_editable_sections()
+        paragraph = self._resolve_paragraph_for_insert(section_index=section_index, paragraph_index=paragraph_index)
+        run = self._append_run(paragraph, char_pr_id=char_pr_id)
+        ctrl = etree.SubElement(run, qname("hp", "ctrl"))
+        node = HwpxXmlNode(ctrl, self.sections[section_index]).append_xml(xml)
+        _invalidate_paragraph_layout(paragraph)
+        return node
+
+    def append_run_xml(
+        self,
+        xml: str | bytes,
+        *,
+        section_index: int = 0,
+        paragraph_index: int | None = None,
+        char_pr_id: str | None = None,
+    ) -> HwpxXmlNode:
+        self._ensure_editable_sections()
+        paragraph = self._resolve_paragraph_for_insert(section_index=section_index, paragraph_index=paragraph_index)
+        run = self._append_run(paragraph, char_pr_id=char_pr_id)
+        node = HwpxXmlNode(run, self.sections[section_index]).append_xml(xml)
+        _invalidate_paragraph_layout(paragraph)
+        return node
+
+    def append_header(
+        self,
+        text: str = "",
+        *,
+        section_index: int = 0,
+        paragraph_index: int | None = None,
+        char_pr_id: str | None = None,
+        apply_page_type: str = "BOTH",
+        hide_first: bool | None = None,
+    ) -> HeaderFooterBlock:
+        self._ensure_editable_sections()
+        block = self._build_header_footer_block(
+            "header",
+            text=text,
+            char_pr_id=char_pr_id,
+            apply_page_type=apply_page_type,
+        )
+        section = self._append_control(section_index, paragraph_index, block, char_pr_id=char_pr_id)
+        if hide_first is not None:
+            self.section_settings(section_index).set_visibility(hide_first_header=hide_first)
+        return HeaderFooterBlock(self, section, block)
+
+    def append_footer(
+        self,
+        text: str = "",
+        *,
+        section_index: int = 0,
+        paragraph_index: int | None = None,
+        char_pr_id: str | None = None,
+        apply_page_type: str = "BOTH",
+        hide_first: bool | None = None,
+    ) -> HeaderFooterBlock:
+        self._ensure_editable_sections()
+        block = self._build_header_footer_block(
+            "footer",
+            text=text,
+            char_pr_id=char_pr_id,
+            apply_page_type=apply_page_type,
+        )
+        section = self._append_control(section_index, paragraph_index, block, char_pr_id=char_pr_id)
+        if hide_first is not None:
+            self.section_settings(section_index).set_visibility(hide_first_footer=hide_first)
+        return HeaderFooterBlock(self, section, block)
+
+    def append_note(
+        self,
+        text: str = "",
+        *,
+        kind: str = "footNote",
+        number: int | str | None = None,
+        section_index: int = 0,
+        paragraph_index: int | None = None,
+        char_pr_id: str | None = None,
+    ) -> Note:
+        self._ensure_editable_sections()
+        if kind not in {"footNote", "endNote"}:
+            raise ValueError("append_note() kind must be 'footNote' or 'endNote'.")
+        note = etree.Element(qname("hp", kind))
+        note.set("id", self._next_control_number(".//hp:footNote/@id | .//hp:endNote/@id"))
+        note.set("number", str(number if number is not None else self._next_control_number(".//hp:footNote/@number | .//hp:endNote/@number")))
+        note.append(self._build_sublist_with_text(text, char_pr_id=char_pr_id, vertical_align="TOP"))
+        section = self._append_control(section_index, paragraph_index, note, char_pr_id=char_pr_id)
+        return Note(self, section, note)
+
+    def append_footnote(
+        self,
+        text: str = "",
+        *,
+        number: int | str | None = None,
+        section_index: int = 0,
+        paragraph_index: int | None = None,
+        char_pr_id: str | None = None,
+    ) -> Note:
+        return self.append_note(
+            text,
+            kind="footNote",
+            number=number,
+            section_index=section_index,
+            paragraph_index=paragraph_index,
+            char_pr_id=char_pr_id,
+        )
+
+    def append_endnote(
+        self,
+        text: str = "",
+        *,
+        number: int | str | None = None,
+        section_index: int = 0,
+        paragraph_index: int | None = None,
+        char_pr_id: str | None = None,
+    ) -> Note:
+        return self.append_note(
+            text,
+            kind="endNote",
+            number=number,
+            section_index=section_index,
+            paragraph_index=paragraph_index,
+            char_pr_id=char_pr_id,
+        )
+
+    def append_auto_number(
+        self,
+        *,
+        number: int | str = 1,
+        number_type: str = "PAGE",
+        kind: str = "newNum",
+        section_index: int = 0,
+        paragraph_index: int | None = None,
+        char_pr_id: str | None = None,
+    ) -> AutoNumber:
+        self._ensure_editable_sections()
+        if kind not in {"newNum", "autoNum"}:
+            raise ValueError("append_auto_number() kind must be 'newNum' or 'autoNum'.")
+        node = etree.Element(qname("hp", kind))
+        node.set("num", str(number))
+        node.set("numType", number_type)
+        section = self._append_control(section_index, paragraph_index, node, char_pr_id=char_pr_id)
+        return AutoNumber(self, section, node)
+
+    def append_new_number(
+        self,
+        *,
+        number: int | str = 1,
+        number_type: str = "PAGE",
+        section_index: int = 0,
+        paragraph_index: int | None = None,
+        char_pr_id: str | None = None,
+    ) -> AutoNumber:
+        return self.append_auto_number(
+            number=number,
+            number_type=number_type,
+            kind="newNum",
+            section_index=section_index,
+            paragraph_index=paragraph_index,
+            char_pr_id=char_pr_id,
+        )
+
+    def append_equation(
+        self,
+        script: str,
+        *,
+        section_index: int = 0,
+        paragraph_index: int | None = None,
+        char_pr_id: str | None = None,
+        width: int = 4800,
+        height: int = 2300,
+        treat_as_char: bool = True,
+        shape_comment: str | None = None,
+        text_color: str = "#000000",
+        base_unit: int = 1100,
+        font: str = "HYhwpEQ",
+        text_wrap: str = "TOP_AND_BOTTOM",
+        text_flow: str = "BOTH_SIDES",
+        affect_line_spacing: bool = False,
+        flow_with_text: bool = True,
+        allow_overlap: bool = False,
+        hold_anchor_and_so: bool = False,
+        vert_rel_to: str = "PARA",
+        horz_rel_to: str = "COLUMN",
+        vert_align: str = "TOP",
+        horz_align: str = "LEFT",
+        vert_offset: int = 0,
+        horz_offset: int = 0,
+        out_margin_left: int = 0,
+        out_margin_right: int = 0,
+        out_margin_top: int = 0,
+        out_margin_bottom: int = 0,
+    ) -> Equation:
+        self._ensure_editable_sections()
+        if width < 1 or height < 1:
+            raise ValueError("width and height must be positive.")
+
+        equation = etree.Element(qname("hp", "equation"))
+        equation.set("id", self._next_control_number(_graphic_attribute_xpath("id")))
+        equation.set("zOrder", self._next_control_number(_graphic_attribute_xpath("zOrder")))
+        equation.set("numberingType", "EQUATION")
+        equation.set("textWrap", "TOP_AND_BOTTOM")
+        equation.set("textFlow", "BOTH_SIDES")
+        equation.set("lock", "0")
+        equation.set("dropcapstyle", "None")
+        equation.set("version", "Equation Version 60")
+        equation.set("baseLine", "93")
+        equation.set("textColor", text_color)
+        equation.set("baseUnit", str(base_unit))
+        equation.set("lineMode", "CHAR")
+        equation.set("font", font)
+
+        size = etree.SubElement(equation, qname("hp", "sz"))
+        size.set("width", str(width))
+        size.set("widthRelTo", "ABSOLUTE")
+        size.set("height", str(height))
+        size.set("heightRelTo", "ABSOLUTE")
+        size.set("protect", "0")
+
+        position = etree.SubElement(equation, qname("hp", "pos"))
+        position.set("treatAsChar", "1" if treat_as_char else "0")
+        position.set("affectLSpacing", "0")
+        position.set("flowWithText", "1")
+        position.set("allowOverlap", "0")
+        position.set("holdAnchorAndSO", "0")
+        position.set("vertRelTo", "PARA")
+        position.set("horzRelTo", "COLUMN")
+        position.set("vertAlign", "TOP")
+        position.set("horzAlign", "LEFT")
+        position.set("vertOffset", "0")
+        position.set("horzOffset", "0")
+
+        out_margin = etree.SubElement(equation, qname("hp", "outMargin"))
+        for key in ("left", "right", "top", "bottom"):
+            out_margin.set(key, "0")
+        _set_graphic_layout(
+            equation,
+            text_wrap=text_wrap,
+            text_flow=text_flow,
+            treat_as_char=treat_as_char,
+            affect_line_spacing=affect_line_spacing,
+            flow_with_text=flow_with_text,
+            allow_overlap=allow_overlap,
+            hold_anchor_and_so=hold_anchor_and_so,
+            vert_rel_to=vert_rel_to,
+            horz_rel_to=horz_rel_to,
+            vert_align=vert_align,
+            horz_align=horz_align,
+            vert_offset=vert_offset,
+            horz_offset=horz_offset,
+        )
+        _set_margin_values(
+            equation,
+            "./hp:outMargin",
+            left=out_margin_left,
+            right=out_margin_right,
+            top=out_margin_top,
+            bottom=out_margin_bottom,
+        )
+
+        if shape_comment:
+            comment = etree.SubElement(equation, qname("hp", "shapeComment"))
+            comment.text = shape_comment
+
+        script_node = etree.SubElement(equation, qname("hp", "script"))
+        script_node.set("{http://www.w3.org/XML/1998/namespace}space", "preserve")
+        script_node.text = script
+
+        section = self._append_control(section_index, paragraph_index, equation, char_pr_id=char_pr_id)
+        return Equation(self, section, equation)
+
+    def append_paragraph_style(
+        self,
+        *,
+        style_id: str | None = None,
+        template_id: str | None = None,
+        alignment_horizontal: str | None = None,
+        alignment_vertical: str | None = None,
+        line_spacing: int | str | None = None,
+    ) -> ParagraphStyle:
+        template = self._clone_header_template(".//hh:paraPr", template_id=template_id)
+        resolved_id = style_id or self._next_header_numeric_id(".//hh:paraPr/@id")
+        template.set("id", resolved_id)
+        parent = self._ensure_header_collection(".//hh:paraProperties", "paraProperties")
+        parent.append(template)
+        parent.set("itemCnt", str(len(parent.xpath("./hh:paraPr", namespaces=NS))))
+        self.header.mark_modified()
+
+        style = ParagraphStyle(self.header, template)
+        if alignment_horizontal is not None or alignment_vertical is not None:
+            style.set_alignment(horizontal=alignment_horizontal, vertical=alignment_vertical)
+        if line_spacing is not None:
+            style.set_line_spacing(line_spacing)
+        return style
+
+    def append_character_style(
+        self,
+        *,
+        style_id: str | None = None,
+        template_id: str | None = None,
+        text_color: str | None = None,
+        height: int | str | None = None,
+    ) -> CharacterStyle:
+        template = self._clone_header_template(".//hh:charPr", template_id=template_id)
+        resolved_id = style_id or self._next_header_numeric_id(".//hh:charPr/@id")
+        template.set("id", resolved_id)
+        parent = self._ensure_header_collection(".//hh:charProperties", "charProperties")
+        parent.append(template)
+        parent.set("itemCnt", str(len(parent.xpath("./hh:charPr", namespaces=NS))))
+        self.header.mark_modified()
+
+        style = CharacterStyle(self.header, template)
+        if text_color is not None:
+            style.set_text_color(text_color)
+        if height is not None:
+            style.set_height(height)
+        return style
+
+    def append_style(
+        self,
+        name: str,
+        *,
+        english_name: str | None = None,
+        style_id: str | None = None,
+        style_type: str = "PARA",
+        para_pr_id: str | None = None,
+        char_pr_id: str | None = None,
+        next_style_id: str | None = None,
+        lang_id: str = "1042",
+        lock_form: bool = False,
+        template_id: str | None = None,
+    ) -> StyleDefinition:
+        template = self._clone_header_template(".//hh:style", template_id=template_id)
+        resolved_id = style_id or self._next_header_numeric_id(".//hh:style/@id")
+        template.set("id", resolved_id)
+        template.set("type", style_type)
+        template.set("name", name)
+        template.set("engName", english_name or name)
+        template.set("paraPrIDRef", para_pr_id or template.get("paraPrIDRef", "0"))
+        template.set("charPrIDRef", char_pr_id or template.get("charPrIDRef", "0"))
+        template.set("nextStyleIDRef", next_style_id or template.get("nextStyleIDRef", resolved_id))
+        template.set("langID", lang_id)
+        template.set("lockForm", "1" if lock_form else "0")
+
+        parent = self._ensure_header_collection(".//hh:styles", "styles")
+        parent.append(template)
+        parent.set("itemCnt", str(len(parent.xpath("./hh:style", namespaces=NS))))
+        self.header.mark_modified()
+        return StyleDefinition(self.header, template)
+
+    def append_table(
+        self,
+        rows: int,
+        columns: int,
+        *,
+        section_index: int = 0,
+        paragraph_index: int | None = None,
+        char_pr_id: str | None = None,
+        cell_texts: list[list[str]] | None = None,
+        cell_width: int = 16000,
+        row_height: int = 1800,
+        table_width: int | None = None,
+        treat_as_char: bool = True,
+        text_wrap: str = "TOP_AND_BOTTOM",
+        text_flow: str = "BOTH_SIDES",
+        affect_line_spacing: bool = False,
+        flow_with_text: bool = True,
+        allow_overlap: bool = False,
+        hold_anchor_and_so: bool = False,
+        vert_rel_to: str = "PARA",
+        horz_rel_to: str = "COLUMN",
+        vert_align: str = "TOP",
+        horz_align: str = "LEFT",
+        vert_offset: int = 0,
+        horz_offset: int = 0,
+        out_margin_left: int = 0,
+        out_margin_right: int = 0,
+        out_margin_top: int = 0,
+        out_margin_bottom: int = 0,
+    ) -> Table:
+        self._ensure_editable_sections()
+        if rows < 1 or columns < 1:
+            raise ValueError("rows and columns must be at least 1.")
+        if cell_width < 1 or row_height < 1:
+            raise ValueError("cell_width and row_height must be positive.")
+
+        width = table_width if table_width is not None else cell_width * columns
+        if width < 1:
+            raise ValueError("table_width must be positive.")
+
+        table = etree.Element(qname("hp", "tbl"))
+        table.set("id", self._next_control_number(_graphic_attribute_xpath("id")))
+        table.set("zOrder", self._next_control_number(_graphic_attribute_xpath("zOrder")))
+        table.set("numberingType", "TABLE")
+        table.set("textWrap", "TOP_AND_BOTTOM")
+        table.set("textFlow", "BOTH_SIDES")
+        table.set("lock", "0")
+        table.set("dropcapstyle", "None")
+        table.set("pageBreak", "CELL")
+        table.set("repeatHeader", "1")
+        table.set("rowCnt", str(rows))
+        table.set("colCnt", str(columns))
+        table.set("cellSpacing", "0")
+        table.set("borderFillIDRef", "0")
+        table.set("noAdjust", "0")
+
+        size = etree.SubElement(table, qname("hp", "sz"))
+        size.set("width", str(width))
+        size.set("widthRelTo", "ABSOLUTE")
+        size.set("height", str(row_height * rows))
+        size.set("heightRelTo", "ABSOLUTE")
+        size.set("protect", "0")
+
+        position = etree.SubElement(table, qname("hp", "pos"))
+        position.set("treatAsChar", "1" if treat_as_char else "0")
+        position.set("affectLSpacing", "0")
+        position.set("flowWithText", "1")
+        position.set("allowOverlap", "0")
+        position.set("holdAnchorAndSO", "0")
+        position.set("vertRelTo", "PARA")
+        position.set("horzRelTo", "COLUMN")
+        position.set("vertAlign", "TOP")
+        position.set("horzAlign", "LEFT")
+        position.set("vertOffset", "0")
+        position.set("horzOffset", "0")
+
+        out_margin = etree.SubElement(table, qname("hp", "outMargin"))
+        for key in ("left", "right", "top", "bottom"):
+            out_margin.set(key, "0")
+        _set_graphic_layout(
+            table,
+            text_wrap=text_wrap,
+            text_flow=text_flow,
+            treat_as_char=treat_as_char,
+            affect_line_spacing=affect_line_spacing,
+            flow_with_text=flow_with_text,
+            allow_overlap=allow_overlap,
+            hold_anchor_and_so=hold_anchor_and_so,
+            vert_rel_to=vert_rel_to,
+            horz_rel_to=horz_rel_to,
+            vert_align=vert_align,
+            horz_align=horz_align,
+            vert_offset=vert_offset,
+            horz_offset=horz_offset,
+        )
+        _set_margin_values(
+            table,
+            "./hp:outMargin",
+            left=out_margin_left,
+            right=out_margin_right,
+            top=out_margin_top,
+            bottom=out_margin_bottom,
+        )
+
+        in_margin = etree.SubElement(table, qname("hp", "inMargin"))
+        in_margin.set("left", "141")
+        in_margin.set("right", "141")
+        in_margin.set("top", "141")
+        in_margin.set("bottom", "141")
+
+        nested_paragraph_id = self._next_control_number(".//hp:p/@id")
+        for row_index in range(rows):
+            row = etree.SubElement(table, qname("hp", "tr"))
+            for column_index in range(columns):
+                cell = etree.SubElement(row, qname("hp", "tc"))
+                cell.set("name", "")
+                cell.set("header", "0")
+                cell.set("hasMargin", "0")
+                cell.set("protect", "0")
+                cell.set("editable", "0")
+                cell.set("dirty", "0")
+                cell.set("borderFillIDRef", "0")
+
+                sub_list = etree.SubElement(cell, qname("hp", "subList"))
+                sub_list.set("id", "")
+                sub_list.set("textDirection", "HORIZONTAL")
+                sub_list.set("lineWrap", "BREAK")
+                sub_list.set("vertAlign", "CENTER")
+                sub_list.set("linkListIDRef", "0")
+                sub_list.set("linkListNextIDRef", "0")
+                sub_list.set("textWidth", "0")
+                sub_list.set("textHeight", "0")
+                sub_list.set("hasTextRef", "0")
+                sub_list.set("hasNumRef", "0")
+
+                paragraph = etree.SubElement(sub_list, qname("hp", "p"))
+                paragraph.set("id", nested_paragraph_id)
+                nested_paragraph_id = str(int(nested_paragraph_id) + 1)
+                paragraph.set("paraPrIDRef", "0")
+                paragraph.set("styleIDRef", "0")
+                paragraph.set("pageBreak", "0")
+                paragraph.set("columnBreak", "0")
+                paragraph.set("merged", "0")
+
+                run = etree.SubElement(paragraph, qname("hp", "run"))
+                run.set("charPrIDRef", char_pr_id or "0")
+                text_node = etree.SubElement(run, qname("hp", "t"))
+                value = ""
+                if cell_texts is not None and row_index < len(cell_texts) and column_index < len(cell_texts[row_index]):
+                    value = cell_texts[row_index][column_index]
+                text_node.text = value
+
+                cell_addr = etree.SubElement(cell, qname("hp", "cellAddr"))
+                cell_addr.set("colAddr", str(column_index))
+                cell_addr.set("rowAddr", str(row_index))
+
+                cell_span = etree.SubElement(cell, qname("hp", "cellSpan"))
+                cell_span.set("colSpan", "1")
+                cell_span.set("rowSpan", "1")
+
+                cell_size = etree.SubElement(cell, qname("hp", "cellSz"))
+                cell_size.set("width", str(cell_width))
+                cell_size.set("height", str(row_height))
+
+                cell_margin = etree.SubElement(cell, qname("hp", "cellMargin"))
+                cell_margin.set("left", "141")
+                cell_margin.set("right", "141")
+                cell_margin.set("top", "141")
+                cell_margin.set("bottom", "141")
+
+        section = self._append_control(section_index, paragraph_index, table, char_pr_id=char_pr_id)
+        return Table(self, section, table)
+
+    def append_picture(
+        self,
+        name: str,
+        data: bytes,
+        *,
+        section_index: int = 0,
+        paragraph_index: int | None = None,
+        char_pr_id: str | None = None,
+        media_type: str | None = None,
+        manifest_id: str | None = None,
+        width: int = 7200,
+        height: int = 7200,
+        original_width: int | None = None,
+        original_height: int | None = None,
+        treat_as_char: bool = True,
+        shape_comment: str | None = None,
+        text_wrap: str = "TOP_AND_BOTTOM",
+        text_flow: str = "BOTH_SIDES",
+        affect_line_spacing: bool = False,
+        flow_with_text: bool = True,
+        allow_overlap: bool = False,
+        hold_anchor_and_so: bool = False,
+        vert_rel_to: str = "PARA",
+        horz_rel_to: str = "COLUMN",
+        vert_align: str = "TOP",
+        horz_align: str = "LEFT",
+        vert_offset: int = 0,
+        horz_offset: int = 0,
+        out_margin_left: int = 0,
+        out_margin_right: int = 0,
+        out_margin_top: int = 0,
+        out_margin_bottom: int = 0,
+    ) -> Picture:
+        self._ensure_editable_sections()
+        if width < 1 or height < 1:
+            raise ValueError("width and height must be positive.")
+
+        resolved_manifest_id = manifest_id or self.content_hpf.next_manifest_id(PurePosixPath(name).stem or "image")
+        self.add_or_replace_binary(name, data, media_type=media_type, manifest_id=resolved_manifest_id)
+
+        image_width = original_width or width
+        image_height = original_height or height
+        picture = etree.Element(qname("hp", "pic"))
+        picture.set("id", self._next_control_number(_graphic_attribute_xpath("id")))
+        picture.set("zOrder", self._next_control_number(_graphic_attribute_xpath("zOrder")))
+        picture.set("numberingType", "PICTURE")
+        picture.set("textWrap", "TOP_AND_BOTTOM")
+        picture.set("textFlow", "BOTH_SIDES")
+        picture.set("lock", "0")
+        picture.set("dropcapstyle", "None")
+        picture.set("href", "")
+        picture.set("groupLevel", "0")
+        picture.set("instid", self._next_control_number(_graphic_attribute_xpath("instid")))
+        picture.set("reverse", "0")
+
+        offset = etree.SubElement(picture, qname("hp", "offset"))
+        offset.set("x", "0")
+        offset.set("y", "0")
+
+        original_size = etree.SubElement(picture, qname("hp", "orgSz"))
+        original_size.set("width", str(image_width))
+        original_size.set("height", str(image_height))
+
+        current_size = etree.SubElement(picture, qname("hp", "curSz"))
+        current_size.set("width", str(width))
+        current_size.set("height", str(height))
+
+        flip = etree.SubElement(picture, qname("hp", "flip"))
+        flip.set("horizontal", "0")
+        flip.set("vertical", "0")
+
+        rotation = etree.SubElement(picture, qname("hp", "rotationInfo"))
+        rotation.set("angle", "0")
+        rotation.set("centerX", str(width // 2))
+        rotation.set("centerY", str(height // 2))
+        rotation.set("rotateimage", "1")
+
+        rendering = etree.SubElement(picture, qname("hp", "renderingInfo"))
+        self._append_identity_matrix(rendering, "transMatrix")
+        scale_x = width / image_width if image_width else 1
+        scale_y = height / image_height if image_height else 1
+        self._append_matrix(rendering, "scaMatrix", e1=f"{scale_x:.6f}", e5=f"{scale_y:.6f}")
+        self._append_identity_matrix(rendering, "rotMatrix")
+
+        image = etree.SubElement(picture, qname("hc", "img"))
+        image.set("binaryItemIDRef", resolved_manifest_id)
+        image.set("bright", "0")
+        image.set("contrast", "0")
+        image.set("effect", "REAL_PIC")
+        image.set("alpha", "0")
+
+        image_rect = etree.SubElement(picture, qname("hp", "imgRect"))
+        for index, (x, y) in enumerate(((0, 0), (image_width, 0), (image_width, image_height), (0, image_height))):
+            point = etree.SubElement(image_rect, qname("hc", f"pt{index}"))
+            point.set("x", str(x))
+            point.set("y", str(y))
+
+        image_clip = etree.SubElement(picture, qname("hp", "imgClip"))
+        image_clip.set("left", "0")
+        image_clip.set("right", str(image_width))
+        image_clip.set("top", "0")
+        image_clip.set("bottom", str(image_height))
+
+        in_margin = etree.SubElement(picture, qname("hp", "inMargin"))
+        for key in ("left", "right", "top", "bottom"):
+            in_margin.set(key, "0")
+
+        image_dim = etree.SubElement(picture, qname("hp", "imgDim"))
+        image_dim.set("dimwidth", str(image_width))
+        image_dim.set("dimheight", str(image_height))
+        etree.SubElement(picture, qname("hp", "effects"))
+
+        size = etree.SubElement(picture, qname("hp", "sz"))
+        size.set("width", str(width))
+        size.set("widthRelTo", "ABSOLUTE")
+        size.set("height", str(height))
+        size.set("heightRelTo", "ABSOLUTE")
+        size.set("protect", "0")
+
+        position = etree.SubElement(picture, qname("hp", "pos"))
+        position.set("treatAsChar", "1" if treat_as_char else "0")
+        position.set("affectLSpacing", "0")
+        position.set("flowWithText", "1")
+        position.set("allowOverlap", "0")
+        position.set("holdAnchorAndSO", "0")
+        position.set("vertRelTo", "PARA")
+        position.set("horzRelTo", "COLUMN")
+        position.set("vertAlign", "TOP")
+        position.set("horzAlign", "LEFT")
+        position.set("vertOffset", "0")
+        position.set("horzOffset", "0")
+
+        out_margin = etree.SubElement(picture, qname("hp", "outMargin"))
+        for key in ("left", "right", "top", "bottom"):
+            out_margin.set(key, "0")
+        _set_graphic_layout(
+            picture,
+            text_wrap=text_wrap,
+            text_flow=text_flow,
+            treat_as_char=treat_as_char,
+            affect_line_spacing=affect_line_spacing,
+            flow_with_text=flow_with_text,
+            allow_overlap=allow_overlap,
+            hold_anchor_and_so=hold_anchor_and_so,
+            vert_rel_to=vert_rel_to,
+            horz_rel_to=horz_rel_to,
+            vert_align=vert_align,
+            horz_align=horz_align,
+            vert_offset=vert_offset,
+            horz_offset=horz_offset,
+        )
+        _set_margin_values(
+            picture,
+            "./hp:outMargin",
+            left=out_margin_left,
+            right=out_margin_right,
+            top=out_margin_top,
+            bottom=out_margin_bottom,
+        )
+
+        if shape_comment:
+            comment = etree.SubElement(picture, qname("hp", "shapeComment"))
+            comment.text = shape_comment
+
+        section = self._append_control(section_index, paragraph_index, picture, char_pr_id=char_pr_id)
+        return Picture(self, section, picture)
+
+    def append_shape(
+        self,
+        *,
+        section_index: int = 0,
+        paragraph_index: int | None = None,
+        char_pr_id: str | None = None,
+        kind: str = "rect",
+        text: str = "",
+        width: int = 12000,
+        height: int = 3200,
+        treat_as_char: bool = True,
+        shape_comment: str | None = None,
+        fill_color: str = "#FFFFFF",
+        line_color: str = "#000000",
+        text_wrap: str = "TOP_AND_BOTTOM",
+        text_flow: str = "BOTH_SIDES",
+        affect_line_spacing: bool = False,
+        flow_with_text: bool = True,
+        allow_overlap: bool = False,
+        hold_anchor_and_so: bool = False,
+        vert_rel_to: str = "PARA",
+        horz_rel_to: str = "COLUMN",
+        vert_align: str = "TOP",
+        horz_align: str = "LEFT",
+        vert_offset: int = 0,
+        horz_offset: int = 0,
+        out_margin_left: int = 0,
+        out_margin_right: int = 0,
+        out_margin_top: int = 0,
+        out_margin_bottom: int = 0,
+    ) -> ShapeObject:
+        self._ensure_editable_sections()
+        supported_kinds = {"rect", "ellipse", "arc", "polygon", "curve", "connectLine", "line", "textart", "container"}
+        if kind not in supported_kinds:
+            supported = ", ".join(sorted(supported_kinds))
+            raise ValueError(f"append_shape() supports kind values: {supported}")
+        if width < 1 or height < 1:
+            raise ValueError("width and height must be positive.")
+
+        shape = etree.Element(qname("hp", kind))
+        shape.set("id", self._next_control_number(_graphic_attribute_xpath("id")))
+        shape.set("zOrder", self._next_control_number(_graphic_attribute_xpath("zOrder")))
+        shape.set("numberingType", "PICTURE")
+        shape.set("textWrap", "TOP_AND_BOTTOM")
+        shape.set("textFlow", "BOTH_SIDES")
+        shape.set("lock", "0")
+        shape.set("dropcapstyle", "None")
+        shape.set("href", "")
+        shape.set("groupLevel", "0")
+        shape.set("instid", self._next_control_number(_graphic_attribute_xpath("instid")))
+        if kind not in {"line", "connectLine"}:
+            shape.set("ratio", "0")
+
+        offset = etree.SubElement(shape, qname("hp", "offset"))
+        offset.set("x", "0")
+        offset.set("y", "0")
+
+        original_size = etree.SubElement(shape, qname("hp", "orgSz"))
+        original_size.set("width", str(width))
+        original_size.set("height", str(height))
+
+        current_size = etree.SubElement(shape, qname("hp", "curSz"))
+        current_size.set("width", str(width))
+        current_size.set("height", str(height))
+
+        flip = etree.SubElement(shape, qname("hp", "flip"))
+        flip.set("horizontal", "0")
+        flip.set("vertical", "0")
+
+        rotation = etree.SubElement(shape, qname("hp", "rotationInfo"))
+        rotation.set("angle", "0")
+        rotation.set("centerX", str(width // 2))
+        rotation.set("centerY", str(height // 2))
+        rotation.set("rotateimage", "1")
+
+        rendering = etree.SubElement(shape, qname("hp", "renderingInfo"))
+        self._append_identity_matrix(rendering, "transMatrix")
+        self._append_identity_matrix(rendering, "scaMatrix")
+        self._append_identity_matrix(rendering, "rotMatrix")
+
+        line_shape = etree.SubElement(shape, qname("hp", "lineShape"))
+        line_shape.set("color", line_color)
+        line_shape.set("width", "33")
+        line_shape.set("style", "SOLID")
+        line_shape.set("endCap", "FLAT")
+        line_shape.set("headStyle", "NORMAL")
+        line_shape.set("tailStyle", "NORMAL")
+        line_shape.set("headfill", "1")
+        line_shape.set("tailfill", "1")
+        line_shape.set("headSz", "MEDIUM_MEDIUM")
+        line_shape.set("tailSz", "MEDIUM_MEDIUM")
+        line_shape.set("outlineStyle", "NORMAL")
+        line_shape.set("alpha", "0")
+
+        if kind not in {"line", "connectLine"}:
+            fill_brush = etree.SubElement(shape, qname("hc", "fillBrush"))
+            win_brush = etree.SubElement(fill_brush, qname("hc", "winBrush"))
+            win_brush.set("faceColor", fill_color)
+            win_brush.set("hatchColor", line_color)
+            win_brush.set("alpha", "0")
+
+        shadow = etree.SubElement(shape, qname("hp", "shadow"))
+        shadow.set("type", "NONE")
+        shadow.set("color", "#B2B2B2")
+        shadow.set("offsetX", "0")
+        shadow.set("offsetY", "0")
+        shadow.set("alpha", "0")
+
+        if kind in {"rect", "ellipse", "arc", "polygon", "curve", "textart", "container"}:
+            draw_text = etree.SubElement(shape, qname("hp", "drawText"))
+            draw_text.set("lastWidth", str(width))
+            draw_text.set("name", "")
+            draw_text.set("editable", "0")
+
+            sub_list = etree.SubElement(draw_text, qname("hp", "subList"))
+            sub_list.set("id", "")
+            sub_list.set("textDirection", "HORIZONTAL")
+            sub_list.set("lineWrap", "BREAK")
+            sub_list.set("vertAlign", "CENTER")
+            sub_list.set("linkListIDRef", "0")
+            sub_list.set("linkListNextIDRef", "0")
+            sub_list.set("textWidth", "0")
+            sub_list.set("textHeight", "0")
+            sub_list.set("hasTextRef", "0")
+            sub_list.set("hasNumRef", "0")
+
+            paragraph = etree.SubElement(sub_list, qname("hp", "p"))
+            paragraph.set("id", self._next_control_number(".//hp:p/@id"))
+            paragraph.set("paraPrIDRef", "0")
+            paragraph.set("styleIDRef", "0")
+            paragraph.set("pageBreak", "0")
+            paragraph.set("columnBreak", "0")
+            paragraph.set("merged", "0")
+
+            run = etree.SubElement(paragraph, qname("hp", "run"))
+            run.set("charPrIDRef", char_pr_id or "0")
+            text_node = etree.SubElement(run, qname("hp", "t"))
+            text_node.text = text
+
+            text_margin = etree.SubElement(draw_text, qname("hp", "textMargin"))
+            text_margin.set("left", "283")
+            text_margin.set("right", "283")
+            text_margin.set("top", "283")
+            text_margin.set("bottom", "283")
+
+        if kind in {"line", "connectLine"}:
+            points = ((0, 0), (width, height))
+        else:
+            points = ((0, 0), (width, 0), (width, height), (0, height))
+
+        for index, (x, y) in enumerate(points):
+            point = etree.SubElement(shape, qname("hc", f"pt{index}"))
+            point.set("x", str(x))
+            point.set("y", str(y))
+
+        size = etree.SubElement(shape, qname("hp", "sz"))
+        size.set("width", str(width))
+        size.set("widthRelTo", "ABSOLUTE")
+        size.set("height", str(height))
+        size.set("heightRelTo", "ABSOLUTE")
+        size.set("protect", "0")
+
+        position = etree.SubElement(shape, qname("hp", "pos"))
+        position.set("treatAsChar", "1" if treat_as_char else "0")
+        position.set("affectLSpacing", "0")
+        position.set("flowWithText", "1")
+        position.set("allowOverlap", "0")
+        position.set("holdAnchorAndSO", "0")
+        position.set("vertRelTo", "PARA")
+        position.set("horzRelTo", "COLUMN")
+        position.set("vertAlign", "TOP")
+        position.set("horzAlign", "LEFT")
+        position.set("vertOffset", "0")
+        position.set("horzOffset", "0")
+
+        out_margin = etree.SubElement(shape, qname("hp", "outMargin"))
+        for key in ("left", "right", "top", "bottom"):
+            out_margin.set(key, "0")
+        _set_graphic_layout(
+            shape,
+            text_wrap=text_wrap,
+            text_flow=text_flow,
+            treat_as_char=treat_as_char,
+            affect_line_spacing=affect_line_spacing,
+            flow_with_text=flow_with_text,
+            allow_overlap=allow_overlap,
+            hold_anchor_and_so=hold_anchor_and_so,
+            vert_rel_to=vert_rel_to,
+            horz_rel_to=horz_rel_to,
+            vert_align=vert_align,
+            horz_align=horz_align,
+            vert_offset=vert_offset,
+            horz_offset=horz_offset,
+        )
+        _set_margin_values(
+            shape,
+            "./hp:outMargin",
+            left=out_margin_left,
+            right=out_margin_right,
+            top=out_margin_top,
+            bottom=out_margin_bottom,
+        )
+
+        if shape_comment:
+            comment = etree.SubElement(shape, qname("hp", "shapeComment"))
+            comment.text = shape_comment
+
+        section = self._append_control(section_index, paragraph_index, shape, char_pr_id=char_pr_id)
+        return ShapeObject(self, section, shape)
+
+    def append_ole(
+        self,
+        name: str,
+        data: bytes,
+        *,
+        section_index: int = 0,
+        paragraph_index: int | None = None,
+        char_pr_id: str | None = None,
+        media_type: str = "application/ole",
+        manifest_id: str | None = None,
+        width: int = 42001,
+        height: int = 13501,
+        original_width: int | None = None,
+        original_height: int | None = None,
+        current_width: int = 0,
+        current_height: int = 0,
+        treat_as_char: bool = False,
+        shape_comment: str | None = None,
+        object_type: str = "EMBEDDED",
+        has_moniker: bool = False,
+        draw_aspect: str = "CONTENT",
+        eq_baseline: int = 0,
+        text_wrap: str = "SQUARE",
+        text_flow: str = "BOTH_SIDES",
+        affect_line_spacing: bool = False,
+        flow_with_text: bool = True,
+        allow_overlap: bool = False,
+        hold_anchor_and_so: bool = False,
+        vert_rel_to: str = "PARA",
+        horz_rel_to: str = "COLUMN",
+        vert_align: str = "TOP",
+        horz_align: str = "LEFT",
+        vert_offset: int = 0,
+        horz_offset: int = 0,
+        out_margin_left: int = 0,
+        out_margin_right: int = 0,
+        out_margin_top: int = 0,
+        out_margin_bottom: int = 0,
+    ) -> OleObject:
+        self._ensure_editable_sections()
+        if width < 1 or height < 1:
+            raise ValueError("width and height must be positive.")
+
+        resolved_manifest_id = manifest_id or self.content_hpf.next_manifest_id(PurePosixPath(name).stem or "ole")
+        self.add_or_replace_binary(
+            name,
+            data,
+            media_type=media_type,
+            manifest_id=resolved_manifest_id,
+            is_embedded=False,
+        )
+
+        resolved_original_width = original_width or width
+        resolved_original_height = original_height or height
+
+        ole = etree.Element(qname("hp", "ole"))
+        ole.set("id", self._next_control_number(_graphic_attribute_xpath("id")))
+        ole.set("zOrder", self._next_control_number(_graphic_attribute_xpath("zOrder")))
+        ole.set("numberingType", "PICTURE")
+        ole.set("textWrap", text_wrap)
+        ole.set("textFlow", text_flow)
+        ole.set("lock", "0")
+        ole.set("dropcapstyle", "None")
+        ole.set("href", "")
+        ole.set("groupLevel", "0")
+        ole.set("instid", self._next_control_number(_graphic_attribute_xpath("instid")))
+        ole.set("objectType", object_type)
+        ole.set("binaryItemIDRef", resolved_manifest_id)
+        ole.set("hasMoniker", "1" if has_moniker else "0")
+        ole.set("drawAspect", draw_aspect)
+        ole.set("eqBaseLine", str(eq_baseline))
+
+        offset = etree.SubElement(ole, qname("hp", "offset"))
+        offset.set("x", "0")
+        offset.set("y", "0")
+
+        original_size = etree.SubElement(ole, qname("hp", "orgSz"))
+        original_size.set("width", str(resolved_original_width))
+        original_size.set("height", str(resolved_original_height))
+
+        current_size = etree.SubElement(ole, qname("hp", "curSz"))
+        current_size.set("width", str(current_width))
+        current_size.set("height", str(current_height))
+
+        flip = etree.SubElement(ole, qname("hp", "flip"))
+        flip.set("horizontal", "0")
+        flip.set("vertical", "0")
+
+        rotation = etree.SubElement(ole, qname("hp", "rotationInfo"))
+        rotation.set("angle", "0")
+        rotation.set("centerX", str(width // 2))
+        rotation.set("centerY", str(height // 2))
+        rotation.set("rotateimage", "1")
+
+        rendering = etree.SubElement(ole, qname("hp", "renderingInfo"))
+        self._append_identity_matrix(rendering, "transMatrix")
+        self._append_identity_matrix(rendering, "scaMatrix")
+        self._append_identity_matrix(rendering, "rotMatrix")
+
+        extent = etree.SubElement(ole, qname("hc", "extent"))
+        extent.set("x", str(width))
+        extent.set("y", str(height))
+
+        line_shape = etree.SubElement(ole, qname("hp", "lineShape"))
+        line_shape.set("color", "#000000")
+        line_shape.set("width", "0")
+        line_shape.set("style", "NONE")
+        line_shape.set("endCap", "ROUND")
+        line_shape.set("headStyle", "NORMAL")
+        line_shape.set("tailStyle", "NORMAL")
+        line_shape.set("headfill", "0")
+        line_shape.set("tailfill", "0")
+        line_shape.set("headSz", "SMALL_SMALL")
+        line_shape.set("tailSz", "SMALL_SMALL")
+        line_shape.set("outlineStyle", "OUTER")
+        line_shape.set("alpha", "0")
+
+        size = etree.SubElement(ole, qname("hp", "sz"))
+        size.set("width", str(width))
+        size.set("widthRelTo", "ABSOLUTE")
+        size.set("height", str(height))
+        size.set("heightRelTo", "ABSOLUTE")
+        size.set("protect", "0")
+
+        position = etree.SubElement(ole, qname("hp", "pos"))
+        position.set("treatAsChar", "1" if treat_as_char else "0")
+        position.set("affectLSpacing", "0")
+        position.set("flowWithText", "1")
+        position.set("allowOverlap", "0")
+        position.set("holdAnchorAndSO", "0")
+        position.set("vertRelTo", "PARA")
+        position.set("horzRelTo", "COLUMN")
+        position.set("vertAlign", "TOP")
+        position.set("horzAlign", "LEFT")
+        position.set("vertOffset", "0")
+        position.set("horzOffset", "0")
+
+        out_margin = etree.SubElement(ole, qname("hp", "outMargin"))
+        for key in ("left", "right", "top", "bottom"):
+            out_margin.set(key, "0")
+
+        _set_graphic_layout(
+            ole,
+            text_wrap=text_wrap,
+            text_flow=text_flow,
+            treat_as_char=treat_as_char,
+            affect_line_spacing=affect_line_spacing,
+            flow_with_text=flow_with_text,
+            allow_overlap=allow_overlap,
+            hold_anchor_and_so=hold_anchor_and_so,
+            vert_rel_to=vert_rel_to,
+            horz_rel_to=horz_rel_to,
+            vert_align=vert_align,
+            horz_align=horz_align,
+            vert_offset=vert_offset,
+            horz_offset=horz_offset,
+        )
+        _set_margin_values(
+            ole,
+            "./hp:outMargin",
+            left=out_margin_left,
+            right=out_margin_right,
+            top=out_margin_top,
+            bottom=out_margin_bottom,
+        )
+
+        if shape_comment:
+            comment = etree.SubElement(ole, qname("hp", "shapeComment"))
+            comment.text = shape_comment
+
+        section = self._append_control(section_index, paragraph_index, ole, char_pr_id=char_pr_id)
+        return OleObject(self, section, ole)
 
     def append_bookmark(
         self,
@@ -1512,6 +2648,7 @@ class HwpxDocument:
             line_seg[0].addprevious(run)
         else:
             paragraph.append(run)
+        _invalidate_paragraph_layout(paragraph)
         return run
 
     def _default_char_pr_id(self, paragraph: etree._Element) -> str:
@@ -1521,6 +2658,112 @@ class HwpxDocument:
             if value is not None:
                 return value
         return "0"
+
+    def _append_control(
+        self,
+        section_index: int,
+        paragraph_index: int | None,
+        control_element: etree._Element,
+        *,
+        char_pr_id: str | None = None,
+    ):
+        paragraph = self._resolve_paragraph_for_insert(section_index=section_index, paragraph_index=paragraph_index)
+        run = self._append_run(paragraph, char_pr_id=char_pr_id)
+        ctrl = etree.SubElement(run, qname("hp", "ctrl"))
+        ctrl.append(control_element)
+        section = self.sections[section_index]
+        section.mark_modified()
+        return section
+
+    def _build_header_footer_block(
+        self,
+        kind: str,
+        *,
+        text: str,
+        char_pr_id: str | None = None,
+        apply_page_type: str = "BOTH",
+    ) -> etree._Element:
+        block = etree.Element(qname("hp", kind))
+        block.set("id", self._next_control_number(".//hp:header/@id | .//hp:footer/@id"))
+        block.set("applyPageType", apply_page_type)
+        block.append(self._build_sublist_with_text(text, char_pr_id=char_pr_id, vertical_align="TOP"))
+        return block
+
+    def _build_sublist_with_text(
+        self,
+        text: str,
+        *,
+        char_pr_id: str | None = None,
+        vertical_align: str = "CENTER",
+    ) -> etree._Element:
+        sublist = etree.Element(qname("hp", "subList"))
+        sublist.set("id", "")
+        sublist.set("textDirection", "HORIZONTAL")
+        sublist.set("lineWrap", "BREAK")
+        sublist.set("vertAlign", vertical_align)
+        sublist.set("linkListIDRef", "0")
+        sublist.set("linkListNextIDRef", "0")
+        sublist.set("textWidth", "0")
+        sublist.set("textHeight", "0")
+        sublist.set("hasTextRef", "0")
+        sublist.set("hasNumRef", "0")
+
+        paragraph = etree.SubElement(sublist, qname("hp", "p"))
+        paragraph.set("id", self._next_control_number(".//hp:p/@id"))
+        paragraph.set("paraPrIDRef", "0")
+        paragraph.set("styleIDRef", "0")
+        paragraph.set("pageBreak", "0")
+        paragraph.set("columnBreak", "0")
+        paragraph.set("merged", "0")
+
+        run = etree.SubElement(paragraph, qname("hp", "run"))
+        run.set("charPrIDRef", char_pr_id or "0")
+        text_node = etree.SubElement(run, qname("hp", "t"))
+        text_node.text = text
+        return sublist
+
+    def _ensure_header_collection(self, expression: str, tag_name: str) -> etree._Element:
+        nodes = self.header.root_element.xpath(expression, namespaces=NS)
+        if nodes:
+            return nodes[0]
+        ref_lists = self.header.root_element.xpath("./hh:refList", namespaces=NS)
+        if ref_lists:
+            ref_list = ref_lists[0]
+        else:
+            ref_list = etree.SubElement(self.header.root_element, qname("hh", "refList"))
+        collection = etree.SubElement(ref_list, qname("hh", tag_name))
+        collection.set("itemCnt", "0")
+        self.header.mark_modified()
+        return collection
+
+    def _clone_header_template(self, expression: str, *, template_id: str | None = None) -> etree._Element:
+        nodes = self.header.root_element.xpath(expression, namespaces=NS)
+        if not nodes:
+            raise ValueError(f"Header part does not contain a template for {expression}.")
+        if template_id is not None:
+            for node in nodes:
+                if node.get("id") == template_id:
+                    return etree.fromstring(etree.tostring(node))
+            raise KeyError(template_id)
+        return etree.fromstring(etree.tostring(nodes[0]))
+
+    def _next_header_numeric_id(self, expression: str) -> str:
+        highest = -1
+        for value in self.header.root_element.xpath(expression, namespaces=NS):
+            try:
+                highest = max(highest, int(value))
+            except (TypeError, ValueError):
+                continue
+        return str(highest + 1)
+
+    def _append_identity_matrix(self, parent: etree._Element, name: str) -> etree._Element:
+        return self._append_matrix(parent, name, e1="1", e2="0", e3="0", e4="0", e5="1", e6="0")
+
+    def _append_matrix(self, parent: etree._Element, name: str, **entries: str) -> etree._Element:
+        matrix = etree.SubElement(parent, qname("hc", name))
+        for key, value in entries.items():
+            matrix.set(key, value)
+        return matrix
 
     def _next_control_number(self, expression: str) -> str:
         highest = 0

@@ -1,0 +1,102 @@
+from __future__ import annotations
+
+from pathlib import Path
+
+import pytest
+
+from jakal_hwpx import HwpDocument, HwpDocumentProperties, HwpParagraphObject, HwpSection, HwpxDocument
+
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+HWP_SAMPLE_DIR = REPO_ROOT / "examples" / "samples" / "hwp"
+
+
+@pytest.fixture(scope="session")
+def sample_hwp_path() -> Path:
+    paths = sorted(HWP_SAMPLE_DIR.glob("*.hwp"))
+    assert paths, f"No .hwp samples were found under {HWP_SAMPLE_DIR}"
+    return paths[0]
+
+
+def test_hwp_document_exposes_object_model_for_sections_and_paragraphs(sample_hwp_path: Path) -> None:
+    document = HwpDocument.open(sample_hwp_path)
+
+    properties = document.document_properties()
+    assert isinstance(properties, HwpDocumentProperties)
+    assert properties.section_count >= 1
+
+    sections = document.sections()
+    assert sections
+    assert isinstance(sections[0], HwpSection)
+
+    paragraphs = sections[0].paragraphs()
+    assert paragraphs
+    assert isinstance(paragraphs[0], HwpParagraphObject)
+    assert any("2027" in paragraph.text for paragraph in paragraphs)
+
+
+def test_hwp_paragraph_object_can_replace_same_length_text_and_roundtrip(
+    sample_hwp_path: Path,
+    tmp_path: Path,
+) -> None:
+    document = HwpDocument.open(sample_hwp_path)
+    target = next(paragraph for paragraph in document.section(0).paragraphs() if "2027" in paragraph.text)
+
+    replacements = target.replace_text_same_length("2027", "2028", count=1)
+    assert replacements == 1
+
+    output_path = tmp_path / "object_model_roundtrip.hwp"
+    document.save(output_path)
+
+    reopened = HwpDocument.open(output_path)
+    assert "2028학년도" in reopened.get_document_text()
+
+
+def test_hwp_section_object_can_scope_same_length_replacements(sample_hwp_path: Path, tmp_path: Path) -> None:
+    document = HwpDocument.open(sample_hwp_path)
+    section = document.section(0)
+
+    replacements = section.replace_text_same_length("2027", "2029", count=1)
+    assert replacements == 1
+
+    output_path = tmp_path / "section_scope_roundtrip.hwp"
+    document.save(output_path)
+
+    reopened = HwpDocument.open(output_path)
+    assert "2029학년도" in reopened.get_document_text()
+
+
+def test_hwp_document_can_bridge_to_hwpx_high_level_api(
+    sample_hwp_path: Path,
+    sample_hwpx_path: Path,
+    tmp_path: Path,
+) -> None:
+    conversions: list[tuple[str, str, str]] = []
+
+    def fake_converter(input_path: str | Path, output_path: str | Path, output_format: str) -> Path:
+        source = Path(input_path)
+        target = Path(output_path)
+        conversions.append((str(source), str(target), output_format))
+        if output_format == "HWPX":
+            target.write_bytes(sample_hwpx_path.read_bytes())
+        elif output_format == "HWP":
+            target.write_bytes(sample_hwp_path.read_bytes())
+        else:
+            raise AssertionError(output_format)
+        return target
+
+    document = HwpDocument.open(sample_hwp_path, converter=fake_converter)
+    bridge = document.to_hwpx_document()
+    assert isinstance(bridge, HwpxDocument)
+    assert document.metadata().title == bridge.metadata().title
+
+    output_hwpx = tmp_path / "bridged.hwpx"
+    document.save(output_hwpx)
+    assert output_hwpx.exists()
+
+    output_hwp = tmp_path / "bridged.hwp"
+    document.append_paragraph("Bridge paragraph")
+    document.save(output_hwp)
+    assert output_hwp.exists()
+    assert any(item[2] == "HWPX" for item in conversions)
+    assert any(item[2] == "HWP" for item in conversions)

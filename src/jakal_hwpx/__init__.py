@@ -7,6 +7,7 @@ from .elements import (
     Field,
     HeaderFooterBlock,
     Note,
+    OleObject,
     ParagraphStyle,
     Picture,
     SectionSettings,
@@ -15,7 +16,34 @@ from .elements import (
     Table,
     TableCell,
 )
-from .exceptions import HwpxError, HwpxValidationError, InvalidHwpxFileError, ValidationIssue
+from .exceptions import (
+    HancomInteropError,
+    HwpBinaryEditError,
+    HwpxError,
+    HwpxValidationError,
+    InvalidHwpFileError,
+    InvalidHwpxFileError,
+    ValidationIssue,
+)
+from .hwp_collection import (
+    HwpDonorSummary,
+    find_best_combo_donor,
+    find_best_hyperlink_donor,
+    find_best_picture_donor,
+    find_best_table_donor,
+    scan_hwp_collection,
+)
+from .hwp_binary import HwpBinaryDocument, HwpBinaryFileHeader, HwpDocumentProperties, HwpParagraph, HwpRecord
+from .hwp_document import HwpDocument, HwpParagraphObject, HwpSection
+from .hwp_pure_profile import HwpPureProfile, append_feature_from_profile, build_hwp_pure_profile
+from .hwp_template_lab import (
+    HwpControlOccurrence,
+    HwpTemplateCandidate,
+    build_minimal_control_candidate,
+    find_control_occurrences,
+    pick_best_donor_for_feature,
+    run_template_lab,
+)
 from .parts import (
     BinaryDataPart,
     ContainerPart,
@@ -38,7 +66,7 @@ from .parts import (
 )
 from .xmlnode import HwpxXmlNode
 
-__version__ = "0.1.0b1"
+__version__ = "0.2.0"
 
 __all__ = [
     "BinaryDataPart",
@@ -54,17 +82,33 @@ __all__ = [
     "GenericBinaryPart",
     "GenericTextPart",
     "GenericXmlPart",
+    "HancomInteropError",
     "HeaderPart",
     "HeaderFooterBlock",
+    "HwpControlOccurrence",
+    "HwpDonorSummary",
+    "HwpBinaryDocument",
+    "HwpBinaryEditError",
+    "HwpBinaryFileHeader",
+    "HwpDocument",
+    "HwpDocumentProperties",
+    "HwpParagraphObject",
+    "HwpParagraph",
+    "HwpPureProfile",
+    "HwpRecord",
+    "HwpSection",
+    "HwpTemplateCandidate",
     "HwpxDocument",
     "HwpxError",
     "HwpxPart",
     "HwpxValidationError",
     "HwpxXmlNode",
+    "InvalidHwpFileError",
     "InvalidHwpxFileError",
     "ManifestPart",
     "MimetypePart",
     "Note",
+    "OleObject",
     "PreviewImagePart",
     "PreviewTextPart",
     "ParagraphStyle",
@@ -80,5 +124,16 @@ __all__ = [
     "VersionPart",
     "ValidationIssue",
     "XmlPart",
+    "append_feature_from_profile",
+    "build_minimal_control_candidate",
+    "build_hwp_pure_profile",
+    "find_best_hyperlink_donor",
+    "find_best_picture_donor",
+    "find_best_table_donor",
+    "find_best_combo_donor",
+    "find_control_occurrences",
+    "pick_best_donor_for_feature",
+    "run_template_lab",
+    "scan_hwp_collection",
     "__version__",
 ]

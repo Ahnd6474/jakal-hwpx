@@ -11,6 +11,18 @@ class InvalidHwpxFileError(HwpxError):
     pass
 
 
+class InvalidHwpFileError(HwpxError):
+    pass
+
+
+class HwpBinaryEditError(HwpxError):
+    pass
+
+
+class HancomInteropError(HwpxError):
+    pass
+
+
 @dataclass(frozen=True)
 class ValidationIssue:
     kind: str

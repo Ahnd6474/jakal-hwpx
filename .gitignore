@@ -4,7 +4,7 @@ all_hwpx_flat/
 manifests/
 scripts/
 /manifests/
-
+.artifacts/
 # Local build and temp artifacts
 .tmp/
 .codex-temp/
@@ -17,7 +17,7 @@ pytest-cache-files-*/
 .pytest_cache/
 .pytest-temp-*/
 .pytest-temp-validation-issue/
-
+.tmp_build/
 # Python cache
 __pycache__/
 *.py[cod]
@@ -27,3 +27,6 @@ __pycache__/
 .tox/
 *.egg-info/
 htmlcov/
+hard_case/
+scripts/
+hwp_collection/
