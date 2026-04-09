@@ -1,0 +1,129 @@
+{
+  "generated_at": "2026-04-09T21:07:07",
+  "corpus_dir": "D:\\GitHub\\jakal-hwpx\\examples\\samples\\hwpx",
+  "output_dir": "D:\\GitHub\\jakal-hwpx\\.artifacts\\pytest-run\\verify-20260409-210702\\test_showcase_bundle_script0\\showcase_output",
+  "documents": [
+    {
+      "name": "showcase_layout_headers",
+      "description": "Header, footer, page setup, paragraph insertion, and style batch editing.",
+      "source": "D:\\GitHub\\jakal-hwpx\\examples\\samples\\hwpx\\2026_오르비_보고서_수능치는아랴양_완성.hwpx",
+      "output": "D:\\GitHub\\jakal-hwpx\\.artifacts\\pytest-run\\verify-20260409-210702\\test_showcase_bundle_script0\\showcase_output\\showcase_layout_headers.hwpx",
+      "features": [
+        "header",
+        "footer",
+        "section_settings",
+        "paragraph",
+        "style_batch"
+      ],
+      "validations": {
+        "xml": [],
+        "reference": [],
+        "save_reopen": []
+      },
+      "notes": [
+        "Footer editing was skipped because the current corpus has no footer samples."
+      ]
+    },
+    {
+      "name": "showcase_table_picture",
+      "description": "Table cell updates, merged row editing, and picture metadata editing.",
+      "source": "D:\\GitHub\\jakal-hwpx\\examples\\samples\\hwpx\\2026_오르비_보고서_너재밍_완성.hwpx",
+      "output": "D:\\GitHub\\jakal-hwpx\\.artifacts\\pytest-run\\verify-20260409-210702\\test_showcase_bundle_script0\\showcase_output\\showcase_table_picture.hwpx",
+      "features": [
+        "table_editing",
+        "table_merge",
+        "picture_comment"
+      ],
+      "validations": {
+        "xml": [],
+        "reference": [],
+        "save_reopen": []
+      },
+      "notes": []
+    },
+    {
+      "name": "showcase_fields_references",
+      "description": "Bookmark, hyperlink, mail merge, formula, and cross-reference examples.",
+      "source": "D:\\GitHub\\jakal-hwpx\\examples\\samples\\hwpx\\2026_오르비_보고서_너재밍_완성.hwpx",
+      "output": "D:\\GitHub\\jakal-hwpx\\.artifacts\\pytest-run\\verify-20260409-210702\\test_showcase_bundle_script0\\showcase_output\\showcase_fields_references.hwpx",
+      "features": [
+        "bookmark",
+        "hyperlink",
+        "mailmerge",
+        "formula",
+        "cross_reference"
+      ],
+      "validations": {
+        "xml": [],
+        "reference": [],
+        "save_reopen": []
+      },
+      "notes": []
+    },
+    {
+      "name": "showcase_notes",
+      "description": "Footnote and endnote content editing.",
+      "source": "D:\\GitHub\\jakal-hwpx\\examples\\samples\\hwpx\\generated_feature_matrix.hwpx",
+      "output": "D:\\GitHub\\jakal-hwpx\\.artifacts\\pytest-run\\verify-20260409-210702\\test_showcase_bundle_script0\\showcase_output\\showcase_notes.hwpx",
+      "features": [
+        "footnote",
+        "endnote"
+      ],
+      "validations": {
+        "xml": [],
+        "reference": [],
+        "save_reopen": []
+      },
+      "notes": []
+    },
+    {
+      "name": "showcase_numbering",
+      "description": "Body-level automatic numbering update using hp:newNum.",
+      "source": "D:\\GitHub\\jakal-hwpx\\examples\\samples\\hwpx\\2026_오르비_보고서_수능치는아랴양_완성.hwpx",
+      "output": "D:\\GitHub\\jakal-hwpx\\.artifacts\\pytest-run\\verify-20260409-210702\\test_showcase_bundle_script0\\showcase_output\\showcase_numbering.hwpx",
+      "features": [
+        "newnum",
+        "automatic_numbering"
+      ],
+      "validations": {
+        "xml": [],
+        "reference": [],
+        "save_reopen": []
+      },
+      "notes": [
+        "Rendered footnote/endnote marker numbers are recomputed by the editor and are not forced by this demo."
+      ]
+    },
+    {
+      "name": "showcase_equation",
+      "description": "Equation script editing.",
+      "source": "D:\\GitHub\\jakal-hwpx\\examples\\samples\\hwpx\\generated_feature_matrix.hwpx",
+      "output": "D:\\GitHub\\jakal-hwpx\\.artifacts\\pytest-run\\verify-20260409-210702\\test_showcase_bundle_script0\\showcase_output\\showcase_equation.hwpx",
+      "features": [
+        "equation"
+      ],
+      "validations": {
+        "xml": [],
+        "reference": [],
+        "save_reopen": []
+      },
+      "notes": []
+    },
+    {
+      "name": "showcase_shapes",
+      "description": "Shape comment editing and textart text replacement when available.",
+      "source": "D:\\GitHub\\jakal-hwpx\\examples\\samples\\hwpx\\2026_오르비_보고서_수능치는아랴양_완성.hwpx",
+      "output": "D:\\GitHub\\jakal-hwpx\\.artifacts\\pytest-run\\verify-20260409-210702\\test_showcase_bundle_script0\\showcase_output\\showcase_shapes.hwpx",
+      "features": [
+        "shape",
+        "textart"
+      ],
+      "validations": {
+        "xml": [],
+        "reference": [],
+        "save_reopen": []
+      },
+      "notes": []
+    }
+  ]
+}

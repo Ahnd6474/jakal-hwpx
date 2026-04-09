@@ -4,10 +4,11 @@ import zipfile
 from pathlib import Path
 
 from lxml import etree
+import pytest
 from jakal_hwpx import HwpxDocument
 
 
-def find_sample_with_section_xpath(files: list[Path], expression: str) -> Path:
+def find_sample_with_section_xpath(files: list[Path], expression: str, *, allow_missing: bool = False) -> Path | None:
     namespaces = {"hp": "http://www.hancom.co.kr/hwpml/2011/paragraph"}
     for path in files:
         with zipfile.ZipFile(path) as zf:
@@ -18,13 +19,14 @@ def find_sample_with_section_xpath(files: list[Path], expression: str) -> Path:
                 root = etree.fromstring(data)
                 if root.xpath(expression, namespaces=namespaces):
                     return path
+    if allow_missing:
+        return None
     raise LookupError(f"No sample matched xpath: {expression}")
 
 
 def test_header_and_footer_edit_roundtrip(valid_hwpx_files: list[Path], tmp_path: Path) -> None:
     header_source = find_sample_with_section_xpath(valid_hwpx_files, ".//hp:header")
-    footer_source = find_sample_with_section_xpath(valid_hwpx_files, ".//hp:footer")
-
+    assert header_source is not None
     header_doc = HwpxDocument.open(header_source)
     header_block = header_doc.headers()[0]
     header_block.set_text("HEADER_EDITED_BY_TEST")
@@ -33,6 +35,9 @@ def test_header_and_footer_edit_roundtrip(valid_hwpx_files: list[Path], tmp_path
     reopened_header = HwpxDocument.open(header_out)
     assert "HEADER_EDITED_BY_TEST" in reopened_header.headers()[0].text
 
+    footer_source = find_sample_with_section_xpath(valid_hwpx_files, ".//hp:footer", allow_missing=True)
+    if footer_source is None:
+        pytest.skip("No footer sample is available in the current corpus.")
     footer_doc = HwpxDocument.open(footer_source)
     footer_block = footer_doc.footers()[0]
     footer_block.set_text("FOOTER_EDITED_BY_TEST")

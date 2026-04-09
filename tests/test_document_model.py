@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 from pathlib import Path
 
 from jakal_hwpx import BinaryDataPart, ContentHpfPart, HeaderPart, HwpxDocument, PreviewTextPart, SectionPart, ValidationIssue
@@ -91,6 +92,133 @@ def test_missing_preview_rootfile_reference_is_tolerated() -> None:
     document.container.ensure_rootfile("Preview/PrvText.txt", "text/plain")
 
     assert document.validation_errors() == []
+
+
+def test_append_table_picture_and_shape_roundtrip(tmp_path: Path) -> None:
+    document = HwpxDocument.blank()
+    image_bytes = base64.b64decode(
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO8B3ioAAAAASUVORK5CYII="
+    )
+
+    table = document.append_table(
+        2,
+        2,
+        cell_texts=[["A1", "B1"], ["A2", "B2"]],
+        section_index=0,
+    )
+    picture = document.append_picture(
+        "pixel.png",
+        image_bytes,
+        width=2400,
+        height=2400,
+        section_index=0,
+        shape_comment="Inserted picture",
+    )
+    shape = document.append_shape(
+        section_index=0,
+        text="Inserted shape",
+        width=8000,
+        height=2400,
+        shape_comment="Inserted shape comment",
+    )
+
+    assert table.cell(1, 1).text == "B2"
+    assert picture.binary_data() == image_bytes
+    assert shape.text == "Inserted shape"
+
+    output_path = tmp_path / "inserted_controls.hwpx"
+    document.save(output_path)
+
+    reopened = HwpxDocument.open(output_path)
+    reopened.validate()
+
+    reopened_table = reopened.tables()[0]
+    assert reopened_table.row_count == 2
+    assert reopened_table.column_count == 2
+    assert reopened_table.cell(0, 0).text == "A1"
+    assert reopened_table.cell(1, 1).text == "B2"
+
+    reopened_picture = reopened.pictures()[0]
+    assert reopened_picture.binary_data() == image_bytes
+    assert reopened_picture.shape_comment == "Inserted picture"
+
+    reopened_shape = reopened.shapes()[0]
+    assert reopened_shape.kind == "rect"
+    assert reopened_shape.text == "Inserted shape"
+    assert reopened_shape.shape_comment == "Inserted shape comment"
+
+
+def test_append_shape_supports_additional_kinds(tmp_path: Path) -> None:
+    document = HwpxDocument.blank()
+    document.append_shape(kind="line", section_index=0, width=4000, height=1000)
+    document.append_shape(kind="textart", section_index=0, text="Banner", width=7000, height=2200)
+    document.append_shape(kind="container", section_index=0, text="Group", width=6000, height=2000)
+
+    output_path = tmp_path / "extra_shapes.hwpx"
+    document.save(output_path)
+
+    reopened = HwpxDocument.open(output_path)
+    reopened.validate()
+
+    kinds = [shape.kind for shape in reopened.shapes()]
+    assert "line" in kinds
+    assert "textart" in kinds
+    assert "container" in kinds
+    assert any(shape.kind == "textart" and shape.text == "Banner" for shape in reopened.shapes())
+
+
+def test_append_header_footer_notes_number_equation_and_styles_roundtrip(tmp_path: Path) -> None:
+    document = HwpxDocument.blank()
+
+    para_style = document.append_paragraph_style(alignment_horizontal="CENTER", line_spacing=180)
+    char_style = document.append_character_style(text_color="#224466", height=1250)
+    style = document.append_style(
+        "Inserted Style",
+        english_name="Inserted Style",
+        para_pr_id=para_style.style_id,
+        char_pr_id=char_style.style_id,
+    )
+
+    document.append_header("Inserted header")
+    document.append_footer("Inserted footer")
+    document.append_footnote("Inserted footnote", number=1)
+    document.append_endnote("Inserted endnote", number=2)
+    document.append_auto_number(number=7, number_type="PAGE", kind="newNum")
+    document.append_auto_number(number=3, number_type="EQUATION", kind="autoNum")
+    document.append_equation("x=1+2", shape_comment="Inserted equation")
+    document.append_paragraph(
+        "Styled paragraph",
+        section_index=0,
+        style_id=style.style_id,
+        para_pr_id=para_style.style_id,
+        char_pr_id=char_style.style_id,
+    )
+
+    output_path = tmp_path / "inserted_missing_apis.hwpx"
+    document.save(output_path)
+
+    reopened = HwpxDocument.open(output_path)
+    reopened.validate()
+    assert reopened.reference_validation_errors() == []
+
+    assert reopened.headers()[0].text == "Inserted header"
+    assert reopened.footers()[0].text == "Inserted footer"
+    assert any(note.kind == "footNote" and note.text == "Inserted footnote" for note in reopened.notes())
+    assert any(note.kind == "endNote" and note.text == "Inserted endnote" for note in reopened.notes())
+    assert any(item.kind == "newNum" and item.number == "7" for item in reopened.auto_numbers())
+    assert any(item.kind == "autoNum" and item.number == "3" for item in reopened.auto_numbers())
+    assert reopened.equations()[0].script == "x=1+2"
+    assert reopened.equations()[0].shape_comment == "Inserted equation"
+
+    reopened_style = next(item for item in reopened.styles() if item.name == "Inserted Style")
+    reopened_para_style = reopened.get_paragraph_style(para_style.style_id or "")
+    reopened_char_style = reopened.get_character_style(char_style.style_id or "")
+    assert reopened_style.para_pr_id == para_style.style_id
+    assert reopened_style.char_pr_id == char_style.style_id
+    assert reopened_para_style.alignment_horizontal == "CENTER"
+    assert reopened_para_style.line_spacing == "180"
+    assert reopened_char_style.text_color == "#224466"
+    assert reopened_char_style.height == "1250"
 
 
 def test_validation_errors_return_structured_issues() -> None:

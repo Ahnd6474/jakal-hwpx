@@ -37,7 +37,7 @@ def valid_hwpx_files(corpus_dir: Path) -> list[Path]:
     return [path for path in sorted(corpus_dir.glob("*.hwpx")) if zipfile.is_zipfile(path)]
 
 
-def find_sample_with_section_xpath(files: list[Path], expression: str) -> Path:
+def find_sample_with_section_xpath(files: list[Path], expression: str, *, allow_missing: bool = False) -> Path | None:
     fallback: Path | None = None
     for path in files:
         with zipfile.ZipFile(path) as archive:
@@ -62,6 +62,8 @@ def find_sample_with_section_xpath(files: list[Path], expression: str) -> Path:
             return path
     if fallback is not None:
         return fallback
+    if allow_missing:
+        return None
     raise LookupError(f"No sample matched xpath: {expression}")
 
 
@@ -108,11 +110,16 @@ def finalize_document(
 
 
 def build_layout_showcase(files: list[Path], output_dir: Path) -> ShowcaseResult:
-    source = find_sample_with_section_xpath(files, ".//hp:header and .//hp:footer")
+    source = find_sample_with_section_xpath(files, ".//hp:header")
+    assert source is not None
     document = HwpxDocument.open(source)
+    notes: list[str] = []
 
     document.headers()[0].set_text("JAKAL HWPX SHOWCASE HEADER")
-    document.footers()[0].set_text("Generated from Python")
+    if document.footers():
+        document.footers()[0].set_text("Generated from Python")
+    else:
+        notes.append("Footer editing was skipped because the current corpus has no footer samples.")
     settings = document.section_settings(0)
     if settings.page_width:
         settings.set_page_size(width=settings.page_width + 200)
@@ -139,6 +146,7 @@ def build_layout_showcase(files: list[Path], output_dir: Path) -> ShowcaseResult
         source=source,
         output_path=output_dir / "showcase_layout_headers.hwpx",
         features=["header", "footer", "section_settings", "paragraph", "style_batch"],
+        notes=notes,
     )
 
 
@@ -190,12 +198,17 @@ def build_field_showcase(files: list[Path], output_dir: Path) -> ShowcaseResult:
 
 
 def build_notes_showcase(files: list[Path], output_dir: Path) -> ShowcaseResult:
-    source = find_sample_with_section_xpath(files, ".//hp:footNote and .//hp:endNote")
+    source = find_sample_with_section_xpath(files, ".//hp:footNote and .//hp:endNote", allow_missing=True) or files[0]
     document = HwpxDocument.open(source)
+    notes: list[str] = []
 
-    notes = document.notes()
-    notes[0].set_text("Footnote updated by Python.")
-    notes[1].set_text("Endnote updated by Python.")
+    document_notes = document.notes()
+    if len(document_notes) >= 2:
+        document_notes[0].set_text("Footnote updated by Python.")
+        document_notes[1].set_text("Endnote updated by Python.")
+    else:
+        document.append_paragraph("Footnote/endnote samples were not available in the current corpus.")
+        notes.append("This showcase falls back to a plain paragraph because the corpus has no footnote/endnote samples.")
 
     return finalize_document(
         document,
@@ -204,6 +217,7 @@ def build_notes_showcase(files: list[Path], output_dir: Path) -> ShowcaseResult:
         source=source,
         output_path=output_dir / "showcase_notes.hwpx",
         features=["footnote", "endnote"],
+        notes=notes,
     )
 
 

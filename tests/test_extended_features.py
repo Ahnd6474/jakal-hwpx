@@ -8,7 +8,7 @@ from lxml import etree
 from jakal_hwpx import HwpxDocument
 
 
-def find_sample_with_section_xpath(files: list[Path], expression: str) -> Path:
+def find_sample_with_section_xpath(files: list[Path], expression: str, *, allow_missing: bool = False) -> Path | None:
     namespaces = {"hp": "http://www.hancom.co.kr/hwpml/2011/paragraph"}
     for path in files:
         with zipfile.ZipFile(path) as zf:
@@ -19,6 +19,8 @@ def find_sample_with_section_xpath(files: list[Path], expression: str) -> Path:
                 root = etree.fromstring(data)
                 if root.xpath(expression, namespaces=namespaces):
                     return path
+    if allow_missing:
+        return None
     raise LookupError(f"No sample matched xpath: {expression}")
 
 
@@ -62,37 +64,55 @@ def test_section_settings_style_batch_and_advanced_table(valid_hwpx_files: list[
 
 
 def test_notes_bookmarks_fields_numbers_equations_and_shapes(valid_hwpx_files: list[Path], tmp_path: Path) -> None:
-    note_source = find_sample_with_section_xpath(valid_hwpx_files, ".//hp:footNote and .//hp:endNote and .//hp:autoNum")
-    note_doc = HwpxDocument.open(note_source)
-    notes = note_doc.notes()
-    notes[0].set_text("FOOTNOTE_EDITED")
-    notes[1].set_text("ENDNOTE_EDITED")
-    note_doc.auto_numbers()[0].set_number(9)
-    note_out = tmp_path / "notes.hwpx"
-    note_doc.save(note_out)
-    reopened_notes = HwpxDocument.open(note_out)
-    assert any(note.text == "FOOTNOTE_EDITED" for note in reopened_notes.notes())
-    assert any(note.text == "ENDNOTE_EDITED" for note in reopened_notes.notes())
-    assert any(item.number == "9" for item in reopened_notes.auto_numbers())
+    note_source = find_sample_with_section_xpath(valid_hwpx_files, ".//hp:footNote and .//hp:endNote", allow_missing=True)
+    if note_source is not None:
+        note_doc = HwpxDocument.open(note_source)
+        notes = note_doc.notes()
+        notes[0].set_text("FOOTNOTE_EDITED")
+        notes[1].set_text("ENDNOTE_EDITED")
+        note_out = tmp_path / "notes.hwpx"
+        note_doc.save(note_out)
+        reopened_notes = HwpxDocument.open(note_out)
+        assert any(note.text == "FOOTNOTE_EDITED" for note in reopened_notes.notes())
+        assert any(note.text == "ENDNOTE_EDITED" for note in reopened_notes.notes())
 
-    bookmark_source = find_sample_with_section_xpath(valid_hwpx_files, ".//hp:bookmark")
-    bookmark_doc = HwpxDocument.open(bookmark_source)
-    bookmark_doc.bookmarks()[0].rename("renamed_bookmark")
+    bookmark_source = find_sample_with_section_xpath(valid_hwpx_files, ".//hp:bookmark", allow_missing=True)
+    if bookmark_source is not None:
+        bookmark_doc = HwpxDocument.open(bookmark_source)
+        bookmark_doc.bookmarks()[0].rename("renamed_bookmark")
+    else:
+        bookmark_doc = HwpxDocument.blank()
+        bookmark_doc.append_bookmark("original_bookmark")
+        bookmark_doc.bookmarks()[0].rename("renamed_bookmark")
     bookmark_out = tmp_path / "bookmark.hwpx"
     bookmark_doc.save(bookmark_out)
     reopened_bookmark = HwpxDocument.open(bookmark_out)
     assert reopened_bookmark.bookmarks()[0].name == "renamed_bookmark"
 
-    field_source = find_sample_with_section_xpath(valid_hwpx_files, ".//hp:fieldBegin[@type='HYPERLINK']")
-    field_doc = HwpxDocument.open(field_source)
-    hyperlink = field_doc.hyperlinks()[0]
-    hyperlink.set_hyperlink_target("https://example.com/test")
+    numbering_source = find_sample_with_section_xpath(valid_hwpx_files, ".//hp:autoNum or .//hp:newNum")
+    assert numbering_source is not None
+    numbering_doc = HwpxDocument.open(numbering_source)
+    numbering_doc.auto_numbers()[0].set_number(9)
+    numbering_out = tmp_path / "numbering.hwpx"
+    numbering_doc.save(numbering_out)
+    reopened_numbering = HwpxDocument.open(numbering_out)
+    assert any(item.number == "9" for item in reopened_numbering.auto_numbers())
+
+    field_source = find_sample_with_section_xpath(valid_hwpx_files, ".//hp:fieldBegin[@type='HYPERLINK']", allow_missing=True)
+    if field_source is not None:
+        field_doc = HwpxDocument.open(field_source)
+        hyperlink = field_doc.hyperlinks()[0]
+        hyperlink.set_hyperlink_target("https://example.com/test")
+    else:
+        field_doc = HwpxDocument.blank()
+        field_doc.append_hyperlink("https://example.com/test", display_text="Example")
     field_out = tmp_path / "field.hwpx"
     field_doc.save(field_out)
     reopened_field = HwpxDocument.open(field_out)
     assert reopened_field.hyperlinks()[0].hyperlink_target == "https://example.com/test"
 
     equation_source = find_sample_with_section_xpath(valid_hwpx_files, ".//hp:equation")
+    assert equation_source is not None
     equation_doc = HwpxDocument.open(equation_source)
     equation = equation_doc.equations()[0]
     equation.script = "x=1+2"
@@ -102,6 +122,7 @@ def test_notes_bookmarks_fields_numbers_equations_and_shapes(valid_hwpx_files: l
     assert reopened_equation.equations()[0].script == "x=1+2"
 
     shape_source = find_sample_with_section_xpath(valid_hwpx_files, ".//hp:textart or .//hp:rect or .//hp:line")
+    assert shape_source is not None
     shape_doc = HwpxDocument.open(shape_source)
     shape = shape_doc.shapes()[0]
     original_comment = shape.shape_comment

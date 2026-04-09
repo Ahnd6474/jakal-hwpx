@@ -64,7 +64,7 @@ def _paragraphs_affected_by_text_edit(element: etree._Element) -> list[etree._El
     if ancestors:
         add(ancestors[0])
 
-    for paragraph in element.xpath(".//hp:p", namespaces=NS):
+    for paragraph in _paragraph_nodes(element):
         add(paragraph)
 
     return paragraphs
@@ -77,7 +77,13 @@ def _invalidate_paragraph_layout(element: etree._Element) -> None:
 
 
 def _paragraph_nodes(element: etree._Element) -> list[etree._Element]:
-    return list(element.xpath(".//hp:p", namespaces=NS))
+    if etree.QName(element).localname == "p":
+        return [element]
+
+    paragraphs = list(element.xpath("./hp:p", namespaces=NS))
+    for sublist in element.xpath("./hp:subList", namespaces=NS):
+        paragraphs.extend(sublist.xpath("./hp:p", namespaces=NS))
+    return paragraphs
 
 
 def _ensure_first_paragraph(element: etree._Element) -> etree._Element:
@@ -261,8 +267,8 @@ def _distribute_text_across_paragraphs(text: str, paragraphs: list[etree._Elemen
 
 def _set_text(element: etree._Element, text: str) -> None:
     paragraphs = _paragraph_nodes(element)
-    if paragraphs and (len(paragraphs) > 1 or "\n" in text):
-        parts = _distribute_text_across_paragraphs(text, paragraphs)
+    if paragraphs:
+        parts = _distribute_text_across_paragraphs(text, paragraphs) if (len(paragraphs) > 1 or "\n" in text) else [text]
         while len(paragraphs) < len(parts):
             template = paragraphs[-1] if paragraphs else _ensure_first_paragraph(element)
             clone = _clone_paragraph(template)
