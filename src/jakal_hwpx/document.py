@@ -17,6 +17,8 @@ from .elements import (
     _invalidate_paragraph_layout,
     _missing_preserved_tokens,
     _preserved_structure_signature,
+    _set_graphic_layout,
+    _set_margin_values,
     AutoNumber,
     Bookmark,
     CharacterStyle,
@@ -24,6 +26,7 @@ from .elements import (
     Field,
     HeaderFooterBlock,
     Note,
+    OleObject,
     ParagraphStyle,
     Picture,
     SectionSettings,
@@ -579,6 +582,14 @@ class HwpxDocument:
                 pictures.append(Picture(self, section, node))
         return pictures
 
+    def oles(self, section_index: int | None = None) -> list[OleObject]:
+        sections = self.sections if section_index is None else [self.sections[section_index]]
+        values: list[OleObject] = []
+        for section in sections:
+            for node in section.root_element.xpath(".//hp:ole", namespaces=NS):
+                values.append(OleObject(self, section, node))
+        return values
+
     def section_settings(self, section_index: int = 0) -> SectionSettings:
         self._ensure_editable_sections()
         nodes = self.sections[section_index].root_element.xpath("./hp:p[1]//hp:secPr[1]", namespaces=NS)
@@ -658,7 +669,10 @@ class HwpxDocument:
         for section in sections:
             for tag in shape_tags:
                 for node in section.root_element.xpath(f".//{tag}", namespaces=NS):
-                    values.append(ShapeObject(self, section, node))
+                    if etree.QName(node).localname == "ole":
+                        values.append(OleObject(self, section, node))
+                    else:
+                        values.append(ShapeObject(self, section, node))
         return values
 
     def styles(self) -> list[StyleDefinition]:
@@ -898,6 +912,7 @@ class HwpxDocument:
         *,
         media_type: str | None = None,
         manifest_id: str | None = None,
+        is_embedded: bool | int | str = True,
     ) -> BinaryDataPart:
         import mimetypes
 
@@ -914,11 +929,15 @@ class HwpxDocument:
             media_type = mimetypes.guess_type(normalized_name)[0] or "application/octet-stream"
         if manifest_id is None:
             manifest_id = self.content_hpf.next_manifest_id(PurePosixPath(normalized_name).stem or "bindata")
+        if isinstance(is_embedded, bool):
+            is_embedded_value: str | int | str = "1" if is_embedded else "0"
+        else:
+            is_embedded_value = is_embedded
         self.content_hpf.ensure_manifest_item(
             manifest_id,
             part_path,
             media_type,
-            isEmbeded="1",
+            isEmbeded=is_embedded_value,
         )
         return part
 
@@ -930,6 +949,7 @@ class HwpxDocument:
         paragraph_index: int | None = None,
         char_pr_id: str | None = None,
         apply_page_type: str = "BOTH",
+        hide_first: bool | None = None,
     ) -> HeaderFooterBlock:
         self._ensure_editable_sections()
         block = self._build_header_footer_block(
@@ -939,6 +959,8 @@ class HwpxDocument:
             apply_page_type=apply_page_type,
         )
         section = self._append_control(section_index, paragraph_index, block, char_pr_id=char_pr_id)
+        if hide_first is not None:
+            self.section_settings(section_index).set_visibility(hide_first_header=hide_first)
         return HeaderFooterBlock(self, section, block)
 
     def append_footer(
@@ -949,6 +971,7 @@ class HwpxDocument:
         paragraph_index: int | None = None,
         char_pr_id: str | None = None,
         apply_page_type: str = "BOTH",
+        hide_first: bool | None = None,
     ) -> HeaderFooterBlock:
         self._ensure_editable_sections()
         block = self._build_header_footer_block(
@@ -958,6 +981,8 @@ class HwpxDocument:
             apply_page_type=apply_page_type,
         )
         section = self._append_control(section_index, paragraph_index, block, char_pr_id=char_pr_id)
+        if hide_first is not None:
+            self.section_settings(section_index).set_visibility(hide_first_footer=hide_first)
         return HeaderFooterBlock(self, section, block)
 
     def append_note(
@@ -1067,6 +1092,22 @@ class HwpxDocument:
         text_color: str = "#000000",
         base_unit: int = 1100,
         font: str = "HYhwpEQ",
+        text_wrap: str = "TOP_AND_BOTTOM",
+        text_flow: str = "BOTH_SIDES",
+        affect_line_spacing: bool = False,
+        flow_with_text: bool = True,
+        allow_overlap: bool = False,
+        hold_anchor_and_so: bool = False,
+        vert_rel_to: str = "PARA",
+        horz_rel_to: str = "COLUMN",
+        vert_align: str = "TOP",
+        horz_align: str = "LEFT",
+        vert_offset: int = 0,
+        horz_offset: int = 0,
+        out_margin_left: int = 0,
+        out_margin_right: int = 0,
+        out_margin_top: int = 0,
+        out_margin_bottom: int = 0,
     ) -> Equation:
         self._ensure_editable_sections()
         if width < 1 or height < 1:
@@ -1110,6 +1151,30 @@ class HwpxDocument:
         out_margin = etree.SubElement(equation, qname("hp", "outMargin"))
         for key in ("left", "right", "top", "bottom"):
             out_margin.set(key, "0")
+        _set_graphic_layout(
+            equation,
+            text_wrap=text_wrap,
+            text_flow=text_flow,
+            treat_as_char=treat_as_char,
+            affect_line_spacing=affect_line_spacing,
+            flow_with_text=flow_with_text,
+            allow_overlap=allow_overlap,
+            hold_anchor_and_so=hold_anchor_and_so,
+            vert_rel_to=vert_rel_to,
+            horz_rel_to=horz_rel_to,
+            vert_align=vert_align,
+            horz_align=horz_align,
+            vert_offset=vert_offset,
+            horz_offset=horz_offset,
+        )
+        _set_margin_values(
+            equation,
+            "./hp:outMargin",
+            left=out_margin_left,
+            right=out_margin_right,
+            top=out_margin_top,
+            bottom=out_margin_bottom,
+        )
 
         if shape_comment:
             comment = etree.SubElement(equation, qname("hp", "shapeComment"))
@@ -1214,6 +1279,22 @@ class HwpxDocument:
         row_height: int = 1800,
         table_width: int | None = None,
         treat_as_char: bool = True,
+        text_wrap: str = "TOP_AND_BOTTOM",
+        text_flow: str = "BOTH_SIDES",
+        affect_line_spacing: bool = False,
+        flow_with_text: bool = True,
+        allow_overlap: bool = False,
+        hold_anchor_and_so: bool = False,
+        vert_rel_to: str = "PARA",
+        horz_rel_to: str = "COLUMN",
+        vert_align: str = "TOP",
+        horz_align: str = "LEFT",
+        vert_offset: int = 0,
+        horz_offset: int = 0,
+        out_margin_left: int = 0,
+        out_margin_right: int = 0,
+        out_margin_top: int = 0,
+        out_margin_bottom: int = 0,
     ) -> Table:
         self._ensure_editable_sections()
         if rows < 1 or columns < 1:
@@ -1264,6 +1345,30 @@ class HwpxDocument:
         out_margin = etree.SubElement(table, qname("hp", "outMargin"))
         for key in ("left", "right", "top", "bottom"):
             out_margin.set(key, "0")
+        _set_graphic_layout(
+            table,
+            text_wrap=text_wrap,
+            text_flow=text_flow,
+            treat_as_char=treat_as_char,
+            affect_line_spacing=affect_line_spacing,
+            flow_with_text=flow_with_text,
+            allow_overlap=allow_overlap,
+            hold_anchor_and_so=hold_anchor_and_so,
+            vert_rel_to=vert_rel_to,
+            horz_rel_to=horz_rel_to,
+            vert_align=vert_align,
+            horz_align=horz_align,
+            vert_offset=vert_offset,
+            horz_offset=horz_offset,
+        )
+        _set_margin_values(
+            table,
+            "./hp:outMargin",
+            left=out_margin_left,
+            right=out_margin_right,
+            top=out_margin_top,
+            bottom=out_margin_bottom,
+        )
 
         in_margin = etree.SubElement(table, qname("hp", "inMargin"))
         in_margin.set("left", "141")
@@ -1350,6 +1455,22 @@ class HwpxDocument:
         original_height: int | None = None,
         treat_as_char: bool = True,
         shape_comment: str | None = None,
+        text_wrap: str = "TOP_AND_BOTTOM",
+        text_flow: str = "BOTH_SIDES",
+        affect_line_spacing: bool = False,
+        flow_with_text: bool = True,
+        allow_overlap: bool = False,
+        hold_anchor_and_so: bool = False,
+        vert_rel_to: str = "PARA",
+        horz_rel_to: str = "COLUMN",
+        vert_align: str = "TOP",
+        horz_align: str = "LEFT",
+        vert_offset: int = 0,
+        horz_offset: int = 0,
+        out_margin_left: int = 0,
+        out_margin_right: int = 0,
+        out_margin_top: int = 0,
+        out_margin_bottom: int = 0,
     ) -> Picture:
         self._ensure_editable_sections()
         if width < 1 or height < 1:
@@ -1453,6 +1574,30 @@ class HwpxDocument:
         out_margin = etree.SubElement(picture, qname("hp", "outMargin"))
         for key in ("left", "right", "top", "bottom"):
             out_margin.set(key, "0")
+        _set_graphic_layout(
+            picture,
+            text_wrap=text_wrap,
+            text_flow=text_flow,
+            treat_as_char=treat_as_char,
+            affect_line_spacing=affect_line_spacing,
+            flow_with_text=flow_with_text,
+            allow_overlap=allow_overlap,
+            hold_anchor_and_so=hold_anchor_and_so,
+            vert_rel_to=vert_rel_to,
+            horz_rel_to=horz_rel_to,
+            vert_align=vert_align,
+            horz_align=horz_align,
+            vert_offset=vert_offset,
+            horz_offset=horz_offset,
+        )
+        _set_margin_values(
+            picture,
+            "./hp:outMargin",
+            left=out_margin_left,
+            right=out_margin_right,
+            top=out_margin_top,
+            bottom=out_margin_bottom,
+        )
 
         if shape_comment:
             comment = etree.SubElement(picture, qname("hp", "shapeComment"))
@@ -1475,6 +1620,22 @@ class HwpxDocument:
         shape_comment: str | None = None,
         fill_color: str = "#FFFFFF",
         line_color: str = "#000000",
+        text_wrap: str = "TOP_AND_BOTTOM",
+        text_flow: str = "BOTH_SIDES",
+        affect_line_spacing: bool = False,
+        flow_with_text: bool = True,
+        allow_overlap: bool = False,
+        hold_anchor_and_so: bool = False,
+        vert_rel_to: str = "PARA",
+        horz_rel_to: str = "COLUMN",
+        vert_align: str = "TOP",
+        horz_align: str = "LEFT",
+        vert_offset: int = 0,
+        horz_offset: int = 0,
+        out_margin_left: int = 0,
+        out_margin_right: int = 0,
+        out_margin_top: int = 0,
+        out_margin_bottom: int = 0,
     ) -> ShapeObject:
         self._ensure_editable_sections()
         supported_kinds = {"rect", "ellipse", "arc", "polygon", "curve", "connectLine", "line", "textart", "container"}
@@ -1623,6 +1784,30 @@ class HwpxDocument:
         out_margin = etree.SubElement(shape, qname("hp", "outMargin"))
         for key in ("left", "right", "top", "bottom"):
             out_margin.set(key, "0")
+        _set_graphic_layout(
+            shape,
+            text_wrap=text_wrap,
+            text_flow=text_flow,
+            treat_as_char=treat_as_char,
+            affect_line_spacing=affect_line_spacing,
+            flow_with_text=flow_with_text,
+            allow_overlap=allow_overlap,
+            hold_anchor_and_so=hold_anchor_and_so,
+            vert_rel_to=vert_rel_to,
+            horz_rel_to=horz_rel_to,
+            vert_align=vert_align,
+            horz_align=horz_align,
+            vert_offset=vert_offset,
+            horz_offset=horz_offset,
+        )
+        _set_margin_values(
+            shape,
+            "./hp:outMargin",
+            left=out_margin_left,
+            right=out_margin_right,
+            top=out_margin_top,
+            bottom=out_margin_bottom,
+        )
 
         if shape_comment:
             comment = etree.SubElement(shape, qname("hp", "shapeComment"))
@@ -1630,6 +1815,179 @@ class HwpxDocument:
 
         section = self._append_control(section_index, paragraph_index, shape, char_pr_id=char_pr_id)
         return ShapeObject(self, section, shape)
+
+    def append_ole(
+        self,
+        name: str,
+        data: bytes,
+        *,
+        section_index: int = 0,
+        paragraph_index: int | None = None,
+        char_pr_id: str | None = None,
+        media_type: str = "application/ole",
+        manifest_id: str | None = None,
+        width: int = 42001,
+        height: int = 13501,
+        original_width: int | None = None,
+        original_height: int | None = None,
+        current_width: int = 0,
+        current_height: int = 0,
+        treat_as_char: bool = False,
+        shape_comment: str | None = None,
+        object_type: str = "EMBEDDED",
+        has_moniker: bool = False,
+        draw_aspect: str = "CONTENT",
+        eq_baseline: int = 0,
+        text_wrap: str = "SQUARE",
+        text_flow: str = "BOTH_SIDES",
+        affect_line_spacing: bool = False,
+        flow_with_text: bool = True,
+        allow_overlap: bool = False,
+        hold_anchor_and_so: bool = False,
+        vert_rel_to: str = "PARA",
+        horz_rel_to: str = "COLUMN",
+        vert_align: str = "TOP",
+        horz_align: str = "LEFT",
+        vert_offset: int = 0,
+        horz_offset: int = 0,
+        out_margin_left: int = 0,
+        out_margin_right: int = 0,
+        out_margin_top: int = 0,
+        out_margin_bottom: int = 0,
+    ) -> OleObject:
+        self._ensure_editable_sections()
+        if width < 1 or height < 1:
+            raise ValueError("width and height must be positive.")
+
+        resolved_manifest_id = manifest_id or self.content_hpf.next_manifest_id(PurePosixPath(name).stem or "ole")
+        self.add_or_replace_binary(
+            name,
+            data,
+            media_type=media_type,
+            manifest_id=resolved_manifest_id,
+            is_embedded=False,
+        )
+
+        resolved_original_width = original_width or width
+        resolved_original_height = original_height or height
+
+        ole = etree.Element(qname("hp", "ole"))
+        ole.set("id", self._next_control_number(_graphic_attribute_xpath("id")))
+        ole.set("zOrder", self._next_control_number(_graphic_attribute_xpath("zOrder")))
+        ole.set("numberingType", "PICTURE")
+        ole.set("textWrap", text_wrap)
+        ole.set("textFlow", text_flow)
+        ole.set("lock", "0")
+        ole.set("dropcapstyle", "None")
+        ole.set("href", "")
+        ole.set("groupLevel", "0")
+        ole.set("instid", self._next_control_number(_graphic_attribute_xpath("instid")))
+        ole.set("objectType", object_type)
+        ole.set("binaryItemIDRef", resolved_manifest_id)
+        ole.set("hasMoniker", "1" if has_moniker else "0")
+        ole.set("drawAspect", draw_aspect)
+        ole.set("eqBaseLine", str(eq_baseline))
+
+        offset = etree.SubElement(ole, qname("hp", "offset"))
+        offset.set("x", "0")
+        offset.set("y", "0")
+
+        original_size = etree.SubElement(ole, qname("hp", "orgSz"))
+        original_size.set("width", str(resolved_original_width))
+        original_size.set("height", str(resolved_original_height))
+
+        current_size = etree.SubElement(ole, qname("hp", "curSz"))
+        current_size.set("width", str(current_width))
+        current_size.set("height", str(current_height))
+
+        flip = etree.SubElement(ole, qname("hp", "flip"))
+        flip.set("horizontal", "0")
+        flip.set("vertical", "0")
+
+        rotation = etree.SubElement(ole, qname("hp", "rotationInfo"))
+        rotation.set("angle", "0")
+        rotation.set("centerX", str(width // 2))
+        rotation.set("centerY", str(height // 2))
+        rotation.set("rotateimage", "1")
+
+        rendering = etree.SubElement(ole, qname("hp", "renderingInfo"))
+        self._append_identity_matrix(rendering, "transMatrix")
+        self._append_identity_matrix(rendering, "scaMatrix")
+        self._append_identity_matrix(rendering, "rotMatrix")
+
+        extent = etree.SubElement(ole, qname("hc", "extent"))
+        extent.set("x", str(width))
+        extent.set("y", str(height))
+
+        line_shape = etree.SubElement(ole, qname("hp", "lineShape"))
+        line_shape.set("color", "#000000")
+        line_shape.set("width", "0")
+        line_shape.set("style", "NONE")
+        line_shape.set("endCap", "ROUND")
+        line_shape.set("headStyle", "NORMAL")
+        line_shape.set("tailStyle", "NORMAL")
+        line_shape.set("headfill", "0")
+        line_shape.set("tailfill", "0")
+        line_shape.set("headSz", "SMALL_SMALL")
+        line_shape.set("tailSz", "SMALL_SMALL")
+        line_shape.set("outlineStyle", "OUTER")
+        line_shape.set("alpha", "0")
+
+        size = etree.SubElement(ole, qname("hp", "sz"))
+        size.set("width", str(width))
+        size.set("widthRelTo", "ABSOLUTE")
+        size.set("height", str(height))
+        size.set("heightRelTo", "ABSOLUTE")
+        size.set("protect", "0")
+
+        position = etree.SubElement(ole, qname("hp", "pos"))
+        position.set("treatAsChar", "1" if treat_as_char else "0")
+        position.set("affectLSpacing", "0")
+        position.set("flowWithText", "1")
+        position.set("allowOverlap", "0")
+        position.set("holdAnchorAndSO", "0")
+        position.set("vertRelTo", "PARA")
+        position.set("horzRelTo", "COLUMN")
+        position.set("vertAlign", "TOP")
+        position.set("horzAlign", "LEFT")
+        position.set("vertOffset", "0")
+        position.set("horzOffset", "0")
+
+        out_margin = etree.SubElement(ole, qname("hp", "outMargin"))
+        for key in ("left", "right", "top", "bottom"):
+            out_margin.set(key, "0")
+
+        _set_graphic_layout(
+            ole,
+            text_wrap=text_wrap,
+            text_flow=text_flow,
+            treat_as_char=treat_as_char,
+            affect_line_spacing=affect_line_spacing,
+            flow_with_text=flow_with_text,
+            allow_overlap=allow_overlap,
+            hold_anchor_and_so=hold_anchor_and_so,
+            vert_rel_to=vert_rel_to,
+            horz_rel_to=horz_rel_to,
+            vert_align=vert_align,
+            horz_align=horz_align,
+            vert_offset=vert_offset,
+            horz_offset=horz_offset,
+        )
+        _set_margin_values(
+            ole,
+            "./hp:outMargin",
+            left=out_margin_left,
+            right=out_margin_right,
+            top=out_margin_top,
+            bottom=out_margin_bottom,
+        )
+
+        if shape_comment:
+            comment = etree.SubElement(ole, qname("hp", "shapeComment"))
+            comment.text = shape_comment
+
+        section = self._append_control(section_index, paragraph_index, ole, char_pr_id=char_pr_id)
+        return OleObject(self, section, ole)
 
     def append_bookmark(
         self,

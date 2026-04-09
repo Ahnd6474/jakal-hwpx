@@ -6,6 +6,9 @@ from pathlib import Path
 from jakal_hwpx import BinaryDataPart, ContentHpfPart, HeaderPart, HwpxDocument, PreviewTextPart, SectionPart, ValidationIssue
 
 
+HEAD_NS = {"hh": "http://www.hancom.co.kr/hwpml/2011/head", "hc": "http://www.hancom.co.kr/hwpml/2011/core"}
+
+
 def test_open_exposes_expected_parts(sample_hwpx_path: Path) -> None:
     document = HwpxDocument.open(sample_hwpx_path)
 
@@ -105,6 +108,13 @@ def test_append_table_picture_and_shape_roundtrip(tmp_path: Path) -> None:
         2,
         cell_texts=[["A1", "B1"], ["A2", "B2"]],
         section_index=0,
+        treat_as_char=False,
+        vert_align="CENTER",
+        horz_align="RIGHT",
+        vert_offset=120,
+        horz_offset=240,
+        out_margin_left=10,
+        out_margin_right=20,
     )
     picture = document.append_picture(
         "pixel.png",
@@ -113,6 +123,16 @@ def test_append_table_picture_and_shape_roundtrip(tmp_path: Path) -> None:
         height=2400,
         section_index=0,
         shape_comment="Inserted picture",
+        treat_as_char=False,
+        allow_overlap=True,
+        vert_align="CENTER",
+        horz_align="RIGHT",
+        vert_offset=333,
+        horz_offset=444,
+        out_margin_left=11,
+        out_margin_right=22,
+        out_margin_top=33,
+        out_margin_bottom=44,
     )
     shape = document.append_shape(
         section_index=0,
@@ -120,6 +140,14 @@ def test_append_table_picture_and_shape_roundtrip(tmp_path: Path) -> None:
         width=8000,
         height=2400,
         shape_comment="Inserted shape comment",
+        treat_as_char=False,
+        allow_overlap=True,
+        vert_align="BOTTOM",
+        horz_align="CENTER",
+        vert_offset=555,
+        horz_offset=666,
+        out_margin_left=12,
+        out_margin_right=24,
     )
 
     assert table.cell(1, 1).text == "B2"
@@ -141,11 +169,22 @@ def test_append_table_picture_and_shape_roundtrip(tmp_path: Path) -> None:
     reopened_picture = reopened.pictures()[0]
     assert reopened_picture.binary_data() == image_bytes
     assert reopened_picture.shape_comment == "Inserted picture"
+    assert reopened_picture.layout()["treatAsChar"] == "0"
+    assert reopened_picture.layout()["allowOverlap"] == "1"
+    assert reopened_picture.layout()["vertAlign"] == "CENTER"
+    assert reopened_picture.layout()["horzOffset"] == "444"
+    assert reopened_picture.out_margins() == {"left": 11, "right": 22, "top": 33, "bottom": 44}
 
     reopened_shape = reopened.shapes()[0]
     assert reopened_shape.kind == "rect"
     assert reopened_shape.text == "Inserted shape"
     assert reopened_shape.shape_comment == "Inserted shape comment"
+    assert reopened_shape.layout()["treatAsChar"] == "0"
+    assert reopened_shape.layout()["allowOverlap"] == "1"
+    assert reopened_shape.layout()["vertAlign"] == "BOTTOM"
+    assert reopened_shape.layout()["horzAlign"] == "CENTER"
+    assert reopened_shape.out_margins()["left"] == 12
+    assert reopened_shape.out_margins()["right"] == 24
 
 
 def test_append_shape_supports_additional_kinds(tmp_path: Path) -> None:
@@ -171,21 +210,44 @@ def test_append_header_footer_notes_number_equation_and_styles_roundtrip(tmp_pat
     document = HwpxDocument.blank()
 
     para_style = document.append_paragraph_style(alignment_horizontal="CENTER", line_spacing=180)
+    para_style.set_margin(left=111, right=222, prev=333, next=444, intent=555)
+    para_style.set_break_setting(keep_with_next=True, keep_lines=True, page_break_before=True, line_wrap="BREAK")
     char_style = document.append_character_style(text_color="#224466", height=1250)
+    char_style.set_font_refs(hangul="1", latin="1")
+    char_style.set_relative_shape("spacing", hangul=5, latin=6)
+    char_style.set_relative_shape("ratio", hangul=95, latin=96)
+    char_style.set_relative_shape("offset", hangul=2, latin=3)
+    char_style.set_underline(underline_type="NONE", shape="SOLID", color="#224466")
     style = document.append_style(
         "Inserted Style",
         english_name="Inserted Style",
         para_pr_id=para_style.style_id,
         char_pr_id=char_style.style_id,
     )
+    style.configure(next_style_id=style.style_id, lang_id="1033", lock_form=True)
 
-    document.append_header("Inserted header")
-    document.append_footer("Inserted footer")
+    header = document.append_header("Inserted header", apply_page_type="EVEN", hide_first=True)
+    footer = document.append_footer("Inserted footer", apply_page_type="ODD", hide_first=False)
+    header.set_apply_page_type("BOTH")
+    footer.set_apply_page_type("EVEN")
     document.append_footnote("Inserted footnote", number=1)
     document.append_endnote("Inserted endnote", number=2)
     document.append_auto_number(number=7, number_type="PAGE", kind="newNum")
     document.append_auto_number(number=3, number_type="EQUATION", kind="autoNum")
-    document.append_equation("x=1+2", shape_comment="Inserted equation")
+    document.section_settings(0).set_margins(header=321, footer=654)
+    document.section_settings(0).set_visibility(hide_first_header=False, hide_first_footer=True)
+    document.append_equation(
+        "x=1+2",
+        shape_comment="Inserted equation",
+        treat_as_char=False,
+        allow_overlap=True,
+        vert_align="CENTER",
+        horz_align="RIGHT",
+        vert_offset=77,
+        horz_offset=88,
+        out_margin_left=13,
+        out_margin_right=26,
+    )
     document.append_paragraph(
         "Styled paragraph",
         section_index=0,
@@ -202,23 +264,42 @@ def test_append_header_footer_notes_number_equation_and_styles_roundtrip(tmp_pat
     assert reopened.reference_validation_errors() == []
 
     assert reopened.headers()[0].text == "Inserted header"
+    assert reopened.headers()[0].apply_page_type == "BOTH"
     assert reopened.footers()[0].text == "Inserted footer"
+    assert reopened.footers()[0].apply_page_type == "EVEN"
     assert any(note.kind == "footNote" and note.text == "Inserted footnote" for note in reopened.notes())
     assert any(note.kind == "endNote" and note.text == "Inserted endnote" for note in reopened.notes())
     assert any(item.kind == "newNum" and item.number == "7" for item in reopened.auto_numbers())
     assert any(item.kind == "autoNum" and item.number == "3" for item in reopened.auto_numbers())
     assert reopened.equations()[0].script == "x=1+2"
     assert reopened.equations()[0].shape_comment == "Inserted equation"
+    assert reopened.equations()[0].layout()["treatAsChar"] == "0"
+    assert reopened.equations()[0].layout()["allowOverlap"] == "1"
+    assert reopened.equations()[0].layout()["horzAlign"] == "RIGHT"
+    assert reopened.equations()[0].out_margins()["left"] == 13
+    assert reopened.section_settings(0).margins()["header"] == 321
+    assert reopened.section_settings(0).margins()["footer"] == 654
+    assert reopened.section_settings(0).visibility()["hideFirstHeader"] == "0"
+    assert reopened.section_settings(0).visibility()["hideFirstFooter"] == "1"
 
     reopened_style = next(item for item in reopened.styles() if item.name == "Inserted Style")
     reopened_para_style = reopened.get_paragraph_style(para_style.style_id or "")
     reopened_char_style = reopened.get_character_style(char_style.style_id or "")
     assert reopened_style.para_pr_id == para_style.style_id
     assert reopened_style.char_pr_id == char_style.style_id
+    assert reopened_style.element.get("nextStyleIDRef") == style.style_id
+    assert reopened_style.element.get("langID") == "1033"
+    assert reopened_style.element.get("lockForm") == "1"
     assert reopened_para_style.alignment_horizontal == "CENTER"
     assert reopened_para_style.line_spacing == "180"
+    assert reopened_para_style.element.xpath("./hh:margin/hc:left/@value", namespaces=HEAD_NS)[0] == "111"
+    assert reopened_para_style.element.xpath("./hh:breakSetting/@keepWithNext", namespaces=HEAD_NS)[0] == "1"
     assert reopened_char_style.text_color == "#224466"
     assert reopened_char_style.height == "1250"
+    assert reopened_char_style.element.xpath("./hh:fontRef/@hangul", namespaces=HEAD_NS)[0] == "1"
+    assert reopened_char_style.element.xpath("./hh:spacing/@hangul", namespaces=HEAD_NS)[0] == "5"
+    assert reopened_char_style.element.xpath("./hh:ratio/@hangul", namespaces=HEAD_NS)[0] == "95"
+    assert reopened_char_style.element.xpath("./hh:offset/@hangul", namespaces=HEAD_NS)[0] == "2"
 
 
 def test_validation_errors_return_structured_issues() -> None:
