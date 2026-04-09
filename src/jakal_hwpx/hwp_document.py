@@ -8,6 +8,7 @@ from typing import Callable
 from ._hancom import convert_document
 from .document import HwpxDocument
 from .hwp_binary import HwpBinaryDocument, HwpBinaryFileHeader, HwpDocumentProperties, HwpParagraph
+from .hwp_pure_profile import HwpPureProfile, append_feature_from_profile
 
 HancomConverter = Callable[[str | Path, str | Path, str], Path]
 
@@ -18,10 +19,23 @@ class HwpDocument:
         self._converter = converter or convert_document
         self._bridge_document: HwpxDocument | None = None
         self._bridge_temp_dir: Path | None = None
+        self._pure_profile: HwpPureProfile | None = None
 
     @classmethod
     def open(cls, path: str | Path, *, converter: HancomConverter | None = None) -> "HwpDocument":
         return cls(HwpBinaryDocument.open(path), converter=converter)
+
+    @classmethod
+    def blank_from_profile(
+        cls,
+        profile_root: str | Path,
+        *,
+        converter: HancomConverter | None = None,
+    ) -> "HwpDocument":
+        profile = HwpPureProfile.load(profile_root)
+        instance = cls(HwpBinaryDocument.open(profile.base_path), converter=converter)
+        instance._pure_profile = profile
+        return instance
 
     @property
     def source_path(self) -> Path:
@@ -110,6 +124,19 @@ class HwpDocument:
         self._binary_document = HwpBinaryDocument.open(target_path)
         return target_path
 
+    def load_pure_profile(self, profile_root: str | Path) -> HwpPureProfile:
+        self._pure_profile = HwpPureProfile.load(profile_root)
+        return self._pure_profile
+
+    def append_table_pure(self) -> None:
+        self._append_feature_pure("table")
+
+    def append_picture_pure(self) -> None:
+        self._append_feature_pure("picture")
+
+    def append_hyperlink_pure(self) -> None:
+        self._append_feature_pure("hyperlink")
+
     def __getattr__(self, name: str):
         if name.startswith("_"):
             raise AttributeError(name)
@@ -120,6 +147,11 @@ class HwpDocument:
         if self._bridge_temp_dir is None:
             self._bridge_temp_dir = Path(tempfile.mkdtemp(prefix="jakal_hwp_bridge_"))
         return self._bridge_temp_dir
+
+    def _append_feature_pure(self, feature: str) -> None:
+        if self._pure_profile is None:
+            raise RuntimeError("No pure profile is loaded. Use HwpDocument.blank_from_profile(...) or load_pure_profile(...).")
+        append_feature_from_profile(self._binary_document, self._pure_profile, feature)
 
 
 @dataclass(frozen=True)

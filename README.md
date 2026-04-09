@@ -59,6 +59,8 @@ doc.save("build/hello.hwpx")
 
 객체 기반 실험 API인 `HwpDocument`도 포함합니다. 이 레이어는 `HwpSection`, `HwpParagraphObject`를 통해 `.hwp` 문서를 `HwpxDocument`와 비슷한 방식으로 다루도록 맞춘 래퍼입니다. Windows에서 한컴오피스 자동화가 가능한 환경이라면 내부적으로 `.hwp -> .hwpx -> HwpxDocument` 브리지를 사용해 `tables()`, `pictures()`, `append_paragraph()`, `append_table()` 같은 고수준 API도 그대로 위임할 수 있습니다.
 
+Windows + Hancom automation 없이도 pure-python 실험 경로를 추가했습니다. `build_hwp_pure_profile()`는 `hwp_collection/`에서 `table + picture + hyperlink`가 함께 있는 donor를 골라 `base.hwp + feature templates`를 추출하고, `HwpDocument.blank_from_profile()`은 그 profile만으로 `append_table_pure()`, `append_picture_pure()`, `append_hyperlink_pure()`를 수행합니다.
+
 ```python
 from jakal_hwpx import HwpBinaryDocument, HwpDocument
 
@@ -76,6 +78,16 @@ doc = HwpDocument.open("input.hwp")
 doc.append_paragraph("Bridge paragraph")
 doc.append_hyperlink("https://example.com", display_text="Example")
 doc.save("build/edited_via_bridge.hwp")
+
+# Pure-python experimental path:
+from jakal_hwpx import HwpDocument, build_hwp_pure_profile
+
+profile = build_hwp_pure_profile("hwp_collection", "build/hwp_pure_profile")
+doc = HwpDocument.blank_from_profile(profile.root)
+doc.append_table_pure()
+doc.append_picture_pure()
+doc.append_hyperlink_pure()
+doc.save("build/pure_profile_output.hwp")
 ```
 
 ## 주요 API
@@ -131,6 +143,7 @@ doc.save("build/edited_via_bridge.hwp")
 - ZIP 기반 `HWPX` 패키지의 열기, 수정, 검증, 컴파일, 저장
 - legacy binary `.hwp` 파일의 저수준 열기, 스트림 파싱, 미리보기/본문 same-length 수정, 저장
 - Windows + Hancom automation 환경에서 `.hwp`의 high-level HWPX bridge editing
+- `hwp_collection` 기반 pure-python profile build 및 template-backed `append_table_pure()/append_picture_pure()/append_hyperlink_pure()`
 - `jakal_hwpx` top-level export를 통한 문서 편집 흐름
 
 비지원:

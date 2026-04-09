@@ -52,6 +52,20 @@ def find_best_hyperlink_donor(root: str | Path) -> HwpDonorSummary | None:
     return _pick_best(scan_hwp_collection(root), predicate=lambda item: item.has_hyperlink)
 
 
+def find_best_combo_donor(root: str | Path) -> HwpDonorSummary | None:
+    items = scan_hwp_collection(root)
+    candidates = [item for item in items if item.has_table and item.has_picture and item.has_hyperlink]
+    if not candidates:
+        return None
+    candidates.sort(
+        key=lambda item: (
+            -(item.control_counts.get("tbl ", 0) + item.tag_counts.get(85, 0) + item.control_counts.get("%hlk", 0)),
+            item.path.name,
+        )
+    )
+    return candidates[0]
+
+
 def _pick_best(items: list[HwpDonorSummary], *, predicate) -> HwpDonorSummary | None:
     candidates = [item for item in items if predicate(item)]
     if not candidates:

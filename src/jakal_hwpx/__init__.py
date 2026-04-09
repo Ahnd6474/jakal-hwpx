@@ -27,6 +27,7 @@ from .exceptions import (
 )
 from .hwp_collection import (
     HwpDonorSummary,
+    find_best_combo_donor,
     find_best_hyperlink_donor,
     find_best_picture_donor,
     find_best_table_donor,
@@ -34,6 +35,7 @@ from .hwp_collection import (
 )
 from .hwp_binary import HwpBinaryDocument, HwpBinaryFileHeader, HwpDocumentProperties, HwpParagraph, HwpRecord
 from .hwp_document import HwpDocument, HwpParagraphObject, HwpSection
+from .hwp_pure_profile import HwpPureProfile, append_feature_from_profile, build_hwp_pure_profile
 from .hwp_template_lab import (
     HwpControlOccurrence,
     HwpTemplateCandidate,
@@ -92,6 +94,7 @@ __all__ = [
     "HwpDocumentProperties",
     "HwpParagraphObject",
     "HwpParagraph",
+    "HwpPureProfile",
     "HwpRecord",
     "HwpSection",
     "HwpTemplateCandidate",
@@ -121,10 +124,13 @@ __all__ = [
     "VersionPart",
     "ValidationIssue",
     "XmlPart",
+    "append_feature_from_profile",
     "build_minimal_control_candidate",
+    "build_hwp_pure_profile",
     "find_best_hyperlink_donor",
     "find_best_picture_donor",
     "find_best_table_donor",
+    "find_best_combo_donor",
     "find_control_occurrences",
     "pick_best_donor_for_feature",
     "run_template_lab",
