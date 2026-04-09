@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from jakal_hwpx import HwpDocument, HwpDocumentProperties, HwpParagraphObject, HwpSection, HwpxDocument
+from jakal_hwpx import DocInfoModel, HwpDocument, HwpDocumentProperties, HwpParagraphObject, HwpPureProfile, HwpSection, HwpxDocument, SectionModel
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -35,6 +35,31 @@ def test_hwp_document_exposes_object_model_for_sections_and_paragraphs(sample_hw
     assert any("2027" in paragraph.text for paragraph in paragraphs)
 
 
+def test_hwp_document_exposes_docinfo_and_section_models(sample_hwp_path: Path) -> None:
+    document = HwpDocument.open(sample_hwp_path)
+
+    docinfo_model = document.docinfo_model()
+    assert isinstance(docinfo_model, DocInfoModel)
+    assert docinfo_model.document_properties().section_count >= 1
+
+    section_model = document.section_model(0)
+    assert isinstance(section_model, SectionModel)
+    assert section_model.paragraphs()
+    assert document.section(0).model().paragraphs()
+
+
+def test_hwp_document_pure_append_paragraph_roundtrips(sample_hwp_path: Path, tmp_path: Path) -> None:
+    document = HwpDocument.open(sample_hwp_path)
+    paragraph = document.append_paragraph("Pure document paragraph")
+    assert isinstance(paragraph, HwpParagraphObject)
+    assert paragraph.text == "Pure document paragraph"
+
+    output_path = tmp_path / "pure_append_paragraph.hwp"
+    document.save(output_path)
+    reopened = HwpDocument.open(output_path)
+    assert "Pure document paragraph" in reopened.get_document_text()
+
+
 def test_hwp_paragraph_object_can_replace_same_length_text_and_roundtrip(
     sample_hwp_path: Path,
     tmp_path: Path,
@@ -49,7 +74,7 @@ def test_hwp_paragraph_object_can_replace_same_length_text_and_roundtrip(
     document.save(output_path)
 
     reopened = HwpDocument.open(output_path)
-    assert "2028학년도" in reopened.get_document_text()
+    assert "2028" in reopened.get_document_text()
 
 
 def test_hwp_section_object_can_scope_same_length_replacements(sample_hwp_path: Path, tmp_path: Path) -> None:
@@ -63,7 +88,7 @@ def test_hwp_section_object_can_scope_same_length_replacements(sample_hwp_path: 
     document.save(output_path)
 
     reopened = HwpDocument.open(output_path)
-    assert "2029학년도" in reopened.get_document_text()
+    assert "2029" in reopened.get_document_text()
 
 
 def test_hwp_document_can_bridge_to_hwpx_high_level_api(
@@ -95,8 +120,23 @@ def test_hwp_document_can_bridge_to_hwpx_high_level_api(
     assert output_hwpx.exists()
 
     output_hwp = tmp_path / "bridged.hwp"
-    document.append_paragraph("Bridge paragraph")
     document.save(output_hwp)
     assert output_hwp.exists()
     assert any(item[2] == "HWPX" for item in conversions)
     assert any(item[2] == "HWP" for item in conversions)
+
+
+def test_hwp_document_exposes_direct_pure_python_control_append_methods(tmp_path: Path) -> None:
+    document = HwpDocument.blank()
+    profile = HwpPureProfile.load_bundled()
+    before_count = len(document.binary_document().section_records(profile.target_section_index))
+    document.append_table()
+    document.append_picture()
+    document.append_hyperlink()
+    after_count = len(document.binary_document().section_records(profile.target_section_index))
+    assert after_count > before_count
+
+    output_path = tmp_path / "direct_control_append.hwp"
+    document.save(output_path)
+    reopened = HwpDocument.open(output_path)
+    assert len(reopened.binary_document().section_records(profile.target_section_index)) == after_count

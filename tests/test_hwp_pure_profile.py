@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from jakal_hwpx import HwpBinaryDocument, HwpDocument, HwpPureProfile, build_hwp_pure_profile
+from jakal_hwpx import HwpBinaryDocument, HwpDocument, HwpPureProfile, build_hwp_pure_profile, bundled_hwp_profile_root
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -42,3 +42,19 @@ def test_hwp_document_blank_from_profile_can_append_pure_templates(tmp_path: Pat
     document.save(output_path)
     reopened = HwpBinaryDocument.open(output_path)
     assert len(reopened.section_records(loaded_profile.target_section_index)) == after_hyperlink_count
+
+
+def test_bundled_profile_supports_blank_document_and_auto_loaded_pure_append(tmp_path: Path) -> None:
+    bundled_root = bundled_hwp_profile_root()
+    assert (bundled_root / "profile.json").exists()
+
+    blank_document = HwpDocument.blank()
+    blank_document.append_table_pure()
+    blank_document.append_picture_pure()
+    blank_document.append_hyperlink_pure()
+
+    output_path = tmp_path / "bundled_blank_output.hwp"
+    blank_document.save(output_path)
+
+    reopened = HwpBinaryDocument.open(output_path)
+    assert reopened.section_records(HwpPureProfile.load_bundled().target_section_index)

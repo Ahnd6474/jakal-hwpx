@@ -7,7 +7,15 @@ from typing import Callable
 
 from ._hancom import convert_document
 from .document import HwpxDocument
-from .hwp_binary import HwpBinaryDocument, HwpBinaryFileHeader, HwpDocumentProperties, HwpParagraph
+from .hwp_binary import (
+    DocInfoModel,
+    HwpBinaryDocument,
+    HwpBinaryFileHeader,
+    HwpDocumentProperties,
+    HwpParagraph,
+    HwpStreamCapacity,
+    SectionModel,
+)
 from .hwp_pure_profile import HwpPureProfile, append_feature_from_profile
 
 HancomConverter = Callable[[str | Path, str | Path, str], Path]
@@ -20,6 +28,11 @@ class HwpDocument:
         self._bridge_document: HwpxDocument | None = None
         self._bridge_temp_dir: Path | None = None
         self._pure_profile: HwpPureProfile | None = None
+
+    @classmethod
+    def blank(cls, *, converter: HancomConverter | None = None) -> "HwpDocument":
+        instance = cls.blank_from_profile(HwpPureProfile.load_bundled().root, converter=converter)
+        return instance
 
     @classmethod
     def open(cls, path: str | Path, *, converter: HancomConverter | None = None) -> "HwpDocument":
@@ -50,8 +63,19 @@ class HwpDocument:
     def document_properties(self) -> HwpDocumentProperties:
         return self._binary_document.document_properties()
 
+    def docinfo_model(self) -> DocInfoModel:
+        return self._binary_document.docinfo_model()
+
     def list_stream_paths(self) -> list[str]:
         return self._binary_document.list_stream_paths()
+
+    def stream_capacity(self, path: str) -> HwpStreamCapacity:
+        data = self._binary_document.read_stream(path, decompress=self._binary_document._stream_is_compressed(path))
+        return self._binary_document.stream_capacity(
+            path,
+            data,
+            compress=self._binary_document._stream_is_compressed(path),
+        )
 
     def preview_text(self) -> str:
         return self._binary_document.preview_text()
@@ -64,6 +88,9 @@ class HwpDocument:
 
     def section(self, index: int) -> "HwpSection":
         return HwpSection(self, index)
+
+    def section_model(self, section_index: int = 0) -> SectionModel:
+        return self._binary_document.section_model(section_index)
 
     def paragraphs(self, section_index: int = 0) -> list["HwpParagraphObject"]:
         return self.section(section_index).paragraphs()
@@ -80,6 +107,42 @@ class HwpDocument:
         count: int = -1,
     ) -> int:
         return self._binary_document.replace_text_same_length(old, new, section_index=section_index, count=count)
+
+    def append_paragraph(
+        self,
+        text: str,
+        *,
+        section_index: int = 0,
+        para_shape_id: int = 0,
+        style_id: int = 0,
+        split_flags: int = 0,
+        control_mask: int = 0,
+    ) -> HwpParagraphObject:
+        self._invalidate_bridge()
+        paragraph = self._binary_document.append_paragraph(
+            text,
+            section_index=section_index,
+            para_shape_id=para_shape_id,
+            style_id=style_id,
+            split_flags=split_flags,
+            control_mask=control_mask,
+        )
+        return HwpParagraphObject(
+            self,
+            HwpParagraph(
+                index=paragraph.index,
+                section_index=paragraph.section_index,
+                char_count=paragraph.header.char_count,
+                control_mask=paragraph.header.control_mask,
+                para_shape_id=paragraph.header.para_shape_id,
+                style_id=paragraph.header.style_id,
+                split_flags=paragraph.header.split_flags,
+                raw_text=paragraph.raw_text,
+                text=paragraph.text,
+                text_record_offset=-1,
+                text_record_size=len(paragraph.raw_text.encode("utf-16-le")),
+            ),
+        )
 
     def to_hwpx_document(self, *, force_refresh: bool = False) -> HwpxDocument:
         if self._bridge_document is not None and not force_refresh:
@@ -128,14 +191,23 @@ class HwpDocument:
         self._pure_profile = HwpPureProfile.load(profile_root)
         return self._pure_profile
 
-    def append_table_pure(self) -> None:
+    def append_table(self) -> None:
         self._append_feature_pure("table")
 
-    def append_picture_pure(self) -> None:
+    def append_picture(self) -> None:
         self._append_feature_pure("picture")
 
-    def append_hyperlink_pure(self) -> None:
+    def append_hyperlink(self) -> None:
         self._append_feature_pure("hyperlink")
+
+    def append_table_pure(self) -> None:
+        self.append_table()
+
+    def append_picture_pure(self) -> None:
+        self.append_picture()
+
+    def append_hyperlink_pure(self) -> None:
+        self.append_hyperlink()
 
     def __getattr__(self, name: str):
         if name.startswith("_"):
@@ -149,9 +221,13 @@ class HwpDocument:
         return self._bridge_temp_dir
 
     def _append_feature_pure(self, feature: str) -> None:
+        self._invalidate_bridge()
         if self._pure_profile is None:
-            raise RuntimeError("No pure profile is loaded. Use HwpDocument.blank_from_profile(...) or load_pure_profile(...).")
+            self._pure_profile = HwpPureProfile.load_bundled()
         append_feature_from_profile(self._binary_document, self._pure_profile, feature)
+
+    def _invalidate_bridge(self) -> None:
+        self._bridge_document = None
 
 
 @dataclass(frozen=True)
@@ -168,8 +244,29 @@ class HwpSection:
     def records(self):
         return self.document.binary_document().section_records(self.index)
 
+    def model(self) -> SectionModel:
+        return self.document.binary_document().section_model(self.index)
+
     def replace_text_same_length(self, old: str, new: str, *, count: int = -1) -> int:
         return self.document.replace_text_same_length(old, new, section_index=self.index, count=count)
+
+    def append_paragraph(
+        self,
+        text: str,
+        *,
+        para_shape_id: int = 0,
+        style_id: int = 0,
+        split_flags: int = 0,
+        control_mask: int = 0,
+    ) -> "HwpParagraphObject":
+        return self.document.append_paragraph(
+            text,
+            section_index=self.index,
+            para_shape_id=para_shape_id,
+            style_id=style_id,
+            split_flags=split_flags,
+            control_mask=control_mask,
+        )
 
 
 class HwpParagraphObject:
