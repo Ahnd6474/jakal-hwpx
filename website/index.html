@@ -41,7 +41,7 @@
     .hero {
       background: linear-gradient(160deg, #0f172a 0%, #1e3a8a 65%, #2563eb 100%);
       color: #fff; text-align: center;
-      padding: 5rem 1.5rem 4rem;
+      padding: 3.5rem 1.5rem 3rem;
       position: relative; overflow: hidden;
     }
     .hero::before {
@@ -89,7 +89,7 @@
     .no-install-item { display: flex; align-items: center; gap: 0.4rem; font-size: 0.85rem; color: #86efac; }
 
     /* SECTION */
-    section { padding: 5rem 1.5rem; }
+    section { padding: 3.5rem 1.5rem; }
     .container { max-width: 1080px; margin: 0 auto; }
     .eyebrow {
       font-size: 0.72rem; font-weight: 700; letter-spacing: 0.12em;
@@ -234,7 +234,7 @@
     /* CTA */
     .cta-section {
       background: linear-gradient(135deg, #0f172a, #1e3a8a);
-      color: #fff; text-align: center; padding: 5rem 1.5rem;
+      color: #fff; text-align: center; padding: 3.5rem 1.5rem;
     }
     .cta-section h2 { color: #fff; margin-bottom: 0.5rem; }
     .cta-section p { color: rgba(255,255,255,0.65); margin-bottom: 2rem; }
@@ -273,13 +273,10 @@
     설치 불필요 &middot; ChatGPT 프롬프트 한 줄
   </div>
   <h1>
-    양식 파일 올리고<br />
-    프롬프트 <em>한 줄</em> 추가<br />
-    그게 전부입니다
+    프롬프트 <em>한 줄</em> 추가
   </h1>
   <p class="hero-sub">
-    ChatGPT가 jakal-hwpx를 직접 설치하고, 문서를 채우고, 검증까지 해서 완성 파일을 줍니다.
-    코딩 지식 불필요.
+    ChatGPT가 jakal-hwpx를 직접 설치하고, 문서를 채우고, 검증까지 완료합니다.
   </p>
 
   <div class="no-install-strip">
@@ -299,23 +296,17 @@
 <section class="steps-section" id="how">
   <div class="container">
     <div class="eyebrow">사용법</div>
-    <h2>3단계, 그게 전부</h2>
+    <h2>ChatGPT에 프롬프트 한줄, 그게 전부</h2>
     <p class="sub">코딩 지식 없어도 됩니다. ChatGPT가 알아서 합니다.</p>
-    <div class="steps-flow">
+    <div class="steps-flow" style="grid-template-columns:repeat(3,1fr);">
       <div class="step-card">
         <div class="step-num">Step 1</div>
         <div class="step-icon">📎</div>
-        <div class="step-title">양식 파일 첨부</div>
-        <div class="step-desc">hwpx 양식 파일을 ChatGPT에 올립니다</div>
-      </div>
-      <div class="step-card">
-        <div class="step-num">Step 2</div>
-        <div class="step-icon">📄</div>
-        <div class="step-title">참고 자료 첨부</div>
-        <div class="step-desc">PDF, 텍스트 등 내용 참고 자료를 올립니다</div>
+        <div class="step-title">파일 첨부</div>
+        <div class="step-desc">hwpx 양식 파일 + PDF·텍스트 등 참고 자료를 ChatGPT에 올립니다</div>
       </div>
       <div class="step-card highlight">
-        <div class="step-num">Step 3 — 핵심</div>
+        <div class="step-num">Step 2 — 핵심</div>
         <div class="step-icon">💬</div>
         <div class="step-title">프롬프트 한 줄 추가</div>
         <div class="step-desc">원하는 내용을 입력하고 아래 한 줄을 붙여넣으세요</div>
@@ -330,18 +321,14 @@
     </div>
 
     <!-- FAQ strip -->
-    <div style="margin-top:2rem;display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:1rem;">
-      <div style="background:var(--green-bg);border:1.5px solid #86efac;border-radius:12px;padding:1rem 1.2rem;">
-        <div style="font-size:0.82rem;font-weight:700;color:var(--green-dark);margin-bottom:0.3rem;">Q. Python 설치해야 하나요?</div>
-        <div style="font-size:0.82rem;color:#166534;">아니요. ChatGPT 코드 실행 환경이 알아서 설치합니다.</div>
+    <div style="margin-top:2rem;display:flex;gap:1rem;flex-wrap:wrap;">
+      <div style="background:var(--green-bg);border:1.5px solid #86efac;border-radius:12px;padding:0.75rem 1.1rem;flex:1;min-width:200px;">
+        <span style="font-size:0.82rem;font-weight:700;color:var(--green-dark);">Q. Python·코드 직접 필요? </span>
+        <span style="font-size:0.82rem;color:#166534;">아니요. 프롬프트 한 줄이 전부입니다.</span>
       </div>
-      <div style="background:var(--green-bg);border:1.5px solid #86efac;border-radius:12px;padding:1rem 1.2rem;">
-        <div style="font-size:0.82rem;font-weight:700;color:var(--green-dark);margin-bottom:0.3rem;">Q. 코드를 직접 써야 하나요?</div>
-        <div style="font-size:0.82rem;color:#166534;">아니요. 프롬프트 한 줄 추가가 전부입니다.</div>
-      </div>
-      <div style="background:var(--green-bg);border:1.5px solid #86efac;border-radius:12px;padding:1rem 1.2rem;">
-        <div style="font-size:0.82rem;font-weight:700;color:var(--green-dark);margin-bottom:0.3rem;">Q. 어떤 플랜에서 되나요?</div>
-        <div style="font-size:0.82rem;color:#166534;">코드 실행(Code Interpreter)이 지원되는 ChatGPT 플랜.</div>
+      <div style="background:var(--green-bg);border:1.5px solid #86efac;border-radius:12px;padding:0.75rem 1.1rem;flex:1;min-width:200px;">
+        <span style="font-size:0.82rem;font-weight:700;color:var(--green-dark);">Q. 어떤 ChatGPT 플랜? </span>
+        <span style="font-size:0.82rem;color:#166534;">코드 실행(Code Interpreter)이 지원되는 플랜.</span>
       </div>
     </div>
   </div>
@@ -480,30 +467,12 @@
     </div>
 
     <!-- more examples -->
-    <div style="margin-top:2.5rem;">
-      <div style="font-size:0.88rem;font-weight:700;color:var(--gray-700);margin-bottom:1rem;">다른 사용 사례</div>
-      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:1rem;">
-        <div style="border:1px solid var(--gray-200);border-radius:10px;padding:0.9rem;background:var(--gray-50);">
-          <div style="font-size:1.2rem;margin-bottom:0.3rem;">📋</div>
-          <div style="font-size:0.85rem;font-weight:700;margin-bottom:0.2rem;">사회보장 신청서</div>
-          <div style="font-size:0.78rem;color:var(--gray-600);">공공서식 자동 입력</div>
-        </div>
-        <div style="border:1px solid var(--gray-200);border-radius:10px;padding:0.9rem;background:var(--gray-50);">
-          <div style="font-size:1.2rem;margin-bottom:0.3rem;">🎓</div>
-          <div style="font-size:0.85rem;font-weight:700;margin-bottom:0.2rem;">졸업논문 양식</div>
-          <div style="font-size:0.78rem;color:var(--gray-600);">표지·본문·참고문헌 자동 완성</div>
-        </div>
-        <div style="border:1px solid var(--gray-200);border-radius:10px;padding:0.9rem;background:var(--gray-50);">
-          <div style="font-size:1.2rem;margin-bottom:0.3rem;">🔢</div>
-          <div style="font-size:0.85rem;font-weight:700;margin-bottom:0.2rem;">수식 문서</div>
-          <div style="font-size:0.78rem;color:var(--gray-600);">평가원 수학 양식 수식 편집</div>
-        </div>
-        <div style="border:1px solid var(--gray-200);border-radius:10px;padding:0.9rem;background:var(--gray-50);">
-          <div style="font-size:1.2rem;margin-bottom:0.3rem;">📝</div>
-          <div style="font-size:0.85rem;font-weight:700;margin-bottom:0.2rem;">각종 보고서</div>
-          <div style="font-size:0.78rem;color:var(--gray-600);">오르비 보고서 등 자유 양식</div>
-        </div>
-      </div>
+    <div style="margin-top:2rem;display:flex;gap:0.75rem;flex-wrap:wrap;">
+      <div style="font-size:0.82rem;font-weight:600;color:var(--gray-600);margin-right:0.25rem;align-self:center;">사용 사례:</div>
+      <span style="background:var(--gray-100);border-radius:99px;padding:0.3rem 0.9rem;font-size:0.82rem;">📋 사회보장 신청서</span>
+      <span style="background:var(--gray-100);border-radius:99px;padding:0.3rem 0.9rem;font-size:0.82rem;">🎓 졸업논문 양식</span>
+      <span style="background:var(--gray-100);border-radius:99px;padding:0.3rem 0.9rem;font-size:0.82rem;">🔢 수식 문서</span>
+      <span style="background:var(--gray-100);border-radius:99px;padding:0.3rem 0.9rem;font-size:0.82rem;">📝 각종 보고서</span>
     </div>
   </div>
 </section>
