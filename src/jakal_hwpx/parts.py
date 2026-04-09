@@ -198,6 +198,7 @@ class XmlPart(HwpxPart):
             raise ValueError("old must be a non-empty string.")
         remaining = count
         replacements = 0
+        layout_invalidated = False
         for node in self._root.xpath(".//hp:t", namespaces=NS):
             current = node.text or ""
             if old not in current:
@@ -207,11 +208,15 @@ class XmlPart(HwpxPart):
             if changed:
                 node.text = updated
                 replacements += changed
+                _invalidate_paragraph_layout(node)
+                layout_invalidated = True
                 self.mark_modified()
                 if remaining >= 0:
                     remaining -= changed
                     if remaining <= 0:
                         break
+        if replacements and not layout_invalidated:
+            _invalidate_paragraph_layout(self._root)
         return replacements
 
 

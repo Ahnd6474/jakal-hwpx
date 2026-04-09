@@ -14,6 +14,7 @@ from pathlib import Path, PurePosixPath
 from lxml import etree
 
 from .elements import (
+    _invalidate_paragraph_layout,
     _missing_preserved_tokens,
     _preserved_structure_signature,
     AutoNumber,
@@ -1512,6 +1513,7 @@ class HwpxDocument:
             line_seg[0].addprevious(run)
         else:
             paragraph.append(run)
+        _invalidate_paragraph_layout(paragraph)
         return run
 
     def _default_char_pr_id(self, paragraph: etree._Element) -> str:

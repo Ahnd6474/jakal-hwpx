@@ -878,6 +878,7 @@ class Field:
             text_node = etree.SubElement(new_run, qname("hp", "t"))
             text_node.text = value
             end_run[0].addprevious(new_run)
+        _invalidate_paragraph_layout(paragraph[0])
         self.section.mark_modified()
 
     def configure_mail_merge(self, field_name: str, *, display_text: str | None = None) -> None:

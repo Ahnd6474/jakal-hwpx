@@ -42,6 +42,65 @@ def test_table_cell_text_edit_invalidates_linesegarray(valid_hwpx_files: list[Pa
     assert not reopened_cell.element.xpath(".//hp:p/hp:linesegarray", namespaces=NS)
 
 
+def test_replace_text_invalidates_linesegarray_in_table_cells(valid_hwpx_files: list[Path], tmp_path: Path) -> None:
+    source = find_sample_with_section_xpath(valid_hwpx_files, ".//hp:tc//hp:p[hp:linesegarray and .//hp:t]")
+    document = HwpxDocument.open(source)
+
+    target_paragraph = next(
+        paragraph
+        for section in document.sections
+        for paragraph in section.root_element.xpath(".//hp:tc//hp:p[hp:linesegarray and .//hp:t]", namespaces=NS)
+        if paragraph.xpath(".//hp:t/text()", namespaces=NS)
+    )
+    original_text = "".join(target_paragraph.xpath(".//hp:t/text()", namespaces=NS))
+    replacement = f"{original_text}_UPDATED"
+
+    changed = document.replace_text(original_text, replacement, count=1)
+
+    assert changed == 1
+    assert not target_paragraph.xpath("./hp:linesegarray", namespaces=NS)
+
+    output_path = tmp_path / "replace_text_layout_refresh.hwpx"
+    document.save(output_path)
+
+    reopened = HwpxDocument.open(output_path)
+    reopened_paragraph = next(
+        paragraph
+        for section in reopened.sections
+        for paragraph in section.root_element.xpath(".//hp:tc//hp:p", namespaces=NS)
+        if "".join(paragraph.xpath(".//hp:t/text()", namespaces=NS)) == replacement
+    )
+    assert not reopened_paragraph.xpath("./hp:linesegarray", namespaces=NS)
+
+
+def test_append_bookmark_invalidates_existing_paragraph_linesegarray() -> None:
+    document = HwpxDocument.blank()
+    paragraph = document.sections[0].root_element.xpath("./hp:p", namespaces=NS)[0]
+
+    text_run = etree.SubElement(paragraph, "{http://www.hancom.co.kr/hwpml/2011/paragraph}run")
+    text_run.set("charPrIDRef", "0")
+    etree.SubElement(text_run, "{http://www.hancom.co.kr/hwpml/2011/paragraph}t").text = "Anchor paragraph"
+    etree.SubElement(paragraph, "{http://www.hancom.co.kr/hwpml/2011/paragraph}linesegarray")
+
+    document.append_bookmark("bookmark-anchor", section_index=0, paragraph_index=0)
+
+    assert paragraph.xpath("./hp:run/hp:ctrl/hp:bookmark[@name='bookmark-anchor']", namespaces=NS)
+    assert not paragraph.xpath("./hp:linesegarray", namespaces=NS)
+
+
+def test_field_set_display_text_insertion_invalidates_linesegarray() -> None:
+    document = HwpxDocument.blank()
+    field = document.append_hyperlink("https://example.com", section_index=0, paragraph_index=0)
+    paragraph = field.element.xpath("ancestor::hp:p[1]", namespaces=NS)[0]
+
+    etree.SubElement(paragraph, "{http://www.hancom.co.kr/hwpml/2011/paragraph}linesegarray")
+
+    field.set_display_text("Inserted display text")
+
+    assert field.display_text == "Inserted display text"
+    assert not paragraph.xpath("./hp:linesegarray", namespaces=NS)
+
+
 def test_set_paragraph_text_preserves_section_properties(valid_hwpx_files: list[Path], tmp_path: Path) -> None:
     source = find_sample_with_section_xpath(valid_hwpx_files, "./hp:p[hp:run/hp:secPr]")
     document = HwpxDocument.open(source)
