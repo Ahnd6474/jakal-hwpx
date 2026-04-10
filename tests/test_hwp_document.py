@@ -381,53 +381,67 @@ def test_hwp_equation_and_shape_object_methods_can_modify_records(sample_hwp_pat
     assert reopened.shapes()[0].size()["height"] == original_size["height"] + 20
 
 
-def test_hwp_document_bridge_backed_append_methods_delegate_to_hwpx(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_hwp_document_append_methods_create_controls_without_bridge(tmp_path: Path) -> None:
     document = HwpDocument.blank()
-    bridge = HwpxDocument.blank()
-
-    def fake_mutate(mutate):
-        return mutate(bridge)
-
-    monkeypatch.setattr(document, "_mutate_via_hwpx", fake_mutate)
 
     document.append_field(field_type="DOCPROPERTY", display_text="FIELD-TEXT", name="Subject")
     document.append_equation("x+y=z")
     document.append_shape(kind="rect", text="SHAPE-TEXT", width=3600, height=1800)
     document.append_ole("embedded.ole", b"OLE-DATA")
 
-    assert len(bridge.fields()) == 1
-    assert bridge.fields()[0].field_type == "DOCPROPERTY"
-    assert bridge.fields()[0].display_text == "FIELD-TEXT"
-    assert len(bridge.equations()) == 1
-    assert bridge.equations()[0].script == "x+y=z"
-    assert any(shape.kind == "rect" and shape.text == "SHAPE-TEXT" for shape in bridge.shapes())
-    assert len(bridge.oles()) == 1
-    assert bridge.oles()[0].binary_item_id is not None
+    assert any(field.field_type == "%doc" for field in document.fields())
+    assert "FIELD-TEXT" in document.get_document_text()
+    assert any(equation.script == "x+y=z" for equation in document.equations())
+    assert any(shape.kind == "rect" and shape.size()["width"] == 3600 for shape in document.shapes())
+    assert len(document.oles()) == 1
+    assert any(path.endswith(".ole") for path in document.bindata_stream_paths())
+
+    output_path = tmp_path / "hwp_direct_append_controls.hwp"
+    document.save(output_path)
+    reopened = HwpDocument.open(output_path)
+    assert any(field.field_type == "%doc" for field in reopened.fields())
+    assert "FIELD-TEXT" in reopened.get_document_text()
+    assert any(equation.script == "x+y=z" for equation in reopened.equations())
+    assert any(shape.kind == "rect" and shape.size()["width"] == 3600 for shape in reopened.shapes())
+    assert len(reopened.oles()) == 1
 
 
-def test_hwp_section_append_helpers_forward_section_index(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_hwp_section_append_helpers_create_controls_in_target_section() -> None:
     document = HwpDocument.blank()
     section = document.section(0)
-    captured: dict[str, dict[str, object]] = {}
 
-    monkeypatch.setattr(document, "append_field", lambda **kwargs: captured.setdefault("field", kwargs))
-    monkeypatch.setattr(document, "append_equation", lambda script, **kwargs: captured.setdefault("equation", {"script": script, **kwargs}))
-    monkeypatch.setattr(document, "append_shape", lambda **kwargs: captured.setdefault("shape", kwargs))
-    monkeypatch.setattr(document, "append_ole", lambda name, data, **kwargs: captured.setdefault("ole", {"name": name, "data": data, **kwargs}))
+    section.append_field(field_type="DATE")
+    section.append_equation("a+b")
+    section.append_shape(kind="ellipse", text="SEC-SHAPE")
+    section.append_ole("sec.ole", b"section-ole")
 
-    section.append_field(field_type="DATE", paragraph_index=1)
-    section.append_equation("a+b", paragraph_index=2)
-    section.append_shape(kind="ellipse", text="SEC-SHAPE", paragraph_index=3)
-    section.append_ole("sec.ole", b"section-ole", paragraph_index=4)
+    assert any(field.field_type == "%dat" for field in section.fields())
+    assert any(equation.script == "a+b" for equation in section.equations())
+    assert any(shape.kind == "ellipse" for shape in section.shapes())
+    assert len(section.oles()) == 1
 
-    assert captured["field"]["section_index"] == 0
-    assert captured["field"]["field_type"] == "DATE"
-    assert captured["equation"]["section_index"] == 0
-    assert captured["equation"]["script"] == "a+b"
-    assert captured["shape"]["section_index"] == 0
-    assert captured["shape"]["kind"] == "ellipse"
-    assert captured["ole"]["section_index"] == 0
-    assert captured["ole"]["name"] == "sec.ole"
+
+def test_hwp_document_append_methods_support_paragraph_index() -> None:
+    document = HwpDocument.blank()
+    section = document.section(0)
+    section.append_paragraph("FIRST")
+    section.append_paragraph("SECOND")
+    section.append_paragraph("THIRD")
+
+    document.append_field(field_type="DOCPROPERTY", display_text="FIELD-MID", paragraph_index=1)
+    document.append_equation("EQ-MID", paragraph_index=2)
+    document.append_shape(kind="rect", text="SHAPE-MID", paragraph_index=3)
+    document.append_ole("OLE-MID", b"ole-mid", paragraph_index=4)
+
+    texts = [paragraph.text for paragraph in section.paragraphs()]
+    assert texts[0] == "FIRST"
+    assert "FIELD-MID" in texts[1]
+    assert texts[2] == "\r"
+    assert "SHAPE-MID" in texts[3]
+    assert "OLE-MID" in texts[4]
+    assert texts[5] == "SECOND"
+    assert texts[6] == "THIRD"
+    assert any(equation.paragraph_index == 2 for equation in document.equations() if equation.script == "EQ-MID")
 
 
 def test_hwp_table_object_can_append_row_and_roundtrip(tmp_path: Path) -> None:

@@ -124,6 +124,10 @@ DEFAULT_HWP_TABLE_CELL_WIDTH = 47341
 DEFAULT_HWP_TABLE_CELL_HEIGHT = 282
 DEFAULT_HWP_TABLE_BORDER_FILL_ID = 1
 DEFAULT_HWP_TABLE_CELL_MARGIN = (510, 510, 141, 141)
+DEFAULT_HWP_EQUATION_SCRIPT = "x+y"
+DEFAULT_HWP_SHAPE_TEXT = ""
+DEFAULT_HWP_SHAPE_WIDTH = 12000
+DEFAULT_HWP_SHAPE_HEIGHT = 3200
 
 _TABLE_TOP_PARA_HEADER_TAIL = bytes.fromhex("0008000019000000010000000100000000800000")
 _TABLE_TOP_PARA_TEXT = bytes.fromhex("0b00206c627400000000000000000b000d00")
@@ -161,6 +165,32 @@ _PICTURE_SHAPE_PICTURE = bytes.fromhex(
     "0000000000000000010000c00000000000000000b8b0000000000000b8b000009c810000000000009c81000000000000000000007cb0000024810000"
     "00000000000000000000000100"
 )
+
+
+def _build_control_id_payload(control_id: str) -> bytes:
+    normalized = control_id[:4].ljust(4)
+    return normalized.encode("latin1", errors="replace")[::-1]
+
+
+def _normalize_field_control_id(field_type: str) -> str:
+    stripped = field_type.strip()
+    if stripped.startswith("%"):
+        return stripped[:4].ljust(4)
+    alnum = "".join(character.lower() for character in stripped if character.isalnum())
+    if not alnum:
+        return "%fld"
+    return ("%" + alnum[:3]).ljust(4)
+
+
+def _build_equation_payload(script: str) -> bytes:
+    return b"\x00\x00\x00\x00" + f"* {script}".encode("utf-16-le")
+
+
+def _build_minimal_shape_component_payload(width: int, height: int) -> bytes:
+    payload = bytearray(28)
+    payload[20:24] = int(width).to_bytes(4, "little", signed=False)
+    payload[24:28] = int(height).to_bytes(4, "little", signed=False)
+    return bytes(payload)
 
 
 def _normalize_stream_path(path: str | tuple[str, ...] | list[str]) -> str:
@@ -1175,6 +1205,38 @@ class SectionModel:
             header=header,
         )
 
+    def insert_paragraph(
+        self,
+        paragraph_index: int,
+        text: str,
+        *,
+        para_shape_id: int = 0,
+        style_id: int = 0,
+        split_flags: int = 0,
+        control_mask: int = 0,
+    ) -> SectionParagraphModel:
+        current_paragraphs = self.paragraphs()
+        if paragraph_index < 0 or paragraph_index > len(current_paragraphs):
+            raise IndexError(f"paragraph_index {paragraph_index} is out of range for section {self.section_index}.")
+        header = ParagraphHeaderRecord(
+            level=0,
+            char_count=len(text),
+            control_mask=control_mask,
+            para_shape_id=para_shape_id,
+            style_id=style_id,
+            split_flags=split_flags,
+        )
+        header.add_child(ParagraphTextRecord(level=1, raw_text=text))
+        if paragraph_index == len(current_paragraphs):
+            self.roots.append(header)
+        else:
+            self.roots.insert(self.roots.index(current_paragraphs[paragraph_index].header), header)
+        return SectionParagraphModel(
+            section_index=self.section_index,
+            index=paragraph_index,
+            header=header,
+        )
+
     def to_records(self) -> list[HwpRecord]:
         return flatten_record_tree(self.roots)
 
@@ -1498,6 +1560,149 @@ class HwpBinaryDocument:
             profile_root=profile_root,
             section_index=section_index,
         )
+
+    def append_field(
+        self,
+        *,
+        field_type: str,
+        display_text: str | None = None,
+        name: str | None = None,
+        parameters: dict[str, str | int] | None = None,
+        editable: bool = False,
+        dirty: bool = False,
+        section_index: int | None = None,
+        paragraph_index: int | None = None,
+    ) -> None:
+        normalized_field_type = field_type.strip()
+        if normalized_field_type.upper() in {"HYPERLINK", "%HLK"}:
+            target = None
+            if parameters is not None:
+                target = (
+                    parameters.get("Path")
+                    or parameters.get("Command")
+                    or parameters.get("url")
+                    or parameters.get("URL")
+                )
+            self.append_hyperlink(
+                str(target or DEFAULT_HWP_HYPERLINK_URL),
+                text=display_text,
+                section_index=section_index,
+            )
+            return
+
+        target_section_index = self._resolve_append_section_index(None, section_index)
+        display_value = display_text or name or normalized_field_type
+        control_payload = _build_control_id_payload(_normalize_field_control_id(normalized_field_type))
+        control_node = RecordNode(tag_id=TAG_CTRL_HEADER, level=1, payload=control_payload)
+        if parameters:
+            parameter_text = ";".join(f"{key}={value}" for key, value in parameters.items())
+            control_node.add_child(RecordNode(tag_id=TAG_CTRL_DATA, level=2, payload=parameter_text.encode("utf-16-le")))
+
+        model = self.section_model(target_section_index)
+        if paragraph_index is None or paragraph_index < 0:
+            paragraph = model.append_paragraph(
+                f"{display_value}\r",
+                control_mask=1 if editable or dirty else 0,
+            )
+        else:
+            paragraph = model.insert_paragraph(
+                paragraph_index,
+                f"{display_value}\r",
+                control_mask=1 if editable or dirty else 0,
+            )
+        paragraph.header.add_child(control_node)
+        self.replace_section_model(target_section_index, model)
+
+    def append_equation(
+        self,
+        script: str = DEFAULT_HWP_EQUATION_SCRIPT,
+        *,
+        width: int = 4800,
+        height: int = 2300,
+        section_index: int | None = None,
+        paragraph_index: int | None = None,
+    ) -> None:
+        target_section_index = self._resolve_append_section_index(None, section_index)
+        model = self.section_model(target_section_index)
+        if paragraph_index is None or paragraph_index < 0:
+            paragraph = model.append_paragraph("\r")
+        else:
+            paragraph = model.insert_paragraph(paragraph_index, "\r")
+        control_node = RecordNode(tag_id=TAG_CTRL_HEADER, level=1, payload=_build_control_id_payload("eqed"))
+        control_node.add_child(RecordNode(tag_id=TAG_EQEDIT, level=2, payload=_build_equation_payload(script)))
+        paragraph.header.add_child(control_node)
+        self.replace_section_model(target_section_index, model)
+
+    def append_shape(
+        self,
+        *,
+        kind: str = "rect",
+        text: str = DEFAULT_HWP_SHAPE_TEXT,
+        width: int = DEFAULT_HWP_SHAPE_WIDTH,
+        height: int = DEFAULT_HWP_SHAPE_HEIGHT,
+        section_index: int | None = None,
+        paragraph_index: int | None = None,
+    ) -> None:
+        kind_to_tag = {
+            "line": TAG_SHAPE_COMPONENT_LINE,
+            "rect": TAG_SHAPE_COMPONENT_RECTANGLE,
+            "ellipse": TAG_SHAPE_COMPONENT_ELLIPSE,
+            "arc": TAG_SHAPE_COMPONENT_ARC,
+            "polygon": TAG_SHAPE_COMPONENT_POLYGON,
+            "curve": TAG_SHAPE_COMPONENT_CURVE,
+            "container": TAG_SHAPE_COMPONENT_CONTAINER,
+            "textart": TAG_SHAPE_COMPONENT_TEXTART,
+        }
+        if kind not in kind_to_tag:
+            supported = ", ".join(sorted(kind_to_tag))
+            raise ValueError(f"append_shape() supports kind values: {supported}")
+
+        target_section_index = self._resolve_append_section_index(None, section_index)
+        model = self.section_model(target_section_index)
+        paragraph_text = f"{text}\r" if text else "\r"
+        if paragraph_index is None or paragraph_index < 0:
+            paragraph = model.append_paragraph(paragraph_text)
+        else:
+            paragraph = model.insert_paragraph(paragraph_index, paragraph_text)
+        control_node = RecordNode(tag_id=TAG_CTRL_HEADER, level=1, payload=_build_control_id_payload("gso "))
+        shape_component = RecordNode(
+            tag_id=TAG_SHAPE_COMPONENT,
+            level=2,
+            payload=_build_minimal_shape_component_payload(width, height),
+        )
+        shape_component.add_child(RecordNode(tag_id=kind_to_tag[kind], level=3, payload=b""))
+        control_node.add_child(shape_component)
+        paragraph.header.add_child(control_node)
+        self.replace_section_model(target_section_index, model)
+
+    def append_ole(
+        self,
+        name: str,
+        data: bytes,
+        *,
+        width: int = DEFAULT_HWP_SHAPE_WIDTH,
+        height: int = DEFAULT_HWP_SHAPE_HEIGHT,
+        section_index: int | None = None,
+        paragraph_index: int | None = None,
+    ) -> None:
+        target_section_index = self._resolve_append_section_index(None, section_index)
+        self.add_embedded_bindata(data, extension="ole")
+        model = self.section_model(target_section_index)
+        paragraph_text = f"{name}\r" if name else "\r"
+        if paragraph_index is None or paragraph_index < 0:
+            paragraph = model.append_paragraph(paragraph_text)
+        else:
+            paragraph = model.insert_paragraph(paragraph_index, paragraph_text)
+        control_node = RecordNode(tag_id=TAG_CTRL_HEADER, level=1, payload=_build_control_id_payload("gso "))
+        shape_component = RecordNode(
+            tag_id=TAG_SHAPE_COMPONENT,
+            level=2,
+            payload=_build_minimal_shape_component_payload(width, height),
+        )
+        shape_component.add_child(RecordNode(tag_id=TAG_SHAPE_COMPONENT_OLE, level=3, payload=b""))
+        control_node.add_child(shape_component)
+        paragraph.header.add_child(control_node)
+        self.replace_section_model(target_section_index, model)
 
     def paragraphs(self, section_index: int = 0) -> list[HwpParagraph]:
         paragraphs: list[HwpParagraph] = []

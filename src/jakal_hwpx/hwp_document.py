@@ -323,17 +323,16 @@ class HwpDocument:
         section_index: int = 0,
         paragraph_index: int | None = None,
     ) -> None:
-        self._mutate_via_hwpx(
-            lambda document: document.append_field(
-                field_type=field_type,
-                display_text=display_text,
-                name=name,
-                parameters=parameters,
-                editable=editable,
-                dirty=dirty,
-                section_index=section_index,
-                paragraph_index=paragraph_index,
-            )
+        self._invalidate_bridge()
+        self._binary_document.append_field(
+            field_type=field_type,
+            display_text=display_text,
+            name=name,
+            parameters=parameters,
+            editable=editable,
+            dirty=dirty,
+            section_index=section_index,
+            paragraph_index=paragraph_index,
         )
 
     def append_equation(
@@ -345,14 +344,13 @@ class HwpDocument:
         section_index: int = 0,
         paragraph_index: int | None = None,
     ) -> None:
-        self._mutate_via_hwpx(
-            lambda document: document.append_equation(
-                script,
-                width=width,
-                height=height,
-                section_index=section_index,
-                paragraph_index=paragraph_index,
-            )
+        self._invalidate_bridge()
+        self._binary_document.append_equation(
+            script,
+            width=width,
+            height=height,
+            section_index=section_index,
+            paragraph_index=paragraph_index,
         )
 
     def append_shape(
@@ -367,17 +365,14 @@ class HwpDocument:
         section_index: int = 0,
         paragraph_index: int | None = None,
     ) -> None:
-        self._mutate_via_hwpx(
-            lambda document: document.append_shape(
-                kind=kind,
-                text=text,
-                width=width,
-                height=height,
-                fill_color=fill_color,
-                line_color=line_color,
-                section_index=section_index,
-                paragraph_index=paragraph_index,
-            )
+        self._invalidate_bridge()
+        self._binary_document.append_shape(
+            kind=kind,
+            text=text,
+            width=width,
+            height=height,
+            section_index=section_index,
+            paragraph_index=paragraph_index,
         )
 
     def append_ole(
@@ -390,15 +385,14 @@ class HwpDocument:
         section_index: int = 0,
         paragraph_index: int | None = None,
     ) -> None:
-        self._mutate_via_hwpx(
-            lambda document: document.append_ole(
-                name,
-                data,
-                width=width,
-                height=height,
-                section_index=section_index,
-                paragraph_index=paragraph_index,
-            )
+        self._invalidate_bridge()
+        self._binary_document.append_ole(
+            name,
+            data,
+            width=width,
+            height=height,
+            section_index=section_index,
+            paragraph_index=paragraph_index,
         )
 
     def add_embedded_bindata(self, data: bytes, *, extension: str, storage_id: int | None = None) -> tuple[int, str]:
