@@ -1,3 +1,4 @@
+from .bridge import HwpHwpxBridge
 from .document import DocumentMetadata, HwpxDocument
 from .elements import (
     AutoNumber,
@@ -34,6 +35,7 @@ from .hwp_collection import (
     scan_hwp_collection,
 )
 from .hwp_binary import (
+    BinDataRecord,
     DocInfoModel,
     DocumentPropertiesRecord,
     HwpBinaryDocument,
@@ -42,6 +44,7 @@ from .hwp_binary import (
     HwpParagraph,
     HwpRecord,
     HwpStreamCapacity,
+    IdMappingsRecord,
     ParagraphHeaderRecord,
     ParagraphTextRecord,
     RecordNode,
@@ -90,6 +93,7 @@ __version__ = "0.2.0"
 
 __all__ = [
     "BinaryDataPart",
+    "BinDataRecord",
     "Bookmark",
     "ContainerPart",
     "ContainerRdfPart",
@@ -109,6 +113,7 @@ __all__ = [
     "HeaderFooterBlock",
     "HwpControlOccurrence",
     "HwpDonorSummary",
+    "HwpHwpxBridge",
     "HwpBinaryDocument",
     "HwpBinaryEditError",
     "HwpBinaryFileHeader",
@@ -119,6 +124,7 @@ __all__ = [
     "HwpPureProfile",
     "HwpRecord",
     "HwpStreamCapacity",
+    "IdMappingsRecord",
     "HwpSection",
     "HwpTemplateCandidate",
     "HwpxDocument",

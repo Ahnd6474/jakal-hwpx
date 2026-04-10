@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from .hwp_binary import HwpBinaryDocument, HwpRecord
-from .hwp_collection import find_best_combo_donor
+from .hwp_collection import find_best_combo_donor, scan_hwp_collection
 from .hwp_template_lab import CONTROL_BY_FEATURE, _paragraph_ranges, build_minimal_control_candidate, find_control_occurrences
 
 
@@ -54,18 +54,17 @@ def build_hwp_pure_profile(collection_root: str | Path, output_dir: str | Path) 
 
     template_paths: dict[str, Path] = {}
     template_section_indices: dict[str, int] = {}
+    collection_summaries = scan_hwp_collection(collection_root)
     for feature, control_id in CONTROL_BY_FEATURE.items():
-        occurrences = [
-            occurrence
-            for occurrence in find_control_occurrences(donor_document, control_id)
-            if occurrence.section_index == target_section_index
-        ]
-        if not occurrences:
+        best_source = _pick_best_feature_source(collection_summaries, control_id)
+        if best_source is None:
             continue
+        feature_document = HwpBinaryDocument.open(best_source[0].path)
+        occurrence = best_source[1]
         template_path = target_root / f"{feature}.hwp"
-        build_minimal_control_candidate(donor_document, occurrences[0], template_path)
+        build_minimal_control_candidate(feature_document, occurrence, template_path, keep_first_paragraph=False)
         template_paths[feature] = template_path
-        template_section_indices[feature] = target_section_index
+        template_section_indices[feature] = occurrence.section_index
 
     metadata = {
         "donor_name": donor.path.name,
@@ -140,3 +139,39 @@ def _clone_records(records: list[HwpRecord]) -> list[HwpRecord]:
         )
         for record in records
     ]
+
+
+def _pick_best_occurrence(occurrences):
+    return sorted(
+        occurrences,
+        key=lambda occurrence: (
+            occurrence.paragraph_end_index - occurrence.paragraph_start_index,
+            occurrence.level,
+            occurrence.section_index,
+            occurrence.record_index,
+        ),
+    )[0]
+
+
+def _pick_best_feature_source(collection_summaries, control_id: str):
+    candidates: list[tuple[object, object]] = []
+    for summary in collection_summaries:
+        if summary.control_counts.get(control_id, 0) <= 0:
+            continue
+        document = HwpBinaryDocument.open(summary.path)
+        occurrences = find_control_occurrences(document, control_id)
+        if not occurrences:
+            continue
+        candidates.append((summary, _pick_best_occurrence(occurrences)))
+    if not candidates:
+        return None
+    return sorted(
+        candidates,
+        key=lambda item: (
+            item[1].paragraph_end_index - item[1].paragraph_start_index,
+            item[1].level,
+            item[1].section_index,
+            item[1].record_index,
+            item[0].path.name,
+        ),
+    )[0]

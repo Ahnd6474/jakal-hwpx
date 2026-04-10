@@ -1,9 +1,8 @@
 from __future__ import annotations
 
-import shutil
 import struct
-import tempfile
 import zlib
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Iterator
@@ -113,6 +112,55 @@ TAG_NAMES = {
     TAG_TRACK_CHANGE: "track_change",
     TAG_TRACK_CHANGE_AUTHOR: "track_change_author",
 }
+
+
+DEFAULT_HWP_HYPERLINK_URL = "http://www.chungsa.go.kr/chungsa/cms/1/3/4.html"
+DEFAULT_HWP_HYPERLINK_TEXT = "http://www.chungsa.go.kr/chungsa/cms/1/3/4.html"
+DEFAULT_HWP_HYPERLINK_METADATA_FIELDS = ("1", "0", "0")
+
+DEFAULT_HWP_TABLE_ROWS = 1
+DEFAULT_HWP_TABLE_COLS = 1
+DEFAULT_HWP_TABLE_CELL_WIDTH = 47341
+DEFAULT_HWP_TABLE_CELL_HEIGHT = 282
+DEFAULT_HWP_TABLE_BORDER_FILL_ID = 1
+DEFAULT_HWP_TABLE_CELL_MARGIN = (510, 510, 141, 141)
+
+_TABLE_TOP_PARA_HEADER_TAIL = bytes.fromhex("0008000019000000010000000100000000800000")
+_TABLE_TOP_PARA_TEXT = bytes.fromhex("0b00206c627400000000000000000b000d00")
+_TABLE_TOP_CHAR_SHAPE = bytes.fromhex("0000000004000000")
+_TABLE_TOP_LINE_SEG = bytes.fromhex("00000000b87600008c0400008c040000dd030000f401000038ffffff04bd000000000600")
+_TABLE_CTRL_HEADER = bytes.fromhex(
+    "206c627411232a08000000000000000059bd000072030000020000008d008d008d008d002b945768000000000000"
+)
+_TABLE_CELL_PARA_HEADER_TAIL = bytes.fromhex("000000000b000000010000000100000000800000")
+_TABLE_CELL_CHAR_SHAPE = bytes.fromhex("000000002f000000")
+_TABLE_CELL_LINE_SEG = bytes.fromhex("00000000000000005802000058020000fe010000e0ffffff000000005cb9000000000600")
+
+_HYPERLINK_PARA_HEADER_TAIL = bytes.fromhex("180000000000000003000000010000000080")
+_HYPERLINK_CHAR_SHAPE = bytes.fromhex("000000000600000013000000070000004200000006000000")
+_HYPERLINK_LINE_SEG = bytes.fromhex("0000000027e90000b0040000b0040000fc030000d00200000000000018a6000000000600")
+_HYPERLINK_TEXT_START_MARKER = bytes.fromhex("03006b6c682500000000000000000300")
+_HYPERLINK_TEXT_END_MARKER = bytes.fromhex("04006b6c680000000000000000000400")
+_HYPERLINK_CTRL_PREFIX = bytes.fromhex("6b6c68250008000000")
+_HYPERLINK_CTRL_SUFFIX = bytes.fromhex("93caed41")
+
+_PICTURE_TOP_PARA_HEADER_TAIL = bytes.fromhex("000800000e00000001000000010000000080")
+_PICTURE_TOP_PARA_TEXT = bytes.fromhex("0b00206f736700000000000000000b000d00")
+_PICTURE_TOP_CHAR_SHAPE = bytes.fromhex("0000000006000000")
+_PICTURE_TOP_LINE_SEG = bytes.fromhex("00000000381800009c8100009c8100002b6e00000c030000000000002cb1000000000600")
+_PICTURE_CTRL_HEADER = bytes.fromhex(
+    "206f736711232a040000000000000000b8b000009c8100000000000000000000000000009c52be4200000000"
+)
+_PICTURE_SHAPE_COMPONENT = bytes.fromhex(
+    "6369702463697024000000000000000000000100b8b000009c810000b8b000009c8100000000082400005c580000ce4000000100000000000000"
+    "f03f000000000000000000000000000000000000000000000000000000000000f03f0000000000000000000000000000f03f00000000000000000000"
+    "000000000000000000000000000000000000f03f0000000000000000000000000000f03f000000000000000000000000000000000000000000000000"
+    "0000000000f03f0000000000000000"
+)
+_PICTURE_SHAPE_PICTURE = bytes.fromhex(
+    "0000000000000000010000c00000000000000000b8b0000000000000b8b000009c810000000000009c81000000000000000000007cb0000024810000"
+    "00000000000000000000000100"
+)
 
 
 def _normalize_stream_path(path: str | tuple[str, ...] | list[str]) -> str:
@@ -264,6 +312,199 @@ def _build_document_properties_payload(properties: HwpDocumentProperties) -> byt
     return bytes(payload)
 
 
+def _build_hyperlink_para_text_payload(display_text: str) -> bytes:
+    return _HYPERLINK_TEXT_START_MARKER + display_text.encode("utf-16-le") + _HYPERLINK_TEXT_END_MARKER + "\r".encode("utf-16-le")
+
+
+def _build_hyperlink_command(url: str, metadata_fields: Sequence[str | int] | None = None) -> str:
+    fields = DEFAULT_HWP_HYPERLINK_METADATA_FIELDS if metadata_fields is None else tuple(str(value) for value in metadata_fields)
+    return url.replace(":", "\\:") + ";" + ";".join(fields) + ";"
+
+
+def _build_hyperlink_ctrl_payload(url: str, metadata_fields: Sequence[str | int] | None = None) -> bytes:
+    normalized = _build_hyperlink_command(url, metadata_fields=metadata_fields)
+    return _HYPERLINK_CTRL_PREFIX + len(normalized).to_bytes(2, "little") + normalized.encode("utf-16-le") + _HYPERLINK_CTRL_SUFFIX
+
+
+def _normalize_table_cell_texts(
+    rows: int,
+    cols: int,
+    cell_text: str | None,
+    cell_texts: Sequence[str] | Sequence[Sequence[str]] | None,
+) -> list[list[str]]:
+    if rows < 1 or cols < 1:
+        raise ValueError("rows and cols must both be at least 1.")
+
+    if cell_texts is None:
+        matrix = [["" for _ in range(cols)] for _ in range(rows)]
+        if cell_text is not None:
+            matrix[0][0] = cell_text
+        return matrix
+
+    values = list(cell_texts)
+    if values and isinstance(values[0], (list, tuple)):
+        if len(values) != rows:
+            raise ValueError(f"cell_texts row count must match rows={rows}.")
+        matrix: list[list[str]] = []
+        for row_index, row_values in enumerate(values):
+            row_list = list(row_values)  # type: ignore[arg-type]
+            if len(row_list) != cols:
+                raise ValueError(f"cell_texts[{row_index}] column count must match cols={cols}.")
+            matrix.append([str(value) for value in row_list])
+        return matrix
+
+    flat_values = [str(value) for value in values]  # type: ignore[arg-type]
+    if len(flat_values) != rows * cols:
+        raise ValueError(f"flat cell_texts length must be rows * cols ({rows * cols}).")
+    return [flat_values[row_index * cols : (row_index + 1) * cols] for row_index in range(rows)]
+
+
+def _normalize_table_measurements(count: int, values: Sequence[int] | None, *, default: int, name: str) -> list[int]:
+    if values is None:
+        return [default] * count
+    result = [int(value) for value in values]
+    if len(result) != count:
+        raise ValueError(f"{name} length must match {count}.")
+    if any(value < 1 for value in result):
+        raise ValueError(f"{name} values must be positive integers.")
+    return result
+
+
+def _normalize_table_spans(
+    rows: int,
+    cols: int,
+    spans: dict[tuple[int, int], tuple[int, int]] | None,
+) -> dict[tuple[int, int], tuple[int, int]]:
+    normalized: dict[tuple[int, int], tuple[int, int]] = {}
+    for row in range(rows):
+        for col in range(cols):
+            normalized[(row, col)] = (1, 1)
+    if spans is None:
+        return normalized
+    for key, value in spans.items():
+        row, col = key
+        row_span, col_span = value
+        if not (0 <= row < rows and 0 <= col < cols):
+            raise ValueError(f"cell_spans key {(row, col)} is out of range.")
+        row_span = int(row_span)
+        col_span = int(col_span)
+        if row_span < 1 or col_span < 1:
+            raise ValueError("cell span values must be positive integers.")
+        if row + row_span > rows or col + col_span > cols:
+            raise ValueError(f"cell span {(row_span, col_span)} at {(row, col)} exceeds table bounds.")
+        normalized[(row, col)] = (row_span, col_span)
+    return normalized
+
+
+@dataclass(frozen=True)
+class _TableCellSpec:
+    row: int
+    col: int
+    row_span: int
+    col_span: int
+    width: int
+    height: int
+    text: str
+    border_fill_id: int
+    margins: tuple[int, int, int, int]
+
+
+def _build_table_cell_specs(
+    matrix: list[list[str]],
+    *,
+    row_heights: Sequence[int],
+    col_widths: Sequence[int],
+    cell_spans: dict[tuple[int, int], tuple[int, int]] | None,
+    cell_border_fill_ids: dict[tuple[int, int], int] | None,
+    default_border_fill_id: int,
+    cell_margins: dict[tuple[int, int], tuple[int, int, int, int]] | None,
+) -> list[_TableCellSpec]:
+    rows = len(matrix)
+    cols = len(matrix[0]) if matrix else 0
+    span_map = _normalize_table_spans(rows, cols, cell_spans)
+    covered = [[False for _ in range(cols)] for _ in range(rows)]
+    specs: list[_TableCellSpec] = []
+    for row in range(rows):
+        for col in range(cols):
+            if covered[row][col]:
+                continue
+            row_span, col_span = span_map[(row, col)]
+            for covered_row in range(row, row + row_span):
+                for covered_col in range(col, col + col_span):
+                    if covered[covered_row][covered_col]:
+                        raise ValueError(f"overlapping cell span at {(row, col)}.")
+                    covered[covered_row][covered_col] = True
+                    if (covered_row, covered_col) != (row, col) and matrix[covered_row][covered_col]:
+                        raise ValueError(
+                            f"cell_texts[{covered_row}][{covered_col}] must be empty because it is covered by span {(row_span, col_span)} at {(row, col)}."
+                        )
+            border_fill_id = int(cell_border_fill_ids.get((row, col), default_border_fill_id) if cell_border_fill_ids else default_border_fill_id)
+            margins = cell_margins.get((row, col), DEFAULT_HWP_TABLE_CELL_MARGIN) if cell_margins else DEFAULT_HWP_TABLE_CELL_MARGIN
+            specs.append(
+                _TableCellSpec(
+                    row=row,
+                    col=col,
+                    row_span=row_span,
+                    col_span=col_span,
+                    width=sum(col_widths[col : col + col_span]),
+                    height=sum(row_heights[row : row + row_span]),
+                    text=matrix[row][col],
+                    border_fill_id=border_fill_id,
+                    margins=tuple(int(value) for value in margins),
+                )
+            )
+    return specs
+
+
+def _build_table_record_payload(
+    rows: int,
+    cols: int,
+    *,
+    cell_spacing: int = 0,
+    margin_left: int = 510,
+    margin_right: int = 510,
+    margin_top: int = 141,
+    margin_bottom: int = 141,
+    default_row_height: int = 1,
+    border_fill_id: int = DEFAULT_HWP_TABLE_BORDER_FILL_ID,
+    valid_zone_info_count: int = 0,
+) -> bytes:
+    attr = 0x04000006 if rows * cols > 1 else 0x00000006
+    payload = bytearray()
+    payload.extend(struct.pack("<IHHHHHHH", attr, rows, cols, cell_spacing, margin_left, margin_right, margin_top, margin_bottom))
+    for _ in range(rows):
+        payload.extend(int(default_row_height).to_bytes(2, "little", signed=False))
+    payload.extend(int(border_fill_id).to_bytes(2, "little", signed=False))
+    payload.extend(int(valid_zone_info_count).to_bytes(2, "little", signed=False))
+    return bytes(payload)
+
+
+def _build_table_cell_list_header_payload(
+    cell: _TableCellSpec,
+    *,
+    list_flags: int | None = None,
+) -> bytes:
+    attr = 0x04000020 if list_flags is None else int(list_flags)
+    margin_left, margin_right, margin_top, margin_bottom = cell.margins
+    payload = bytearray()
+    payload.extend((1).to_bytes(4, "little", signed=True))
+    payload.extend(int(attr).to_bytes(4, "little", signed=False))
+    payload.extend(int(cell.col).to_bytes(2, "little", signed=False))
+    payload.extend(int(cell.row).to_bytes(2, "little", signed=False))
+    payload.extend(int(cell.col_span).to_bytes(2, "little", signed=False))
+    payload.extend(int(cell.row_span).to_bytes(2, "little", signed=False))
+    payload.extend(int(cell.width).to_bytes(4, "little", signed=False))
+    payload.extend(int(cell.height).to_bytes(4, "little", signed=False))
+    payload.extend(int(margin_left).to_bytes(2, "little", signed=False))
+    payload.extend(int(margin_right).to_bytes(2, "little", signed=False))
+    payload.extend(int(margin_top).to_bytes(2, "little", signed=False))
+    payload.extend(int(margin_bottom).to_bytes(2, "little", signed=False))
+    payload.extend(int(cell.border_fill_id).to_bytes(2, "little", signed=False))
+    payload.extend(int(cell.width).to_bytes(4, "little", signed=False))
+    payload.extend(b"\x00" * 9)
+    return bytes(payload)
+
+
 @dataclass
 class RecordNode:
     tag_id: int
@@ -366,6 +607,204 @@ class DocumentPropertiesRecord(TypedRecord):
 
     def to_properties(self) -> HwpDocumentProperties:
         return self.properties
+
+
+ID_MAPPINGS_INDEX_NAMES = [
+    "bin_data",
+    "ko_fonts",
+    "en_fonts",
+    "cn_fonts",
+    "jp_fonts",
+    "other_fonts",
+    "symbol_fonts",
+    "user_fonts",
+    "border_fills",
+    "char_shapes",
+    "tab_defs",
+    "numberings",
+    "bullets",
+    "para_shapes",
+    "styles",
+    "memo_shapes",
+    "track_changes",
+    "track_change_authors",
+]
+
+
+class IdMappingsRecord(TypedRecord):
+    def __init__(
+        self,
+        *,
+        level: int,
+        counts: list[int],
+        trailing_payload: bytes = b"",
+        header_size: int = 4,
+        offset: int = -1,
+        children: list[RecordNode] | None = None,
+    ) -> None:
+        self.counts = list(counts)
+        self.trailing_payload = trailing_payload
+        super().__init__(
+            tag_id=TAG_ID_MAPPINGS,
+            level=level,
+            payload=self._build_payload(),
+            header_size=header_size,
+            offset=offset,
+            children=list(children or []),
+        )
+
+    @classmethod
+    def from_record(cls, record: HwpRecord) -> "IdMappingsRecord":
+        count_bytes = len(record.payload) // 4
+        counts = [int.from_bytes(record.payload[index * 4 : (index + 1) * 4], "little") for index in range(count_bytes)]
+        trailing_offset = count_bytes * 4
+        return cls(
+            level=record.level,
+            counts=counts,
+            trailing_payload=record.payload[trailing_offset:],
+            header_size=record.header_size,
+            offset=record.offset,
+        )
+
+    def _build_payload(self) -> bytes:
+        payload = bytearray()
+        for count in self.counts:
+            payload.extend(int(count).to_bytes(4, "little"))
+        payload.extend(self.trailing_payload)
+        return bytes(payload)
+
+    def sync_payload(self) -> None:
+        self.payload = self._build_payload()
+
+    def to_record(self) -> HwpRecord:
+        self.sync_payload()
+        return super().to_record()
+
+    def get_count(self, index: int) -> int:
+        return self.counts[index] if index < len(self.counts) else 0
+
+    def set_count(self, index: int, value: int) -> None:
+        while len(self.counts) <= index:
+            self.counts.append(0)
+        self.counts[index] = int(value)
+
+    @property
+    def bin_data_count(self) -> int:
+        return self.get_count(0)
+
+    @bin_data_count.setter
+    def bin_data_count(self, value: int) -> None:
+        self.set_count(0, value)
+
+    def named_counts(self) -> dict[str, int]:
+        result: dict[str, int] = {}
+        for index, count in enumerate(self.counts):
+            key = ID_MAPPINGS_INDEX_NAMES[index] if index < len(ID_MAPPINGS_INDEX_NAMES) else f"index_{index}"
+            result[key] = count
+        return result
+
+
+class BinDataRecord(TypedRecord):
+    def __init__(
+        self,
+        *,
+        level: int,
+        flags: int,
+        storage_id: int | None = None,
+        extension: str | None = None,
+        abs_path: str | None = None,
+        rel_path: str | None = None,
+        header_size: int = 4,
+        offset: int = -1,
+        children: list[RecordNode] | None = None,
+    ) -> None:
+        self.flags = flags
+        self.storage_id = storage_id
+        self.extension = extension
+        self.abs_path = abs_path
+        self.rel_path = rel_path
+        super().__init__(
+            tag_id=TAG_BIN_DATA,
+            level=level,
+            payload=self._build_payload(),
+            header_size=header_size,
+            offset=offset,
+            children=list(children or []),
+        )
+
+    @property
+    def kind(self) -> int:
+        return self.flags & 0x000F
+
+    @classmethod
+    def from_record(cls, record: HwpRecord) -> "BinDataRecord":
+        payload = record.payload
+        flags = int.from_bytes(payload[0:2], "little") if len(payload) >= 2 else 0
+        kind = flags & 0x000F
+        if kind == 0:
+            abs_len = int.from_bytes(payload[2:4], "little") if len(payload) >= 4 else 0
+            cursor = 4
+            abs_path = payload[cursor : cursor + abs_len * 2].decode("utf-16-le", errors="ignore")
+            cursor += abs_len * 2
+            rel_len = int.from_bytes(payload[cursor : cursor + 2], "little") if len(payload) >= cursor + 2 else 0
+            cursor += 2
+            rel_path = payload[cursor : cursor + rel_len * 2].decode("utf-16-le", errors="ignore")
+            return cls(
+                level=record.level,
+                flags=flags,
+                abs_path=abs_path,
+                rel_path=rel_path,
+                header_size=record.header_size,
+                offset=record.offset,
+            )
+
+        storage_id = int.from_bytes(payload[2:4], "little") if len(payload) >= 4 else None
+        ext_len = int.from_bytes(payload[4:6], "little") if len(payload) >= 6 else 0
+        extension = payload[6 : 6 + ext_len * 2].decode("utf-16-le", errors="ignore") if ext_len else None
+        return cls(
+            level=record.level,
+            flags=flags,
+            storage_id=storage_id,
+            extension=extension,
+            header_size=record.header_size,
+            offset=record.offset,
+        )
+
+    @classmethod
+    def embedded(
+        cls,
+        *,
+        level: int,
+        storage_id: int,
+        extension: str,
+        flags: int = 0x0001,
+    ) -> "BinDataRecord":
+        return cls(level=level, flags=flags, storage_id=storage_id, extension=extension)
+
+    def _build_payload(self) -> bytes:
+        payload = bytearray()
+        payload.extend(int(self.flags).to_bytes(2, "little"))
+        if self.kind == 0:
+            abs_path = self.abs_path or ""
+            rel_path = self.rel_path or ""
+            payload.extend(len(abs_path).to_bytes(2, "little"))
+            payload.extend(abs_path.encode("utf-16-le"))
+            payload.extend(len(rel_path).to_bytes(2, "little"))
+            payload.extend(rel_path.encode("utf-16-le"))
+            return bytes(payload)
+
+        payload.extend(int(self.storage_id or 0).to_bytes(2, "little"))
+        extension = (self.extension or "").lstrip(".")
+        payload.extend(len(extension).to_bytes(2, "little"))
+        payload.extend(extension.encode("utf-16-le"))
+        return bytes(payload)
+
+    def sync_payload(self) -> None:
+        self.payload = self._build_payload()
+
+    def to_record(self) -> HwpRecord:
+        self.sync_payload()
+        return super().to_record()
 
 
 class ParagraphHeaderRecord(TypedRecord):
@@ -495,6 +934,10 @@ class ParagraphTextRecord(TypedRecord):
 def record_node_from_record(record: HwpRecord) -> RecordNode:
     if record.tag_id == TAG_DOCUMENT_PROPERTIES:
         return DocumentPropertiesRecord.from_record(record)
+    if record.tag_id == TAG_ID_MAPPINGS:
+        return IdMappingsRecord.from_record(record)
+    if record.tag_id == TAG_BIN_DATA:
+        return BinDataRecord.from_record(record)
     if record.tag_id == TAG_PARA_HEADER:
         return ParagraphHeaderRecord.from_record(record)
     if record.tag_id == TAG_PARA_TEXT:
@@ -554,6 +997,59 @@ class DocInfoModel:
 
     def document_properties(self) -> HwpDocumentProperties:
         return self.document_properties_record().to_properties()
+
+    def id_mappings_record(self) -> IdMappingsRecord:
+        for root in self.roots:
+            if isinstance(root, IdMappingsRecord):
+                return root
+        raise InvalidHwpFileError("DocInfo does not contain an id mappings record.")
+
+    def bin_data_records(self) -> list[BinDataRecord]:
+        return [node for node in self.iter_nodes() if isinstance(node, BinDataRecord)]
+
+    def face_name_records(self) -> list[RecordNode]:
+        return self.records_by_tag_id(TAG_FACE_NAME)
+
+    def border_fill_records(self) -> list[RecordNode]:
+        return self.records_by_tag_id(TAG_BORDER_FILL)
+
+    def char_shape_records(self) -> list[RecordNode]:
+        return self.records_by_tag_id(TAG_CHAR_SHAPE)
+
+    def para_shape_records(self) -> list[RecordNode]:
+        return self.records_by_tag_id(TAG_PARA_SHAPE)
+
+    def style_records(self) -> list[RecordNode]:
+        return self.records_by_tag_id(TAG_STYLE)
+
+    def next_bin_data_id(self) -> int:
+        id_record = self.id_mappings_record()
+        return id_record.bin_data_count + 1
+
+    def add_embedded_bindata(self, extension: str, *, storage_id: int | None = None, flags: int = 0x0001) -> BinDataRecord:
+        id_record = self.id_mappings_record()
+        if storage_id is None:
+            storage_id = self.next_bin_data_id()
+        bindata = BinDataRecord.embedded(level=0, storage_id=storage_id, extension=extension, flags=flags)
+        insert_at = 0
+        for index, root in enumerate(self.roots):
+            if isinstance(root, BinDataRecord):
+                insert_at = index + 1
+            elif isinstance(root, IdMappingsRecord):
+                insert_at = index + 1
+        self.roots.insert(insert_at, bindata)
+        id_record.bin_data_count = max(id_record.bin_data_count, storage_id)
+        return bindata
+
+    def remove_bindata(self, storage_id: int) -> bool:
+        for index, root in enumerate(self.roots):
+            if isinstance(root, BinDataRecord) and root.storage_id == storage_id:
+                del self.roots[index]
+                id_record = self.id_mappings_record()
+                remaining_ids = [record.storage_id or 0 for record in self.bin_data_records()]
+                id_record.bin_data_count = max(remaining_ids, default=0)
+                return True
+        return False
 
     def tag_counts(self) -> dict[str, int]:
         counts: dict[str, int] = {}
@@ -788,6 +1284,9 @@ class HwpBinaryDocument:
     def section_stream_paths(self) -> list[str]:
         return sorted(path for path in self._streams if path.startswith("BodyText/Section"))
 
+    def bindata_stream_paths(self) -> list[str]:
+        return sorted(path for path in self._streams if path.startswith("BinData/"))
+
     def has_stream(self, path: str | tuple[str, ...] | list[str]) -> bool:
         return _normalize_stream_path(path) in self._streams
 
@@ -844,6 +1343,16 @@ class HwpBinaryDocument:
         if not decompress:
             return data
         return zlib.decompress(data, -15)
+
+    def add_stream(self, path: str | tuple[str, ...] | list[str], data: bytes) -> None:
+        normalized = _normalize_stream_path(path)
+        self._streams[normalized] = data
+        self._original_sizes.setdefault(normalized, len(data))
+
+    def remove_stream(self, path: str | tuple[str, ...] | list[str]) -> None:
+        normalized = _normalize_stream_path(path)
+        self._streams.pop(normalized, None)
+        self._original_sizes.pop(normalized, None)
 
     def write_stream(
         self,
@@ -929,27 +1438,66 @@ class HwpBinaryDocument:
 
     def append_table(
         self,
+        cell_text: str | None = None,
         *,
+        rows: int = DEFAULT_HWP_TABLE_ROWS,
+        cols: int = DEFAULT_HWP_TABLE_COLS,
+        cell_texts: Sequence[str] | Sequence[Sequence[str]] | None = None,
+        row_heights: Sequence[int] | None = None,
+        col_widths: Sequence[int] | None = None,
+        cell_spans: dict[tuple[int, int], tuple[int, int]] | None = None,
+        cell_border_fill_ids: dict[tuple[int, int], int] | None = None,
+        table_border_fill_id: int = DEFAULT_HWP_TABLE_BORDER_FILL_ID,
         profile_root: str | Path | None = None,
         section_index: int | None = None,
     ) -> None:
-        self._append_feature_via_profile("table", profile_root=profile_root, section_index=section_index)
+        self._append_table_with_text(
+            cell_text,
+            rows=rows,
+            cols=cols,
+            cell_texts=cell_texts,
+            row_heights=row_heights,
+            col_widths=col_widths,
+            cell_spans=cell_spans,
+            cell_border_fill_ids=cell_border_fill_ids,
+            table_border_fill_id=table_border_fill_id,
+            profile_root=profile_root,
+            section_index=section_index,
+        )
 
     def append_picture(
         self,
+        image_bytes: bytes | None = None,
+        extension: str | None = None,
         *,
         profile_root: str | Path | None = None,
         section_index: int | None = None,
     ) -> None:
-        self._append_feature_via_profile("picture", profile_root=profile_root, section_index=section_index)
+        if image_bytes is None:
+            self._append_picture_with_storage_id(
+                self._resolve_default_picture_storage_id(),
+                profile_root=profile_root,
+                section_index=section_index,
+            )
+            return
+        self._append_picture_with_bindata(image_bytes, extension=extension or "png", profile_root=profile_root, section_index=section_index)
 
     def append_hyperlink(
         self,
+        url: str | None = None,
         *,
+        text: str | None = None,
+        metadata_fields: Sequence[str | int] | None = None,
         profile_root: str | Path | None = None,
         section_index: int | None = None,
     ) -> None:
-        self._append_feature_via_profile("hyperlink", profile_root=profile_root, section_index=section_index)
+        self._append_hyperlink_with_text(
+            url or DEFAULT_HWP_HYPERLINK_URL,
+            text=text or DEFAULT_HWP_HYPERLINK_TEXT,
+            metadata_fields=metadata_fields,
+            profile_root=profile_root,
+            section_index=section_index,
+        )
 
     def paragraphs(self, section_index: int = 0) -> list[HwpParagraph]:
         paragraphs: list[HwpParagraph] = []
@@ -1209,5 +1757,270 @@ class HwpBinaryDocument:
             raise HwpBinaryEditError(
                 f"Pure profile feature templates currently target section {profile.target_section_index}, "
                 f"but section {section_index} was requested."
-            )
+        )
         append_feature_from_profile(self, profile, feature)
+
+    def _resolve_append_section_index(self, profile_root: str | Path | None, section_index: int | None) -> int:
+        if section_index is not None:
+            return section_index
+        if profile_root is None:
+            from .hwp_pure_profile import HwpPureProfile
+
+            return HwpPureProfile.load_bundled().target_section_index
+        profile_path = Path(profile_root).expanduser().resolve()
+        if not profile_path.exists():
+            return 0
+        metadata_path = profile_path / "profile.json"
+        if not metadata_path.exists():
+            return 0
+        from .hwp_pure_profile import HwpPureProfile
+
+        return HwpPureProfile.load(profile_path).target_section_index
+
+    def add_embedded_bindata(
+        self,
+        data: bytes,
+        *,
+        extension: str,
+        storage_id: int | None = None,
+        flags: int = 0x0001,
+    ) -> tuple[int, str]:
+        model = self.docinfo_model()
+        bindata = model.add_embedded_bindata(extension, storage_id=storage_id, flags=flags)
+        self.replace_docinfo_model(model)
+        stream_path = f"BinData/BIN{int(bindata.storage_id or 0):04d}.{(bindata.extension or extension).lstrip('.').lower()}"
+        self.add_stream(stream_path, data)
+        return int(bindata.storage_id or 0), stream_path
+
+    def remove_embedded_bindata(self, storage_id: int) -> bool:
+        model = self.docinfo_model()
+        removed = model.remove_bindata(storage_id)
+        if not removed:
+            return False
+        self.replace_docinfo_model(model)
+        prefix = f"BinData/BIN{storage_id:04d}."
+        for stream_path in list(self._streams):
+            if stream_path.startswith(prefix):
+                self.remove_stream(stream_path)
+        return True
+
+    def _resolve_default_picture_storage_id(self) -> int:
+        for stream_path in self.bindata_stream_paths():
+            name = Path(stream_path).name
+            if not name.startswith("BIN") or "." not in name:
+                continue
+            storage_token = name[3:].split(".", 1)[0]
+            if storage_token.isdigit():
+                return int(storage_token)
+        raise HwpBinaryEditError(
+            "append_picture() without image_bytes requires at least one existing BinData stream in the document."
+        )
+
+    def _build_picture_records(self, storage_id: int) -> list[HwpRecord]:
+        top_char_count = len(_PICTURE_TOP_PARA_TEXT) // 2
+        picture_payload = bytearray(_PICTURE_SHAPE_PICTURE)
+        if len(picture_payload) <= 72:
+            raise HwpBinaryEditError("Built picture payload is shorter than expected.")
+        picture_payload[71:73] = int(storage_id).to_bytes(2, "little", signed=False)
+        return [
+            HwpRecord(
+                tag_id=TAG_PARA_HEADER,
+                level=0,
+                size=22,
+                header_size=4,
+                offset=-1,
+                payload=top_char_count.to_bytes(4, "little") + _PICTURE_TOP_PARA_HEADER_TAIL,
+            ),
+            HwpRecord(tag_id=TAG_PARA_TEXT, level=1, size=len(_PICTURE_TOP_PARA_TEXT), header_size=4, offset=-1, payload=_PICTURE_TOP_PARA_TEXT),
+            HwpRecord(tag_id=TAG_PARA_CHAR_SHAPE, level=1, size=len(_PICTURE_TOP_CHAR_SHAPE), header_size=4, offset=-1, payload=_PICTURE_TOP_CHAR_SHAPE),
+            HwpRecord(tag_id=TAG_PARA_LINE_SEG, level=1, size=len(_PICTURE_TOP_LINE_SEG), header_size=4, offset=-1, payload=_PICTURE_TOP_LINE_SEG),
+            HwpRecord(tag_id=TAG_CTRL_HEADER, level=1, size=len(_PICTURE_CTRL_HEADER), header_size=4, offset=-1, payload=_PICTURE_CTRL_HEADER),
+            HwpRecord(
+                tag_id=TAG_SHAPE_COMPONENT,
+                level=2,
+                size=len(_PICTURE_SHAPE_COMPONENT),
+                header_size=4,
+                offset=-1,
+                payload=_PICTURE_SHAPE_COMPONENT,
+            ),
+            HwpRecord(
+                tag_id=TAG_SHAPE_COMPONENT_PICTURE,
+                level=3,
+                size=len(picture_payload),
+                header_size=4,
+                offset=-1,
+                payload=bytes(picture_payload),
+            ),
+        ]
+
+    def _append_picture_with_storage_id(
+        self,
+        storage_id: int,
+        *,
+        profile_root: str | Path | None,
+        section_index: int | None,
+    ) -> None:
+        target_section_index = self._resolve_append_section_index(profile_root, section_index)
+        section_records = self.section_records(target_section_index)
+        section_records.extend(self._build_picture_records(storage_id))
+        self.replace_section_records(target_section_index, section_records)
+
+    def _append_picture_with_bindata(
+        self,
+        image_bytes: bytes,
+        *,
+        extension: str,
+        profile_root: str | Path | None,
+        section_index: int | None,
+    ) -> None:
+        storage_id, _stream_path = self.add_embedded_bindata(image_bytes, extension=extension)
+        self._append_picture_with_storage_id(storage_id, profile_root=profile_root, section_index=section_index)
+
+    def _append_table_with_text(
+        self,
+        cell_text: str | None,
+        *,
+        rows: int,
+        cols: int,
+        cell_texts: Sequence[str] | Sequence[Sequence[str]] | None,
+        row_heights: Sequence[int] | None,
+        col_widths: Sequence[int] | None,
+        cell_spans: dict[tuple[int, int], tuple[int, int]] | None,
+        cell_border_fill_ids: dict[tuple[int, int], int] | None,
+        table_border_fill_id: int,
+        profile_root: str | Path | None,
+        section_index: int | None,
+    ) -> None:
+        target_section_index = self._resolve_append_section_index(profile_root, section_index)
+        matrix = _normalize_table_cell_texts(rows, cols, cell_text, cell_texts)
+        normalized_row_heights = _normalize_table_measurements(
+            rows,
+            row_heights,
+            default=DEFAULT_HWP_TABLE_CELL_HEIGHT,
+            name="row_heights",
+        )
+        normalized_col_widths = _normalize_table_measurements(
+            cols,
+            col_widths,
+            default=DEFAULT_HWP_TABLE_CELL_WIDTH,
+            name="col_widths",
+        )
+        cell_specs = _build_table_cell_specs(
+            matrix,
+            row_heights=normalized_row_heights,
+            col_widths=normalized_col_widths,
+            cell_spans=cell_spans,
+            cell_border_fill_ids=cell_border_fill_ids,
+            default_border_fill_id=table_border_fill_id,
+            cell_margins=None,
+        )
+        top_char_count = len(_TABLE_TOP_PARA_TEXT) // 2
+        records_to_append = [
+            HwpRecord(
+                tag_id=TAG_PARA_HEADER,
+                level=0,
+                size=24,
+                header_size=4,
+                offset=-1,
+                payload=top_char_count.to_bytes(4, "little") + _TABLE_TOP_PARA_HEADER_TAIL,
+            ),
+            HwpRecord(tag_id=TAG_PARA_TEXT, level=1, size=len(_TABLE_TOP_PARA_TEXT), header_size=4, offset=-1, payload=_TABLE_TOP_PARA_TEXT),
+            HwpRecord(tag_id=TAG_PARA_CHAR_SHAPE, level=1, size=len(_TABLE_TOP_CHAR_SHAPE), header_size=4, offset=-1, payload=_TABLE_TOP_CHAR_SHAPE),
+            HwpRecord(tag_id=TAG_PARA_LINE_SEG, level=1, size=len(_TABLE_TOP_LINE_SEG), header_size=4, offset=-1, payload=_TABLE_TOP_LINE_SEG),
+            HwpRecord(tag_id=TAG_CTRL_HEADER, level=1, size=len(_TABLE_CTRL_HEADER), header_size=4, offset=-1, payload=_TABLE_CTRL_HEADER),
+        ]
+        table_payload = _build_table_record_payload(
+            rows,
+            cols,
+            default_row_height=1,
+            border_fill_id=table_border_fill_id,
+        )
+        table_payload = bytearray(table_payload)
+        row_sizes_offset = 18
+        for row_index, row_height in enumerate(normalized_row_heights):
+            offset = row_sizes_offset + row_index * 2
+            table_payload[offset : offset + 2] = int(row_height).to_bytes(2, "little", signed=False)
+        records_to_append.append(HwpRecord(tag_id=TAG_TABLE, level=2, size=len(table_payload), header_size=4, offset=-1, payload=bytes(table_payload)))
+        for cell in cell_specs:
+            cell_payload = _build_table_cell_list_header_payload(cell)
+            records_to_append.append(
+                HwpRecord(tag_id=TAG_LIST_HEADER, level=2, size=len(cell_payload), header_size=4, offset=-1, payload=cell_payload)
+            )
+            cell_raw_text = str(cell.text) + "\r"
+            cell_char_count = len(cell_raw_text)
+            records_to_append.append(
+                HwpRecord(
+                    tag_id=TAG_PARA_HEADER,
+                    level=2,
+                    size=24,
+                    header_size=4,
+                    offset=-1,
+                    payload=(0x80000000 | cell_char_count).to_bytes(4, "little") + _TABLE_CELL_PARA_HEADER_TAIL,
+                )
+            )
+            records_to_append.append(
+                HwpRecord(
+                    tag_id=TAG_PARA_TEXT,
+                    level=3,
+                    size=len(cell_raw_text.encode("utf-16-le")),
+                    header_size=4,
+                    offset=-1,
+                    payload=cell_raw_text.encode("utf-16-le"),
+                )
+            )
+            records_to_append.append(
+                HwpRecord(
+                    tag_id=TAG_PARA_CHAR_SHAPE,
+                    level=3,
+                    size=len(_TABLE_CELL_CHAR_SHAPE),
+                    header_size=4,
+                    offset=-1,
+                    payload=_TABLE_CELL_CHAR_SHAPE,
+                )
+            )
+            records_to_append.append(
+                HwpRecord(
+                    tag_id=TAG_PARA_LINE_SEG,
+                    level=3,
+                    size=len(_TABLE_CELL_LINE_SEG),
+                    header_size=4,
+                    offset=-1,
+                    payload=_TABLE_CELL_LINE_SEG,
+                )
+            )
+        section_records = self.section_records(target_section_index)
+        section_records.extend(records_to_append)
+        self.replace_section_records(target_section_index, section_records)
+
+    def _append_hyperlink_with_text(
+        self,
+        url: str,
+        *,
+        text: str | None,
+        metadata_fields: Sequence[str | int] | None,
+        profile_root: str | Path | None,
+        section_index: int | None,
+    ) -> None:
+        target_section_index = self._resolve_append_section_index(profile_root, section_index)
+        display_text = text or url
+        raw_payload = _build_hyperlink_para_text_payload(display_text)
+        char_count = len(raw_payload) // 2
+        control_payload = _build_hyperlink_ctrl_payload(url, metadata_fields=metadata_fields)
+
+        records_to_append = [
+            HwpRecord(
+                tag_id=TAG_PARA_HEADER,
+                level=0,
+                size=22,
+                header_size=4,
+                offset=-1,
+                payload=(0x80000000 | char_count).to_bytes(4, "little") + _HYPERLINK_PARA_HEADER_TAIL,
+            ),
+            HwpRecord(tag_id=TAG_PARA_TEXT, level=1, size=len(raw_payload), header_size=4, offset=-1, payload=raw_payload),
+            HwpRecord(tag_id=TAG_PARA_CHAR_SHAPE, level=1, size=len(_HYPERLINK_CHAR_SHAPE), header_size=4, offset=-1, payload=_HYPERLINK_CHAR_SHAPE),
+            HwpRecord(tag_id=TAG_PARA_LINE_SEG, level=1, size=len(_HYPERLINK_LINE_SEG), header_size=4, offset=-1, payload=_HYPERLINK_LINE_SEG),
+            HwpRecord(tag_id=TAG_CTRL_HEADER, level=1, size=len(control_payload), header_size=4, offset=-1, payload=control_payload),
+        ]
+        section_records = self.section_records(target_section_index)
+        section_records.extend(records_to_append)
+        self.replace_section_records(target_section_index, section_records)

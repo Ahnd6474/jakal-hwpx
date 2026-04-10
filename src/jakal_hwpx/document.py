@@ -2222,6 +2222,21 @@ class HwpxDocument:
         output_path.write_bytes(self.compile(validate=validate))
         return output_path
 
+    def to_hwp_document(self, *, converter=None):
+        from .bridge import HwpHwpxBridge
+
+        return HwpHwpxBridge.from_hwpx(self, converter=converter).hwp_document(force_refresh=True)
+
+    def save_as_hwp(self, path: str | os.PathLike[str], *, converter=None, force_refresh: bool = True) -> Path:
+        from .bridge import HwpHwpxBridge
+
+        return HwpHwpxBridge.from_hwpx(self, converter=converter).save_hwp(path, force_refresh=force_refresh)
+
+    def bridge(self, *, converter=None):
+        from .bridge import HwpHwpxBridge
+
+        return HwpHwpxBridge.from_hwpx(self, converter=converter)
+
     def validation_errors(self) -> list[ValidationIssue]:
         errors: list[ValidationIssue] = []
         content_hpf = self._parts.get("Contents/content.hpf")

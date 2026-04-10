@@ -83,6 +83,7 @@ def build_minimal_control_candidate(
     output_path: str | Path,
     *,
     paragraph_window: int = 0,
+    keep_first_paragraph: bool = True,
 ) -> Path:
     target_path = Path(output_path).expanduser().resolve()
     target_path.parent.mkdir(parents=True, exist_ok=True)
@@ -93,7 +94,9 @@ def build_minimal_control_candidate(
     if target_paragraph_index is None:
         raise IndexError("The requested control occurrence is not contained in a paragraph range.")
 
-    keep_indices = {0, target_paragraph_index}
+    keep_indices = {target_paragraph_index}
+    if keep_first_paragraph:
+        keep_indices.add(0)
     for delta in range(1, paragraph_window + 1):
         keep_indices.add(max(0, target_paragraph_index - delta))
         keep_indices.add(min(len(paragraph_ranges) - 1, target_paragraph_index + delta))

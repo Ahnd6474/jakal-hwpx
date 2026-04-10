@@ -46,56 +46,54 @@ def write_compound_file(path: str | Path, streams: dict[str, bytes]) -> Path:
 
     entries = _build_entries(streams)
     mini_stream_data = _assign_mini_stream(entries)
-    directory_bytes = _build_directory_stream(entries)
 
-    regular_objects: list[tuple[str, bytes]] = []
-    for entry in entries:
+    regular_objects: list[tuple[int, bytes]] = []
+    for index, entry in enumerate(entries):
         if entry.entry_type == STGTY_STREAM and (entry.size == 0 or entry.size >= MINI_STREAM_CUTOFF):
-            regular_objects.append((entry.name, entry.data))
+            regular_objects.append((index, entry.data))
     if mini_stream_data:
-        regular_objects.append(("__mini_stream__", mini_stream_data))
-    if directory_bytes:
-        regular_objects.append(("__directory__", directory_bytes))
+        regular_objects.append((-1, mini_stream_data))
 
-    object_chains: dict[str, list[int]] = {}
+    directory_size = _directory_stream_size(len(entries))
+
+    object_chains: dict[int, list[int]] = {}
     sectors: list[bytes] = []
-    sector_index = 0
-    for name, data in regular_objects:
+    for entry_id, data in regular_objects:
         chain = _append_chain(sectors, data)
-        object_chains[name] = list(range(sector_index, sector_index + len(chain)))
-        sector_index += len(chain)
+        object_chains[entry_id] = chain
 
     if mini_stream_data:
-        mini_stream_chain = object_chains["__mini_stream__"]
+        mini_stream_chain = object_chains[-1]
         entries[0].start_sector = mini_stream_chain[0]
         entries[0].size = len(mini_stream_data)
     else:
         entries[0].start_sector = ENDOFCHAIN
         entries[0].size = 0
 
-    for entry in entries:
+    for index, entry in enumerate(entries):
         if entry.entry_type != STGTY_STREAM or entry.size == 0 or entry.size < MINI_STREAM_CUTOFF:
             continue
-        chain = object_chains[entry.name]
+        chain = object_chains[index]
         entry.start_sector = chain[0]
-
-    directory_chain = object_chains["__directory__"]
-    directory_start_sector = directory_chain[0]
 
     mini_sector_count = len(mini_stream_data) // MINI_SECTOR_SIZE
     mini_fat_entries = _build_mini_fat(entries, mini_sector_count)
     mini_fat_bytes = b"".join(value.to_bytes(4, "little") for value in mini_fat_entries)
     mini_fat_chain = _append_chain(sectors, mini_fat_bytes) if mini_fat_entries else []
 
+    directory_chain = _append_chain(sectors, b"\x00" * directory_size)
+    directory_start_sector = directory_chain[0]
+
     data_sector_count = len(sectors)
     fat_sector_count = _compute_fat_sector_count(data_sector_count)
     fat_sector_ids = list(range(data_sector_count, data_sector_count + fat_sector_count))
 
     fat_entries = [FREESECT] * (data_sector_count + fat_sector_count)
-    for name, chain in object_chains.items():
+    for chain in object_chains.values():
         _mark_chain(fat_entries, chain)
     if mini_fat_chain:
         _mark_chain(fat_entries, mini_fat_chain)
+    _mark_chain(fat_entries, directory_chain)
     for fat_sector_id in fat_sector_ids:
         fat_entries[fat_sector_id] = FATSECT
 
@@ -112,6 +110,9 @@ def write_compound_file(path: str | Path, streams: dict[str, bytes]) -> Path:
         mini_fat_chain=mini_fat_chain,
     )
 
+    directory_bytes = _build_directory_stream(entries)
+    _store_chain_payload(sectors, directory_chain, directory_bytes)
+
     target_path.write_bytes(header + b"".join(sectors))
     return target_path
 
@@ -124,6 +125,16 @@ def _append_chain(sectors: list[bytes], data: bytes) -> list[int]:
     for index in range(0, len(padded), SECTOR_SIZE):
         sectors.append(padded[index : index + SECTOR_SIZE])
     return list(range(start, len(sectors)))
+
+
+def _store_chain_payload(sectors: list[bytes], chain: list[int], data: bytes) -> None:
+    if not chain:
+        return
+    padded = data + (b"\x00" * ((SECTOR_SIZE - (len(data) % SECTOR_SIZE)) % SECTOR_SIZE))
+    for chain_index, sector_id in enumerate(chain):
+        start = chain_index * SECTOR_SIZE
+        end = start + SECTOR_SIZE
+        sectors[sector_id] = padded[start:end]
 
 
 def _compute_fat_sector_count(data_sector_count: int) -> int:
@@ -241,6 +252,11 @@ def _build_directory_stream(entries: list[_CfbEntry]) -> bytes:
     if padding:
         data.extend(b"\x00" * padding)
     return bytes(data)
+
+
+def _directory_stream_size(entry_count: int) -> int:
+    raw_size = entry_count * DIR_ENTRY_SIZE
+    return raw_size + ((SECTOR_SIZE - (raw_size % SECTOR_SIZE)) % SECTOR_SIZE)
 
 
 def _build_directory_entry(entry: _CfbEntry) -> bytes:
