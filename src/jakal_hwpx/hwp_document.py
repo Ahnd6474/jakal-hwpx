@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import tempfile
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
@@ -68,6 +69,9 @@ class HwpDocument:
 
     def list_stream_paths(self) -> list[str]:
         return self._binary_document.list_stream_paths()
+
+    def bindata_stream_paths(self) -> list[str]:
+        return self._binary_document.bindata_stream_paths()
 
     def stream_capacity(self, path: str) -> HwpStreamCapacity:
         data = self._binary_document.read_stream(path, decompress=self._binary_document._stream_is_compressed(path))
@@ -191,14 +195,69 @@ class HwpDocument:
         self._pure_profile = HwpPureProfile.load(profile_root)
         return self._pure_profile
 
-    def append_table(self) -> None:
-        self._append_feature_pure("table")
+    def append_table(
+        self,
+        cell_text: str | None = None,
+        *,
+        rows: int = 1,
+        cols: int = 1,
+        cell_texts: Sequence[str] | Sequence[Sequence[str]] | None = None,
+        row_heights: Sequence[int] | None = None,
+        col_widths: Sequence[int] | None = None,
+        cell_spans: dict[tuple[int, int], tuple[int, int]] | None = None,
+        cell_border_fill_ids: dict[tuple[int, int], int] | None = None,
+        table_border_fill_id: int = 1,
+    ) -> None:
+        self._invalidate_bridge()
+        if self._pure_profile is None:
+            self._pure_profile = HwpPureProfile.load_bundled()
+        self._binary_document.append_table(
+            cell_text,
+            rows=rows,
+            cols=cols,
+            cell_texts=cell_texts,
+            row_heights=row_heights,
+            col_widths=col_widths,
+            cell_spans=cell_spans,
+            cell_border_fill_ids=cell_border_fill_ids,
+            table_border_fill_id=table_border_fill_id,
+            profile_root=self._pure_profile.root,
+        )
 
-    def append_picture(self) -> None:
-        self._append_feature_pure("picture")
+    def append_picture(self, image_bytes: bytes | None = None, *, extension: str | None = None) -> None:
+        self._invalidate_bridge()
+        if self._pure_profile is None:
+            self._pure_profile = HwpPureProfile.load_bundled()
+        self._binary_document.append_picture(
+            image_bytes,
+            extension=extension,
+            profile_root=self._pure_profile.root,
+        )
 
-    def append_hyperlink(self) -> None:
-        self._append_feature_pure("hyperlink")
+    def append_hyperlink(
+        self,
+        url: str | None = None,
+        *,
+        text: str | None = None,
+        metadata_fields: Sequence[str | int] | None = None,
+    ) -> None:
+        self._invalidate_bridge()
+        if self._pure_profile is None:
+            self._pure_profile = HwpPureProfile.load_bundled()
+        self._binary_document.append_hyperlink(
+            url,
+            text=text,
+            metadata_fields=metadata_fields,
+            profile_root=self._pure_profile.root,
+        )
+
+    def add_embedded_bindata(self, data: bytes, *, extension: str, storage_id: int | None = None) -> tuple[int, str]:
+        self._invalidate_bridge()
+        return self._binary_document.add_embedded_bindata(data, extension=extension, storage_id=storage_id)
+
+    def remove_embedded_bindata(self, storage_id: int) -> bool:
+        self._invalidate_bridge()
+        return self._binary_document.remove_embedded_bindata(storage_id)
 
     def append_table_pure(self) -> None:
         self.append_table()
@@ -208,6 +267,11 @@ class HwpDocument:
 
     def append_hyperlink_pure(self) -> None:
         self.append_hyperlink()
+
+    def bridge(self):
+        from .bridge import HwpHwpxBridge
+
+        return HwpHwpxBridge.from_hwp(self, converter=self._converter)
 
     def __getattr__(self, name: str):
         if name.startswith("_"):

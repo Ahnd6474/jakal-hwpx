@@ -8,8 +8,8 @@
   },
   "target_section_index": 1,
   "template_section_indices": {
-    "table": 1,
-    "picture": 1,
-    "hyperlink": 1
+    "table": 0,
+    "picture": 0,
+    "hyperlink": 0
   }
 }

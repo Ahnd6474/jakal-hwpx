@@ -140,3 +140,70 @@ def test_hwp_document_exposes_direct_pure_python_control_append_methods(tmp_path
     document.save(output_path)
     reopened = HwpDocument.open(output_path)
     assert len(reopened.binary_document().section_records(profile.target_section_index)) == after_count
+
+
+def test_hwp_document_can_append_picture_from_bytes(tmp_path: Path) -> None:
+    document = HwpDocument.blank()
+    image_bytes = document.binary_document().read_stream("BinData/BIN0001.bmp", decompress=False)
+    before_bindata_count = document.binary_document().docinfo_model().id_mappings_record().bin_data_count
+
+    document.append_picture(image_bytes, extension="bmp")
+
+    after_bindata_count = document.binary_document().docinfo_model().id_mappings_record().bin_data_count
+    assert after_bindata_count == before_bindata_count + 1
+
+    output_path = tmp_path / "append_picture_bytes_document.hwp"
+    document.save(output_path)
+    reopened = HwpDocument.open(output_path)
+    assert reopened.binary_document().docinfo_model().id_mappings_record().bin_data_count == after_bindata_count
+
+
+def test_hwp_document_can_append_custom_table_and_hyperlink(tmp_path: Path) -> None:
+    document = HwpDocument.blank()
+    document.append_table("DOC-CELL")
+    document.append_hyperlink("https://example.com/doc", text="DOC-LINK")
+
+    output_path = tmp_path / "custom_table_hyperlink_document.hwp"
+    document.save(output_path)
+    reopened = HwpDocument.open(output_path)
+    text = reopened.get_document_text()
+    assert "DOC-CELL" in text
+    assert "DOC-LINK" in text
+
+
+def test_hwp_document_supports_multi_cell_tables_and_hyperlink_metadata(tmp_path: Path) -> None:
+    document = HwpDocument.blank()
+    document.append_table(rows=2, cols=2, cell_texts=[["A1", "A2"], ["B1", "B2"]])
+    document.append_hyperlink(
+        "https://example.com/document-meta",
+        text="DOC-META",
+        metadata_fields=[3, 2, "anchor"],
+    )
+
+    output_path = tmp_path / "document_multi_cell_metadata.hwp"
+    document.save(output_path)
+    reopened = HwpDocument.open(output_path)
+    text = reopened.get_document_text()
+    for value in ("A1", "A2", "B1", "B2", "DOC-META"):
+        assert value in text
+
+
+def test_hwp_document_supports_table_geometry_options(tmp_path: Path) -> None:
+    document = HwpDocument.blank()
+    document.append_table(
+        rows=2,
+        cols=3,
+        cell_texts=[["M1", "", "M2"], ["M3", "M4", ""]],
+        row_heights=[150, 250],
+        col_widths=[1200, 1300, 1400],
+        cell_spans={(0, 0): (1, 2), (1, 1): (1, 2)},
+        cell_border_fill_ids={(0, 0): 7, (1, 1): 8},
+        table_border_fill_id=6,
+    )
+
+    output_path = tmp_path / "document_table_geometry.hwp"
+    document.save(output_path)
+    reopened = HwpDocument.open(output_path)
+    text = reopened.get_document_text()
+    for value in ("M1", "M2", "M3", "M4"):
+        assert value in text

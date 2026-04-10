@@ -1,0 +1,60 @@
+﻿[
+    {
+        "timestamp":  "2026-04-10T10:10:53.5225169+09:00",
+        "kind":  "existing_hwp_processes",
+        "count":  1,
+        "processes":  [
+                          {
+                              "Id":  31368,
+                              "ProcessName":  "Hwp",
+                              "MainWindowTitle":  "",
+                              "Responding":  true,
+                              "StartTime":  "",
+                              "Path":  null
+                          }
+                      ]
+    },
+    {
+        "timestamp":  "2026-04-10T10:10:53.5566000+09:00",
+        "kind":  "security_module_registry",
+        "moduleName":  "FilePathCheckerModuleExample",
+        "modulePath":  "D:\\GitHub\\jakal-hwpx\\.codex-temp\\hancom-security\\expanded\\FilePathCheckerModuleExample.dll",
+        "registryRoot":  "HKCU:\\SOFTWARE\\HNC\\HwpAutomation\\Modules",
+        "registryValue":  "D:\\GitHub\\jakal-hwpx\\.codex-temp\\hancom-security\\expanded\\FilePathCheckerModuleExample.dll"
+    },
+    {
+        "timestamp":  "2026-04-10T10:10:54.9353752+09:00",
+        "kind":  "com",
+        "message":  "Created HWPFrame.HwpObject"
+    },
+    {
+        "timestamp":  "2026-04-10T10:10:55.0259993+09:00",
+        "kind":  "messagebox_mode",
+        "value":  "0x00010000"
+    },
+    {
+        "timestamp":  "2026-04-10T10:10:55.0349523+09:00",
+        "kind":  "register_module",
+        "moduleName":  "FilePathCheckerModuleExample",
+        "moduleType":  "FilePathCheckDLL",
+        "result":  "True"
+    },
+    {
+        "timestamp":  "2026-04-10T10:10:55.5956140+09:00",
+        "kind":  "open",
+        "result":  "True",
+        "path":  "D:\\GitHub\\jakal-hwpx\\examples\\output_hwp_stability_lab\\combo_07\\combo_07_edited_hancom.hwpx"
+    },
+    {
+        "timestamp":  "2026-04-10T10:10:56.2923556+09:00",
+        "kind":  "saveas",
+        "path":  "D:\\GitHub\\jakal-hwpx\\examples\\output_hwp_stability_lab\\combo_07\\combo_07_edited_hancom_roundtrip.hwp",
+        "format":  "HWP",
+        "result":  "True"
+    },
+    {
+        "timestamp":  "2026-04-10T10:10:56.3025428+09:00",
+        "kind":  "quit",
+        "result":  "ok"
+    }
+]
