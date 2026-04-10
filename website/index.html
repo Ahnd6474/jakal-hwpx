@@ -47,6 +47,7 @@
     .hero::before {
       content: ''; position: absolute; inset: 0;
       background: radial-gradient(ellipse at 50% -10%, rgba(96,165,250,0.2) 0%, transparent 65%);
+      pointer-events: none;
     }
     .hero-eyebrow {
       display: inline-flex; align-items: center; gap: 0.5rem;
@@ -593,11 +594,25 @@ doc.<span class="fn">save</span>(<span class="str">"완성.hwpx"</span>, validat
 
 <script>
   function cp(btn, text) {
-    navigator.clipboard.writeText(text).then(() => {
-      const orig = btn.textContent;
-      btn.textContent = '✓ 복사됨';
-      setTimeout(() => btn.textContent = orig, 2000);
-    });
+    if (navigator.clipboard && window.isSecureContext) {
+      navigator.clipboard.writeText(text).then(() => flash(btn)).catch(() => fallback(btn, text));
+    } else {
+      fallback(btn, text);
+    }
+  }
+  function fallback(btn, text) {
+    const ta = document.createElement('textarea');
+    ta.value = text;
+    ta.style.cssText = 'position:fixed;opacity:0;top:0;left:0;';
+    document.body.appendChild(ta);
+    ta.focus(); ta.select();
+    try { document.execCommand('copy'); flash(btn); } catch(e) {}
+    document.body.removeChild(ta);
+  }
+  function flash(btn) {
+    const orig = btn.textContent;
+    btn.textContent = '✓ 복사됨';
+    setTimeout(() => btn.textContent = orig, 2000);
   }
 </script>
 </body>
