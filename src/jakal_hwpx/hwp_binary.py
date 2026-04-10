@@ -1230,12 +1230,22 @@ class SectionModel:
         if paragraph_index == len(current_paragraphs):
             self.roots.append(header)
         else:
-            self.roots.insert(self.roots.index(current_paragraphs[paragraph_index].header), header)
+            root_index = self._root_insert_index_for_paragraph(paragraph_index)
+            self.roots.insert(root_index, header)
         return SectionParagraphModel(
             section_index=self.section_index,
             index=paragraph_index,
             header=header,
         )
+
+    def _root_insert_index_for_paragraph(self, paragraph_index: int) -> int:
+        seen = 0
+        for root_index, root in enumerate(self.roots):
+            paragraph_count = sum(1 for node in root.iter_preorder() if isinstance(node, ParagraphHeaderRecord))
+            if seen + paragraph_count > paragraph_index:
+                return root_index
+            seen += paragraph_count
+        return len(self.roots)
 
     def to_records(self) -> list[HwpRecord]:
         return flatten_record_tree(self.roots)

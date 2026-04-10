@@ -427,21 +427,23 @@ def test_hwp_document_append_methods_support_paragraph_index() -> None:
     section.append_paragraph("FIRST")
     section.append_paragraph("SECOND")
     section.append_paragraph("THIRD")
+    initial_texts = [paragraph.text for paragraph in section.paragraphs()]
+    first_index = initial_texts.index("FIRST")
 
-    document.append_field(field_type="DOCPROPERTY", display_text="FIELD-MID", paragraph_index=1)
-    document.append_equation("EQ-MID", paragraph_index=2)
-    document.append_shape(kind="rect", text="SHAPE-MID", paragraph_index=3)
-    document.append_ole("OLE-MID", b"ole-mid", paragraph_index=4)
+    document.append_field(field_type="DOCPROPERTY", display_text="FIELD-MID", paragraph_index=first_index + 1)
+    document.append_equation("EQ-MID", paragraph_index=first_index + 2)
+    document.append_shape(kind="rect", text="SHAPE-MID", paragraph_index=first_index + 3)
+    document.append_ole("OLE-MID", b"ole-mid", paragraph_index=first_index + 4)
 
     texts = [paragraph.text for paragraph in section.paragraphs()]
-    assert texts[0] == "FIRST"
-    assert "FIELD-MID" in texts[1]
-    assert texts[2] == "\r"
-    assert "SHAPE-MID" in texts[3]
-    assert "OLE-MID" in texts[4]
-    assert texts[5] == "SECOND"
-    assert texts[6] == "THIRD"
-    assert any(equation.paragraph_index == 2 for equation in document.equations() if equation.script == "EQ-MID")
+    updated_first_index = texts.index("FIRST")
+    assert "FIELD-MID" in texts[updated_first_index + 1]
+    assert texts[updated_first_index + 2] == "\r"
+    assert "SHAPE-MID" in texts[updated_first_index + 3]
+    assert "OLE-MID" in texts[updated_first_index + 4]
+    assert texts[updated_first_index + 5] == "SECOND"
+    assert texts[updated_first_index + 6] == "THIRD"
+    assert any(equation.paragraph_index == updated_first_index + 2 for equation in document.equations() if equation.script == "EQ-MID")
 
 
 def test_hwp_table_object_can_append_row_and_roundtrip(tmp_path: Path) -> None:
