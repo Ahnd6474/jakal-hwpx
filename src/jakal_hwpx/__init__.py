@@ -123,7 +123,7 @@ from .parts import (
 )
 from .xmlnode import HwpxXmlNode
 
-__version__ = "0.2.0"
+__version__ = "0.3.0b1"
 
 __all__ = [
     "BinaryDataPart",
