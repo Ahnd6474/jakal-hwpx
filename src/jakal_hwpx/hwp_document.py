@@ -9,8 +9,16 @@ from typing import Callable
 from ._hancom import convert_document
 from .document import HwpxDocument
 from .hwp_binary import (
+    _build_table_cell_list_header_payload,
+    _build_table_record_payload,
     _build_hyperlink_ctrl_payload,
     _build_hyperlink_para_text_payload,
+    _TableCellSpec,
+    _TABLE_CELL_CHAR_SHAPE,
+    _TABLE_CELL_LINE_SEG,
+    _TABLE_CELL_PARA_HEADER_TAIL,
+    DEFAULT_HWP_TABLE_CELL_HEIGHT,
+    DEFAULT_HWP_TABLE_CELL_WIDTH,
     DocInfoModel,
     HwpBinaryDocument,
     HwpBinaryFileHeader,
@@ -25,7 +33,9 @@ from .hwp_binary import (
     TAG_CTRL_HEADER,
     TAG_EQEDIT,
     TAG_LIST_HEADER,
+    TAG_PARA_CHAR_SHAPE,
     TAG_PARA_HEADER,
+    TAG_PARA_LINE_SEG,
     TAG_SHAPE_COMPONENT,
     TAG_SHAPE_COMPONENT_ARC,
     TAG_SHAPE_COMPONENT_CONTAINER,
@@ -524,6 +534,84 @@ class HwpSection:
             control_mask=control_mask,
         )
 
+    def append_field(
+        self,
+        *,
+        field_type: str,
+        display_text: str | None = None,
+        name: str | None = None,
+        parameters: dict[str, str | int] | None = None,
+        editable: bool = False,
+        dirty: bool = False,
+        paragraph_index: int | None = None,
+    ) -> None:
+        self.document.append_field(
+            field_type=field_type,
+            display_text=display_text,
+            name=name,
+            parameters=parameters,
+            editable=editable,
+            dirty=dirty,
+            section_index=self.index,
+            paragraph_index=paragraph_index,
+        )
+
+    def append_equation(
+        self,
+        script: str,
+        *,
+        width: int = 4800,
+        height: int = 2300,
+        paragraph_index: int | None = None,
+    ) -> None:
+        self.document.append_equation(
+            script,
+            width=width,
+            height=height,
+            section_index=self.index,
+            paragraph_index=paragraph_index,
+        )
+
+    def append_shape(
+        self,
+        *,
+        kind: str = "rect",
+        text: str = "",
+        width: int = 12000,
+        height: int = 3200,
+        fill_color: str = "#FFFFFF",
+        line_color: str = "#000000",
+        paragraph_index: int | None = None,
+    ) -> None:
+        self.document.append_shape(
+            kind=kind,
+            text=text,
+            width=width,
+            height=height,
+            fill_color=fill_color,
+            line_color=line_color,
+            section_index=self.index,
+            paragraph_index=paragraph_index,
+        )
+
+    def append_ole(
+        self,
+        name: str,
+        data: bytes,
+        *,
+        width: int = 42001,
+        height: int = 13501,
+        paragraph_index: int | None = None,
+    ) -> None:
+        self.document.append_ole(
+            name,
+            data,
+            width=width,
+            height=height,
+            section_index=self.index,
+            paragraph_index=paragraph_index,
+        )
+
 
 class HwpParagraphObject:
     def __init__(self, document: HwpDocument, paragraph: HwpParagraph):
@@ -795,12 +883,218 @@ class HwpTableObject(HwpControlObject):
         record.payload = bytes(payload)
         self._commit(section_model)
 
+    def append_row(self) -> list[HwpTableCellObject]:
+        section_model, _paragraph, control_node = self._live_context()
+        row_heights = list(self.row_heights)
+        new_row_index = self.row_count
+        row_heights.append(row_heights[-1] if row_heights else DEFAULT_HWP_TABLE_CELL_HEIGHT)
+        column_widths = self._column_widths()
+        current_specs = self._cell_specs()
+        for column_index, column_width in enumerate(column_widths):
+            current_specs.append(
+                _TableCellSpec(
+                    row=new_row_index,
+                    col=column_index,
+                    row_span=1,
+                    col_span=1,
+                    width=column_width,
+                    height=row_heights[-1],
+                    text="",
+                    border_fill_id=self.table_border_fill_id,
+                    margins=self._default_cell_margins(),
+                )
+            )
+        self._replace_table_cells(
+            section_model,
+            control_node,
+            row_count=self.row_count + 1,
+            column_count=self.column_count,
+            row_heights=row_heights,
+            cell_specs=current_specs,
+            table_border_fill_id=self.table_border_fill_id,
+        )
+        refreshed = self.document.section(self.section_index).tables()[self._table_index_in_section()]
+        new_row_index = refreshed.row_count - 1
+        return [cell for cell in refreshed.cells() if cell.row == new_row_index]
+
+    def merge_cells(self, start_row: int, start_column: int, end_row: int, end_column: int) -> HwpTableCellObject:
+        if not (0 <= start_row <= end_row < self.row_count):
+            raise IndexError("row merge range is out of bounds.")
+        if not (0 <= start_column <= end_column < self.column_count):
+            raise IndexError("column merge range is out of bounds.")
+
+        section_model, _paragraph, control_node = self._live_context()
+        row_heights = list(self.row_heights)
+        column_widths = self._column_widths()
+        merged_specs: list[_TableCellSpec] = []
+        anchor: _TableCellSpec | None = None
+
+        for spec in self._cell_specs():
+            within_range = (
+                start_row <= spec.row <= end_row
+                and start_column <= spec.col <= end_column
+            )
+            if not within_range:
+                merged_specs.append(spec)
+                continue
+            if spec.row == start_row and spec.col == start_column:
+                anchor = _TableCellSpec(
+                    row=start_row,
+                    col=start_column,
+                    row_span=end_row - start_row + 1,
+                    col_span=end_column - start_column + 1,
+                    width=sum(column_widths[start_column : end_column + 1]),
+                    height=sum(row_heights[start_row : end_row + 1]),
+                    text=spec.text,
+                    border_fill_id=spec.border_fill_id,
+                    margins=spec.margins,
+                )
+            elif spec.row + spec.row_span - 1 > end_row or spec.col + spec.col_span - 1 > end_column:
+                raise ValueError("merge range intersects an existing spanned cell.")
+
+        if anchor is None:
+            raise IndexError("No anchor cell exists at the merge start coordinate.")
+
+        merged_specs.append(anchor)
+        merged_specs.sort(key=lambda item: (item.row, item.col))
+        self._replace_table_cells(
+            section_model,
+            control_node,
+            row_count=self.row_count,
+            column_count=self.column_count,
+            row_heights=row_heights,
+            cell_specs=merged_specs,
+            table_border_fill_id=self.table_border_fill_id,
+        )
+        refreshed = self.document.section(self.section_index).tables()[self._table_index_in_section()]
+        return refreshed.cell(start_row, start_column)
+
+    def _table_index_in_section(self) -> int:
+        section = self.document.section(self.section_index)
+        tables = section.tables()
+        matches = [
+            table
+            for table in tables
+            if table.paragraph_index == self.paragraph_index and table._control_ordinal == self._control_ordinal
+        ]
+        if matches:
+            return tables.index(matches[0])
+        for index, table in enumerate(tables):
+            if table.paragraph_index == self.paragraph_index:
+                return index
+        raise ValueError("Could not locate the current HWP table within its section.")
+
     def _table_record(self, control_node: RecordNode | None = None) -> RecordNode:
         target = self.control_node if control_node is None else control_node
         for node in target.iter_descendants():
             if node.tag_id == TAG_TABLE:
                 return node
         raise ValueError("HWP table control does not contain a table record.")
+
+    def _cell_specs(self) -> list[_TableCellSpec]:
+        return [
+            _TableCellSpec(
+                row=cell.row,
+                col=cell.column,
+                row_span=cell.row_span,
+                col_span=cell.col_span,
+                width=cell.width,
+                height=cell.height,
+                text=cell.text,
+                border_fill_id=cell.border_fill_id,
+                margins=cell.margins,
+            )
+            for cell in self.cells()
+        ]
+
+    def _column_widths(self) -> list[int]:
+        widths = [0] * self.column_count
+        for cell in self.cells():
+            if cell.col_span == 1 and widths[cell.column] == 0:
+                widths[cell.column] = cell.width
+        fallback = max((value for value in widths if value > 0), default=DEFAULT_HWP_TABLE_CELL_WIDTH)
+        for cell in self.cells():
+            if cell.col_span <= 1:
+                continue
+            missing = [index for index in range(cell.column, cell.column + cell.col_span) if widths[index] == 0]
+            if not missing:
+                continue
+            distributed = max(cell.width // cell.col_span, 1)
+            for index in missing:
+                widths[index] = distributed
+        return [value or fallback for value in widths]
+
+    def _default_cell_margins(self) -> tuple[int, int, int, int]:
+        existing_cells = self.cells()
+        if existing_cells:
+            return existing_cells[0].margins
+        return (510, 510, 141, 141)
+
+    def _replace_table_cells(
+        self,
+        section_model: SectionModel,
+        control_node: RecordNode,
+        *,
+        row_count: int,
+        column_count: int,
+        row_heights: Sequence[int],
+        cell_specs: Sequence[_TableCellSpec],
+        table_border_fill_id: int,
+    ) -> None:
+        table_record = self._table_record(control_node)
+        table_record.payload = _build_table_record_payload(
+            row_count,
+            column_count,
+            default_row_height=1,
+            border_fill_id=table_border_fill_id,
+        )
+        payload = bytearray(table_record.payload)
+        row_sizes_offset = 18
+        for row_index, row_height in enumerate(row_heights):
+            offset = row_sizes_offset + row_index * 2
+            payload[offset : offset + 2] = int(row_height).to_bytes(2, "little", signed=False)
+        table_record.payload = bytes(payload)
+
+        new_children: list[RecordNode] = [table_record]
+        for cell in sorted(cell_specs, key=lambda item: (item.row, item.col)):
+            list_header = RecordNode(tag_id=TAG_LIST_HEADER, level=2, payload=_build_table_cell_list_header_payload(cell))
+            raw_text = f"{cell.text}\r"
+            char_count = len(raw_text)
+            paragraph_header = ParagraphHeaderRecord(
+                level=2,
+                char_count=0x80000000 | char_count,
+                control_mask=int.from_bytes(_TABLE_CELL_PARA_HEADER_TAIL[0:4], "little"),
+                para_shape_id=int.from_bytes(_TABLE_CELL_PARA_HEADER_TAIL[4:6], "little"),
+                style_id=_TABLE_CELL_PARA_HEADER_TAIL[6],
+                split_flags=_TABLE_CELL_PARA_HEADER_TAIL[7],
+                trailing_payload=_TABLE_CELL_PARA_HEADER_TAIL[8:],
+            )
+            paragraph_header.add_child(
+                ParagraphTextRecord(
+                    level=3,
+                    raw_text=raw_text,
+                )
+            )
+            paragraph_header.add_child(
+                RecordNode(
+                    tag_id=TAG_PARA_CHAR_SHAPE,
+                    level=3,
+                    payload=_TABLE_CELL_CHAR_SHAPE,
+                )
+            )
+            paragraph_header.add_child(
+                RecordNode(
+                    tag_id=TAG_PARA_LINE_SEG,
+                    level=3,
+                    payload=_TABLE_CELL_LINE_SEG,
+                )
+            )
+            new_children.extend((list_header, paragraph_header))
+
+        control_node.children = []
+        for child in new_children:
+            control_node.add_child(child)
+        self._commit(section_model)
 
 
 class HwpPictureObject(HwpControlObject):

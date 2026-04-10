@@ -379,3 +379,109 @@ def test_hwp_equation_and_shape_object_methods_can_modify_records(sample_hwp_pat
     assert reopened.equations()[0].script == "x+y"
     assert reopened.shapes()[0].size()["width"] == original_size["width"] + 10
     assert reopened.shapes()[0].size()["height"] == original_size["height"] + 20
+
+
+def test_hwp_document_bridge_backed_append_methods_delegate_to_hwpx(monkeypatch: pytest.MonkeyPatch) -> None:
+    document = HwpDocument.blank()
+    bridge = HwpxDocument.blank()
+
+    def fake_mutate(mutate):
+        return mutate(bridge)
+
+    monkeypatch.setattr(document, "_mutate_via_hwpx", fake_mutate)
+
+    document.append_field(field_type="DOCPROPERTY", display_text="FIELD-TEXT", name="Subject")
+    document.append_equation("x+y=z")
+    document.append_shape(kind="rect", text="SHAPE-TEXT", width=3600, height=1800)
+    document.append_ole("embedded.ole", b"OLE-DATA")
+
+    assert len(bridge.fields()) == 1
+    assert bridge.fields()[0].field_type == "DOCPROPERTY"
+    assert bridge.fields()[0].display_text == "FIELD-TEXT"
+    assert len(bridge.equations()) == 1
+    assert bridge.equations()[0].script == "x+y=z"
+    assert any(shape.kind == "rect" and shape.text == "SHAPE-TEXT" for shape in bridge.shapes())
+    assert len(bridge.oles()) == 1
+    assert bridge.oles()[0].binary_item_id is not None
+
+
+def test_hwp_section_append_helpers_forward_section_index(monkeypatch: pytest.MonkeyPatch) -> None:
+    document = HwpDocument.blank()
+    section = document.section(0)
+    captured: dict[str, dict[str, object]] = {}
+
+    monkeypatch.setattr(document, "append_field", lambda **kwargs: captured.setdefault("field", kwargs))
+    monkeypatch.setattr(document, "append_equation", lambda script, **kwargs: captured.setdefault("equation", {"script": script, **kwargs}))
+    monkeypatch.setattr(document, "append_shape", lambda **kwargs: captured.setdefault("shape", kwargs))
+    monkeypatch.setattr(document, "append_ole", lambda name, data, **kwargs: captured.setdefault("ole", {"name": name, "data": data, **kwargs}))
+
+    section.append_field(field_type="DATE", paragraph_index=1)
+    section.append_equation("a+b", paragraph_index=2)
+    section.append_shape(kind="ellipse", text="SEC-SHAPE", paragraph_index=3)
+    section.append_ole("sec.ole", b"section-ole", paragraph_index=4)
+
+    assert captured["field"]["section_index"] == 0
+    assert captured["field"]["field_type"] == "DATE"
+    assert captured["equation"]["section_index"] == 0
+    assert captured["equation"]["script"] == "a+b"
+    assert captured["shape"]["section_index"] == 0
+    assert captured["shape"]["kind"] == "ellipse"
+    assert captured["ole"]["section_index"] == 0
+    assert captured["ole"]["name"] == "sec.ole"
+
+
+def test_hwp_table_object_can_append_row_and_roundtrip(tmp_path: Path) -> None:
+    document = HwpDocument.blank()
+    document.append_table(
+        rows=1,
+        cols=2,
+        cell_texts=[["R0C0", "R0C1"]],
+        row_heights=[222],
+        col_widths=[1300, 1700],
+        table_border_fill_id=6,
+    )
+
+    table = document.tables()[-1]
+    new_row = table.append_row()
+
+    assert table.row_count == 2
+    assert table.row_heights == [222, 222]
+    assert len(new_row) == 2
+    assert [cell.column for cell in new_row] == [0, 1]
+    assert all(cell.row == 1 for cell in new_row)
+
+    output_path = tmp_path / "hwp_table_append_row.hwp"
+    document.save(output_path)
+    reopened = HwpDocument.open(output_path)
+    assert reopened.tables()[-1].row_count == 2
+    assert reopened.tables()[-1].row_heights == [222, 222]
+
+
+def test_hwp_table_object_can_merge_cells_and_roundtrip(tmp_path: Path) -> None:
+    document = HwpDocument.blank()
+    document.append_table(
+        rows=2,
+        cols=2,
+        cell_texts=[["MERGE", ""], ["", ""]],
+        row_heights=[180, 220],
+        col_widths=[1100, 1900],
+        table_border_fill_id=4,
+    )
+
+    table = document.tables()[-1]
+    merged = table.merge_cells(0, 0, 1, 1)
+
+    assert merged.row_span == 2
+    assert merged.col_span == 2
+    assert merged.width == 3000
+    assert merged.height == 400
+    assert table.cell_text_matrix()[0][0] == "MERGE"
+    assert len(table.cells()) == 1
+
+    output_path = tmp_path / "hwp_table_merge_cells.hwp"
+    document.save(output_path)
+    reopened = HwpDocument.open(output_path)
+    reopened_cell = reopened.tables()[-1].cell(0, 0)
+    assert reopened_cell.row_span == 2
+    assert reopened_cell.col_span == 2
+    assert reopened_cell.text == "MERGE"
