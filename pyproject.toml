@@ -46,7 +46,7 @@ include-package-data = true
 where = ["src"]
 
 [tool.setuptools.package-data]
-jakal_hwpx = ["py.typed"]
+jakal_hwpx = ["py.typed", "bundled_hwp_profile/*.hwp", "bundled_hwp_profile/profile.json"]
 
 [tool.pytest.ini_options]
 addopts = "-ra"

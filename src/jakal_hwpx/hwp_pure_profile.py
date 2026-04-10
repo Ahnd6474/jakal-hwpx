@@ -9,6 +9,9 @@ from .hwp_collection import find_best_combo_donor
 from .hwp_template_lab import CONTROL_BY_FEATURE, _paragraph_ranges, build_minimal_control_candidate, find_control_occurrences
 
 
+BUNDLED_PROFILE_DIR = Path(__file__).resolve().with_name("bundled_hwp_profile")
+
+
 @dataclass(frozen=True)
 class HwpPureProfile:
     root: Path
@@ -26,10 +29,14 @@ class HwpPureProfile:
             root=resolved_root,
             base_path=resolved_root / metadata["base_path"],
             template_paths={key: resolved_root / value for key, value in metadata["template_paths"].items()},
-            donor_path=Path(metadata["donor_path"]),
+            donor_path=Path(metadata.get("donor_path", metadata.get("donor_name", ""))),
             target_section_index=int(metadata["target_section_index"]),
             template_section_indices={key: int(value) for key, value in metadata["template_section_indices"].items()},
         )
+
+    @classmethod
+    def load_bundled(cls) -> "HwpPureProfile":
+        return cls.load(BUNDLED_PROFILE_DIR)
 
 
 def build_hwp_pure_profile(collection_root: str | Path, output_dir: str | Path) -> HwpPureProfile:
@@ -61,7 +68,7 @@ def build_hwp_pure_profile(collection_root: str | Path, output_dir: str | Path) 
         template_section_indices[feature] = target_section_index
 
     metadata = {
-        "donor_path": str(donor.path),
+        "donor_name": donor.path.name,
         "base_path": base_path.name,
         "template_paths": {key: value.name for key, value in template_paths.items()},
         "target_section_index": target_section_index,
@@ -76,6 +83,10 @@ def build_hwp_pure_profile(collection_root: str | Path, output_dir: str | Path) 
         target_section_index=target_section_index,
         template_section_indices=template_section_indices,
     )
+
+
+def bundled_hwp_profile_root() -> Path:
+    return BUNDLED_PROFILE_DIR
 
 
 def append_feature_from_profile(document: HwpBinaryDocument, profile: HwpPureProfile, feature: str) -> None:
