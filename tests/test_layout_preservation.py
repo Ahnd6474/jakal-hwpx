@@ -168,9 +168,9 @@ def test_header_footer_set_text_preserves_controls() -> None:
         """
     )
 
-    from jakal_hwpx.elements import HeaderFooterBlock
+    from jakal_hwpx.elements import HeaderFooterXml
 
-    HeaderFooterBlock(document, section, block).set_text("Edited header")
+    HeaderFooterXml(document, section, block).set_text("Edited header")
 
     assert block.xpath(".//hp:newNum", namespaces=NS)
     assert document.control_preservation_validation_errors() == []
@@ -199,9 +199,9 @@ def test_table_cell_set_text_preserves_controls() -> None:
         """
     )
 
-    from jakal_hwpx.elements import Table
+    from jakal_hwpx.elements import TableXml
 
-    table = Table(document, section, table_root)
+    table = TableXml(document, section, table_root)
     table.cell(0, 0).set_text("Edited cell")
 
     assert table_root.xpath(".//hp:fieldBegin", namespaces=NS)
@@ -227,9 +227,9 @@ def test_shape_set_text_preserves_drawtext_controls() -> None:
         """
     )
 
-    from jakal_hwpx.elements import ShapeObject
+    from jakal_hwpx.elements import ShapeXml
 
-    ShapeObject(document, section, shape_root).set_text("Edited shape")
+    ShapeXml(document, section, shape_root).set_text("Edited shape")
 
     assert shape_root.xpath(".//hp:bookmark", namespaces=NS)
     assert document.control_preservation_validation_errors() == []
@@ -285,9 +285,9 @@ def test_append_row_rejects_template_rows_with_controls() -> None:
         """
     )
 
-    from jakal_hwpx.elements import Table
+    from jakal_hwpx.elements import TableXml
 
-    table = Table(document, section, table_root)
+    table = TableXml(document, section, table_root)
     with pytest.raises(ValueError) as exc_info:
         table.append_row()
 

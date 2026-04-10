@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from jakal_hwpx import BinaryDataPart, ContentHpfPart, HeaderPart, HwpxDocument, OleObject, PreviewTextPart, SectionPart, ValidationIssue
+from jakal_hwpx import BinaryDataPart, ContentHpfPart, HeaderPart, HwpxDocument, OleXml, PreviewTextPart, SectionPart, ValidationIssue
 
 
 HEAD_NS = {"hh": "http://www.hancom.co.kr/hwpml/2011/head", "hc": "http://www.hancom.co.kr/hwpml/2011/core"}
@@ -111,7 +111,7 @@ def test_open_exposes_ole_objects_from_real_sample() -> None:
     oles = document.oles()
     assert len(oles) == 1
     ole = oles[0]
-    assert isinstance(ole, OleObject)
+    assert isinstance(ole, OleXml)
     assert ole.kind == "ole"
     assert ole.binary_item_id == "ole1"
     assert ole.object_type == "EMBEDDED"
@@ -119,7 +119,7 @@ def test_open_exposes_ole_objects_from_real_sample() -> None:
     assert ole.has_moniker is False
     assert ole.extent() == {"x": 42001, "y": 13501}
     assert ole.binary_data()
-    assert any(isinstance(shape, OleObject) for shape in document.shapes())
+    assert any(isinstance(shape, OleXml) for shape in document.shapes())
 
 
 def test_append_table_picture_and_shape_roundtrip(tmp_path: Path) -> None:
@@ -277,7 +277,7 @@ def test_append_ole_roundtrip(tmp_path: Path) -> None:
     manifest_item = next(item for item in reopened.content_hpf.manifest_items() if item.get("id") == reopened_ole.binary_item_id)
     assert manifest_item.get("media-type") == "application/ole"
     assert manifest_item.get("isEmbeded") == "0"
-    assert isinstance(reopened.shapes()[0], OleObject)
+    assert isinstance(reopened.shapes()[0], OleXml)
 
 
 def test_low_level_authoring_roundtrip(tmp_path: Path) -> None:

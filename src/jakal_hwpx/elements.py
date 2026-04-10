@@ -575,7 +575,7 @@ def _set_text(element: etree._Element, text: str) -> None:
 
 
 @dataclass
-class HeaderFooterBlock:
+class HeaderFooterXml:
     document: object
     section: object
     element: etree._Element
@@ -622,8 +622,8 @@ class HeaderFooterBlock:
 
 
 @dataclass
-class TableCell:
-    table: "Table"
+class TableCellXml:
+    table: "TableXml"
     element: etree._Element
 
     @property
@@ -674,7 +674,7 @@ class TableCell:
 
 
 @dataclass
-class Table:
+class TableXml:
     document: object
     section: object
     element: etree._Element
@@ -689,10 +689,10 @@ class Table:
         value = self.element.get("colCnt")
         return int(value) if value else 0
 
-    def cells(self) -> list[TableCell]:
-        return [TableCell(self, cell) for cell in self.element.xpath("./hp:tr/hp:tc", namespaces=NS)]
+    def cells(self) -> list[TableCellXml]:
+        return [TableCellXml(self, cell) for cell in self.element.xpath("./hp:tr/hp:tc", namespaces=NS)]
 
-    def cell(self, row: int, column: int) -> TableCell:
+    def cell(self, row: int, column: int) -> TableCellXml:
         for cell in self.cells():
             if cell.row == row and cell.column == column:
                 return cell
@@ -701,13 +701,13 @@ class Table:
     def set_cell_text(self, row: int, column: int, text: str) -> None:
         self.cell(row, column).set_text(text)
 
-    def rows(self) -> list[list[TableCell]]:
-        grouped: dict[int, list[TableCell]] = {}
+    def rows(self) -> list[list[TableCellXml]]:
+        grouped: dict[int, list[TableCellXml]] = {}
         for cell in self.cells():
             grouped.setdefault(cell.row, []).append(cell)
         return [sorted(grouped[index], key=lambda item: item.column) for index in sorted(grouped)]
 
-    def append_row(self) -> list[TableCell]:
+    def append_row(self) -> list[TableCellXml]:
         rows = self.element.xpath("./hp:tr", namespaces=NS)
         if not rows:
             raise ValueError("Table does not contain rows.")
@@ -736,9 +736,9 @@ class Table:
         self.element.append(new_row)
         self.element.set("rowCnt", str(self.row_count + 1))
         self.section.mark_modified()
-        return [TableCell(self, cell) for cell in new_row.xpath("./hp:tc", namespaces=NS)]
+        return [TableCellXml(self, cell) for cell in new_row.xpath("./hp:tc", namespaces=NS)]
 
-    def merge_cells(self, start_row: int, start_column: int, end_row: int, end_column: int) -> TableCell:
+    def merge_cells(self, start_row: int, start_column: int, end_row: int, end_column: int) -> TableCellXml:
         if end_row < start_row or end_column < start_column:
             raise ValueError("Invalid merge range.")
         anchor = self.cell(start_row, start_column)
@@ -763,7 +763,7 @@ class Table:
 
 
 @dataclass
-class Picture:
+class PictureXml:
     document: object
     section: object
     element: etree._Element
@@ -928,7 +928,7 @@ class Picture:
 
 
 @dataclass
-class StyleDefinition:
+class StyleDefinitionXml:
     header_part: object
     element: etree._Element
 
@@ -990,7 +990,7 @@ class StyleDefinition:
 
 
 @dataclass
-class ParagraphStyle:
+class ParagraphStyleXml:
     header_part: object
     element: etree._Element
 
@@ -1091,7 +1091,7 @@ class ParagraphStyle:
 
 
 @dataclass
-class CharacterStyle:
+class CharacterStyleXml:
     header_part: object
     element: etree._Element
 
@@ -1194,7 +1194,7 @@ class CharacterStyle:
 
 
 @dataclass
-class SectionSettings:
+class SectionSettingsXml:
     section: object
     element: etree._Element
 
@@ -1338,7 +1338,7 @@ class SectionSettings:
 
 
 @dataclass
-class Note:
+class NoteXml:
     document: object
     section: object
     element: etree._Element
@@ -1377,7 +1377,7 @@ class Note:
 
 
 @dataclass
-class Bookmark:
+class BookmarkXml:
     document: object
     section: object
     element: etree._Element
@@ -1392,7 +1392,7 @@ class Bookmark:
 
 
 @dataclass
-class Field:
+class FieldXml:
     document: object
     section: object
     element: etree._Element
@@ -1559,7 +1559,7 @@ class Field:
 
 
 @dataclass
-class AutoNumber:
+class AutoNumberXml:
     document: object
     section: object
     element: etree._Element
@@ -1586,7 +1586,7 @@ class AutoNumber:
 
 
 @dataclass
-class Equation:
+class EquationXml:
     document: object
     section: object
     element: etree._Element
@@ -1697,7 +1697,7 @@ class Equation:
 
 
 @dataclass
-class ShapeObject:
+class ShapeXml:
     document: object
     section: object
     element: etree._Element
@@ -1936,7 +1936,7 @@ class ShapeObject:
 
 
 @dataclass
-class OleObject(ShapeObject):
+class OleXml(ShapeXml):
     @property
     def binary_item_id(self) -> str | None:
         return self.element.get("binaryItemIDRef")
@@ -2005,3 +2005,20 @@ class OleObject(ShapeObject):
     def set_extent(self, *, x: int | str | None = None, y: int | str | None = None) -> None:
         _set_graphic_size(self.element, extent_x=x, extent_y=y)
         self.section.mark_modified()
+
+
+HeaderFooterBlock = HeaderFooterXml
+TableCell = TableCellXml
+Table = TableXml
+Picture = PictureXml
+StyleDefinition = StyleDefinitionXml
+ParagraphStyle = ParagraphStyleXml
+CharacterStyle = CharacterStyleXml
+SectionSettings = SectionSettingsXml
+Note = NoteXml
+Bookmark = BookmarkXml
+Field = FieldXml
+AutoNumber = AutoNumberXml
+Equation = EquationXml
+ShapeObject = ShapeXml
+OleObject = OleXml

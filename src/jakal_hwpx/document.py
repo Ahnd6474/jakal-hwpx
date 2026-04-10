@@ -19,20 +19,20 @@ from .elements import (
     _preserved_structure_signature,
     _set_graphic_layout,
     _set_margin_values,
-    AutoNumber,
-    Bookmark,
-    CharacterStyle,
-    Equation,
-    Field,
-    HeaderFooterBlock,
-    Note,
-    OleObject,
-    ParagraphStyle,
-    Picture,
-    SectionSettings,
-    ShapeObject,
-    StyleDefinition,
-    Table,
+    AutoNumberXml,
+    BookmarkXml,
+    CharacterStyleXml,
+    EquationXml,
+    FieldXml,
+    HeaderFooterXml,
+    NoteXml,
+    OleXml,
+    ParagraphStyleXml,
+    PictureXml,
+    SectionSettingsXml,
+    ShapeXml,
+    StyleDefinitionXml,
+    TableXml,
 )
 from .exceptions import HwpxValidationError, InvalidHwpxFileError, ValidationIssue
 from .namespaces import NS, SECTION_PATTERN, qname
@@ -567,108 +567,108 @@ class HwpxDocument:
     def set_metadata(self, **values: str | None) -> None:
         self.content_hpf.set_metadata(**values)
 
-    def headers(self, section_index: int | None = None) -> list[HeaderFooterBlock]:
+    def headers(self, section_index: int | None = None) -> list[HeaderFooterXml]:
         sections = self.sections if section_index is None else [self.sections[section_index]]
-        blocks: list[HeaderFooterBlock] = []
+        blocks: list[HeaderFooterXml] = []
         for section in sections:
             for node in section.root_element.xpath(".//hp:header", namespaces=NS):
-                blocks.append(HeaderFooterBlock(self, section, node))
+                blocks.append(HeaderFooterXml(self, section, node))
         return blocks
 
-    def footers(self, section_index: int | None = None) -> list[HeaderFooterBlock]:
+    def footers(self, section_index: int | None = None) -> list[HeaderFooterXml]:
         sections = self.sections if section_index is None else [self.sections[section_index]]
-        blocks: list[HeaderFooterBlock] = []
+        blocks: list[HeaderFooterXml] = []
         for section in sections:
             for node in section.root_element.xpath(".//hp:footer", namespaces=NS):
-                blocks.append(HeaderFooterBlock(self, section, node))
+                blocks.append(HeaderFooterXml(self, section, node))
         return blocks
 
-    def tables(self, section_index: int | None = None) -> list[Table]:
+    def tables(self, section_index: int | None = None) -> list[TableXml]:
         sections = self.sections if section_index is None else [self.sections[section_index]]
-        tables: list[Table] = []
+        tables: list[TableXml] = []
         for section in sections:
             for node in section.root_element.xpath(".//hp:tbl", namespaces=NS):
-                tables.append(Table(self, section, node))
+                tables.append(TableXml(self, section, node))
         return tables
 
-    def pictures(self, section_index: int | None = None) -> list[Picture]:
+    def pictures(self, section_index: int | None = None) -> list[PictureXml]:
         sections = self.sections if section_index is None else [self.sections[section_index]]
-        pictures: list[Picture] = []
+        pictures: list[PictureXml] = []
         for section in sections:
             for node in section.root_element.xpath(".//hp:pic", namespaces=NS):
-                pictures.append(Picture(self, section, node))
+                pictures.append(PictureXml(self, section, node))
         return pictures
 
-    def oles(self, section_index: int | None = None) -> list[OleObject]:
+    def oles(self, section_index: int | None = None) -> list[OleXml]:
         sections = self.sections if section_index is None else [self.sections[section_index]]
-        values: list[OleObject] = []
+        values: list[OleXml] = []
         for section in sections:
             for node in section.root_element.xpath(".//hp:ole", namespaces=NS):
-                values.append(OleObject(self, section, node))
+                values.append(OleXml(self, section, node))
         return values
 
-    def section_settings(self, section_index: int = 0) -> SectionSettings:
+    def section_settings(self, section_index: int = 0) -> SectionSettingsXml:
         self._ensure_editable_sections()
         nodes = self.sections[section_index].root_element.xpath("./hp:p[1]//hp:secPr[1]", namespaces=NS)
         if not nodes:
             raise ValueError("Section does not contain hp:secPr.")
-        return SectionSettings(self.sections[section_index], nodes[0])
+        return SectionSettingsXml(self.sections[section_index], nodes[0])
 
-    def notes(self, section_index: int | None = None) -> list[Note]:
+    def notes(self, section_index: int | None = None) -> list[NoteXml]:
         sections = self.sections if section_index is None else [self.sections[section_index]]
-        notes: list[Note] = []
+        notes: list[NoteXml] = []
         for section in sections:
             for tag in (".//hp:footNote", ".//hp:endNote"):
                 for node in section.root_element.xpath(tag, namespaces=NS):
-                    notes.append(Note(self, section, node))
+                    notes.append(NoteXml(self, section, node))
         return notes
 
-    def bookmarks(self, section_index: int | None = None) -> list[Bookmark]:
+    def bookmarks(self, section_index: int | None = None) -> list[BookmarkXml]:
         sections = self.sections if section_index is None else [self.sections[section_index]]
-        bookmarks: list[Bookmark] = []
+        bookmarks: list[BookmarkXml] = []
         for section in sections:
             for node in section.root_element.xpath(".//hp:bookmark", namespaces=NS):
-                bookmarks.append(Bookmark(self, section, node))
+                bookmarks.append(BookmarkXml(self, section, node))
         return bookmarks
 
-    def fields(self, section_index: int | None = None) -> list[Field]:
+    def fields(self, section_index: int | None = None) -> list[FieldXml]:
         sections = self.sections if section_index is None else [self.sections[section_index]]
-        fields: list[Field] = []
+        fields: list[FieldXml] = []
         for section in sections:
             for node in section.root_element.xpath(".//hp:fieldBegin", namespaces=NS):
-                fields.append(Field(self, section, node))
+                fields.append(FieldXml(self, section, node))
         return fields
 
-    def hyperlinks(self, section_index: int | None = None) -> list[Field]:
+    def hyperlinks(self, section_index: int | None = None) -> list[FieldXml]:
         return [field for field in self.fields(section_index=section_index) if field.is_hyperlink]
 
-    def mail_merge_fields(self, section_index: int | None = None) -> list[Field]:
+    def mail_merge_fields(self, section_index: int | None = None) -> list[FieldXml]:
         return [field for field in self.fields(section_index=section_index) if field.is_mail_merge]
 
-    def calculation_fields(self, section_index: int | None = None) -> list[Field]:
+    def calculation_fields(self, section_index: int | None = None) -> list[FieldXml]:
         return [field for field in self.fields(section_index=section_index) if field.is_calculation]
 
-    def cross_references(self, section_index: int | None = None) -> list[Field]:
+    def cross_references(self, section_index: int | None = None) -> list[FieldXml]:
         return [field for field in self.fields(section_index=section_index) if field.is_cross_reference]
 
-    def auto_numbers(self, section_index: int | None = None) -> list[AutoNumber]:
+    def auto_numbers(self, section_index: int | None = None) -> list[AutoNumberXml]:
         sections = self.sections if section_index is None else [self.sections[section_index]]
-        values: list[AutoNumber] = []
+        values: list[AutoNumberXml] = []
         for section in sections:
             for tag in (".//hp:autoNum", ".//hp:newNum"):
                 for node in section.root_element.xpath(tag, namespaces=NS):
-                    values.append(AutoNumber(self, section, node))
+                    values.append(AutoNumberXml(self, section, node))
         return values
 
-    def equations(self, section_index: int | None = None) -> list[Equation]:
+    def equations(self, section_index: int | None = None) -> list[EquationXml]:
         sections = self.sections if section_index is None else [self.sections[section_index]]
-        values: list[Equation] = []
+        values: list[EquationXml] = []
         for section in sections:
             for node in section.root_element.xpath(".//hp:equation", namespaces=NS):
-                values.append(Equation(self, section, node))
+                values.append(EquationXml(self, section, node))
         return values
 
-    def shapes(self, section_index: int | None = None) -> list[ShapeObject]:
+    def shapes(self, section_index: int | None = None) -> list[ShapeXml]:
         sections = self.sections if section_index is None else [self.sections[section_index]]
         shape_tags = [
             "hp:rect",
@@ -682,38 +682,38 @@ class HwpxDocument:
             "hp:container",
             "hp:ole",
         ]
-        values: list[ShapeObject] = []
+        values: list[ShapeXml] = []
         for section in sections:
             for tag in shape_tags:
                 for node in section.root_element.xpath(f".//{tag}", namespaces=NS):
                     if etree.QName(node).localname == "ole":
-                        values.append(OleObject(self, section, node))
+                        values.append(OleXml(self, section, node))
                     else:
-                        values.append(ShapeObject(self, section, node))
+                        values.append(ShapeXml(self, section, node))
         return values
 
-    def styles(self) -> list[StyleDefinition]:
-        return [StyleDefinition(self.header, node) for node in self.header.root_element.xpath(".//hh:style", namespaces=NS)]
+    def styles(self) -> list[StyleDefinitionXml]:
+        return [StyleDefinitionXml(self.header, node) for node in self.header.root_element.xpath(".//hh:style", namespaces=NS)]
 
-    def paragraph_styles(self) -> list[ParagraphStyle]:
-        return [ParagraphStyle(self.header, node) for node in self.header.root_element.xpath(".//hh:paraPr", namespaces=NS)]
+    def paragraph_styles(self) -> list[ParagraphStyleXml]:
+        return [ParagraphStyleXml(self.header, node) for node in self.header.root_element.xpath(".//hh:paraPr", namespaces=NS)]
 
-    def character_styles(self) -> list[CharacterStyle]:
-        return [CharacterStyle(self.header, node) for node in self.header.root_element.xpath(".//hh:charPr", namespaces=NS)]
+    def character_styles(self) -> list[CharacterStyleXml]:
+        return [CharacterStyleXml(self.header, node) for node in self.header.root_element.xpath(".//hh:charPr", namespaces=NS)]
 
-    def get_style(self, style_id: str) -> StyleDefinition:
+    def get_style(self, style_id: str) -> StyleDefinitionXml:
         for style in self.styles():
             if style.style_id == style_id:
                 return style
         raise KeyError(style_id)
 
-    def get_paragraph_style(self, style_id: str) -> ParagraphStyle:
+    def get_paragraph_style(self, style_id: str) -> ParagraphStyleXml:
         for style in self.paragraph_styles():
             if style.style_id == style_id:
                 return style
         raise KeyError(style_id)
 
-    def get_character_style(self, style_id: str) -> CharacterStyle:
+    def get_character_style(self, style_id: str) -> CharacterStyleXml:
         for style in self.character_styles():
             if style.style_id == style_id:
                 return style
@@ -998,7 +998,7 @@ class HwpxDocument:
         char_pr_id: str | None = None,
         apply_page_type: str = "BOTH",
         hide_first: bool | None = None,
-    ) -> HeaderFooterBlock:
+    ) -> HeaderFooterXml:
         self._ensure_editable_sections()
         block = self._build_header_footer_block(
             "header",
@@ -1009,7 +1009,7 @@ class HwpxDocument:
         section = self._append_control(section_index, paragraph_index, block, char_pr_id=char_pr_id)
         if hide_first is not None:
             self.section_settings(section_index).set_visibility(hide_first_header=hide_first)
-        return HeaderFooterBlock(self, section, block)
+        return HeaderFooterXml(self, section, block)
 
     def append_footer(
         self,
@@ -1020,7 +1020,7 @@ class HwpxDocument:
         char_pr_id: str | None = None,
         apply_page_type: str = "BOTH",
         hide_first: bool | None = None,
-    ) -> HeaderFooterBlock:
+    ) -> HeaderFooterXml:
         self._ensure_editable_sections()
         block = self._build_header_footer_block(
             "footer",
@@ -1031,7 +1031,7 @@ class HwpxDocument:
         section = self._append_control(section_index, paragraph_index, block, char_pr_id=char_pr_id)
         if hide_first is not None:
             self.section_settings(section_index).set_visibility(hide_first_footer=hide_first)
-        return HeaderFooterBlock(self, section, block)
+        return HeaderFooterXml(self, section, block)
 
     def append_note(
         self,
@@ -1042,7 +1042,7 @@ class HwpxDocument:
         section_index: int = 0,
         paragraph_index: int | None = None,
         char_pr_id: str | None = None,
-    ) -> Note:
+    ) -> NoteXml:
         self._ensure_editable_sections()
         if kind not in {"footNote", "endNote"}:
             raise ValueError("append_note() kind must be 'footNote' or 'endNote'.")
@@ -1051,7 +1051,7 @@ class HwpxDocument:
         note.set("number", str(number if number is not None else self._next_control_number(".//hp:footNote/@number | .//hp:endNote/@number")))
         note.append(self._build_sublist_with_text(text, char_pr_id=char_pr_id, vertical_align="TOP"))
         section = self._append_control(section_index, paragraph_index, note, char_pr_id=char_pr_id)
-        return Note(self, section, note)
+        return NoteXml(self, section, note)
 
     def append_footnote(
         self,
@@ -1061,7 +1061,7 @@ class HwpxDocument:
         section_index: int = 0,
         paragraph_index: int | None = None,
         char_pr_id: str | None = None,
-    ) -> Note:
+    ) -> NoteXml:
         return self.append_note(
             text,
             kind="footNote",
@@ -1079,7 +1079,7 @@ class HwpxDocument:
         section_index: int = 0,
         paragraph_index: int | None = None,
         char_pr_id: str | None = None,
-    ) -> Note:
+    ) -> NoteXml:
         return self.append_note(
             text,
             kind="endNote",
@@ -1098,7 +1098,7 @@ class HwpxDocument:
         section_index: int = 0,
         paragraph_index: int | None = None,
         char_pr_id: str | None = None,
-    ) -> AutoNumber:
+    ) -> AutoNumberXml:
         self._ensure_editable_sections()
         if kind not in {"newNum", "autoNum"}:
             raise ValueError("append_auto_number() kind must be 'newNum' or 'autoNum'.")
@@ -1106,7 +1106,7 @@ class HwpxDocument:
         node.set("num", str(number))
         node.set("numType", number_type)
         section = self._append_control(section_index, paragraph_index, node, char_pr_id=char_pr_id)
-        return AutoNumber(self, section, node)
+        return AutoNumberXml(self, section, node)
 
     def append_new_number(
         self,
@@ -1116,7 +1116,7 @@ class HwpxDocument:
         section_index: int = 0,
         paragraph_index: int | None = None,
         char_pr_id: str | None = None,
-    ) -> AutoNumber:
+    ) -> AutoNumberXml:
         return self.append_auto_number(
             number=number,
             number_type=number_type,
@@ -1156,7 +1156,7 @@ class HwpxDocument:
         out_margin_right: int = 0,
         out_margin_top: int = 0,
         out_margin_bottom: int = 0,
-    ) -> Equation:
+    ) -> EquationXml:
         self._ensure_editable_sections()
         if width < 1 or height < 1:
             raise ValueError("width and height must be positive.")
@@ -1233,7 +1233,7 @@ class HwpxDocument:
         script_node.text = script
 
         section = self._append_control(section_index, paragraph_index, equation, char_pr_id=char_pr_id)
-        return Equation(self, section, equation)
+        return EquationXml(self, section, equation)
 
     def append_paragraph_style(
         self,
@@ -1243,7 +1243,7 @@ class HwpxDocument:
         alignment_horizontal: str | None = None,
         alignment_vertical: str | None = None,
         line_spacing: int | str | None = None,
-    ) -> ParagraphStyle:
+    ) -> ParagraphStyleXml:
         template = self._clone_header_template(".//hh:paraPr", template_id=template_id)
         resolved_id = style_id or self._next_header_numeric_id(".//hh:paraPr/@id")
         template.set("id", resolved_id)
@@ -1252,7 +1252,7 @@ class HwpxDocument:
         parent.set("itemCnt", str(len(parent.xpath("./hh:paraPr", namespaces=NS))))
         self.header.mark_modified()
 
-        style = ParagraphStyle(self.header, template)
+        style = ParagraphStyleXml(self.header, template)
         if alignment_horizontal is not None or alignment_vertical is not None:
             style.set_alignment(horizontal=alignment_horizontal, vertical=alignment_vertical)
         if line_spacing is not None:
@@ -1266,7 +1266,7 @@ class HwpxDocument:
         template_id: str | None = None,
         text_color: str | None = None,
         height: int | str | None = None,
-    ) -> CharacterStyle:
+    ) -> CharacterStyleXml:
         template = self._clone_header_template(".//hh:charPr", template_id=template_id)
         resolved_id = style_id or self._next_header_numeric_id(".//hh:charPr/@id")
         template.set("id", resolved_id)
@@ -1275,7 +1275,7 @@ class HwpxDocument:
         parent.set("itemCnt", str(len(parent.xpath("./hh:charPr", namespaces=NS))))
         self.header.mark_modified()
 
-        style = CharacterStyle(self.header, template)
+        style = CharacterStyleXml(self.header, template)
         if text_color is not None:
             style.set_text_color(text_color)
         if height is not None:
@@ -1295,7 +1295,7 @@ class HwpxDocument:
         lang_id: str = "1042",
         lock_form: bool = False,
         template_id: str | None = None,
-    ) -> StyleDefinition:
+    ) -> StyleDefinitionXml:
         template = self._clone_header_template(".//hh:style", template_id=template_id)
         resolved_id = style_id or self._next_header_numeric_id(".//hh:style/@id")
         template.set("id", resolved_id)
@@ -1312,7 +1312,7 @@ class HwpxDocument:
         parent.append(template)
         parent.set("itemCnt", str(len(parent.xpath("./hh:style", namespaces=NS))))
         self.header.mark_modified()
-        return StyleDefinition(self.header, template)
+        return StyleDefinitionXml(self.header, template)
 
     def append_table(
         self,
@@ -1343,7 +1343,7 @@ class HwpxDocument:
         out_margin_right: int = 0,
         out_margin_top: int = 0,
         out_margin_bottom: int = 0,
-    ) -> Table:
+    ) -> TableXml:
         self._ensure_editable_sections()
         if rows < 1 or columns < 1:
             raise ValueError("rows and columns must be at least 1.")
@@ -1485,7 +1485,7 @@ class HwpxDocument:
                 cell_margin.set("bottom", "141")
 
         section = self._append_control(section_index, paragraph_index, table, char_pr_id=char_pr_id)
-        return Table(self, section, table)
+        return TableXml(self, section, table)
 
     def append_picture(
         self,
@@ -1519,7 +1519,7 @@ class HwpxDocument:
         out_margin_right: int = 0,
         out_margin_top: int = 0,
         out_margin_bottom: int = 0,
-    ) -> Picture:
+    ) -> PictureXml:
         self._ensure_editable_sections()
         if width < 1 or height < 1:
             raise ValueError("width and height must be positive.")
@@ -1652,7 +1652,7 @@ class HwpxDocument:
             comment.text = shape_comment
 
         section = self._append_control(section_index, paragraph_index, picture, char_pr_id=char_pr_id)
-        return Picture(self, section, picture)
+        return PictureXml(self, section, picture)
 
     def append_shape(
         self,
@@ -1684,7 +1684,7 @@ class HwpxDocument:
         out_margin_right: int = 0,
         out_margin_top: int = 0,
         out_margin_bottom: int = 0,
-    ) -> ShapeObject:
+    ) -> ShapeXml:
         self._ensure_editable_sections()
         supported_kinds = {"rect", "ellipse", "arc", "polygon", "curve", "connectLine", "line", "textart", "container"}
         if kind not in supported_kinds:
@@ -1862,7 +1862,7 @@ class HwpxDocument:
             comment.text = shape_comment
 
         section = self._append_control(section_index, paragraph_index, shape, char_pr_id=char_pr_id)
-        return ShapeObject(self, section, shape)
+        return ShapeXml(self, section, shape)
 
     def append_ole(
         self,
@@ -1902,7 +1902,7 @@ class HwpxDocument:
         out_margin_right: int = 0,
         out_margin_top: int = 0,
         out_margin_bottom: int = 0,
-    ) -> OleObject:
+    ) -> OleXml:
         self._ensure_editable_sections()
         if width < 1 or height < 1:
             raise ValueError("width and height must be positive.")
@@ -2035,7 +2035,7 @@ class HwpxDocument:
             comment.text = shape_comment
 
         section = self._append_control(section_index, paragraph_index, ole, char_pr_id=char_pr_id)
-        return OleObject(self, section, ole)
+        return OleXml(self, section, ole)
 
     def append_bookmark(
         self,
@@ -2044,7 +2044,7 @@ class HwpxDocument:
         section_index: int = 0,
         paragraph_index: int | None = None,
         char_pr_id: str | None = None,
-    ) -> Bookmark:
+    ) -> BookmarkXml:
         self._ensure_editable_sections()
         paragraph = self._resolve_paragraph_for_insert(section_index=section_index, paragraph_index=paragraph_index)
         run = self._append_run(paragraph, char_pr_id=char_pr_id)
@@ -2054,7 +2054,7 @@ class HwpxDocument:
         etree.SubElement(run, qname("hp", "t")).text = ""
         section = self.sections[section_index]
         section.mark_modified()
-        return Bookmark(self, section, bookmark)
+        return BookmarkXml(self, section, bookmark)
 
     def append_field(
         self,
@@ -2068,7 +2068,7 @@ class HwpxDocument:
         char_pr_id: str | None = None,
         editable: bool = False,
         dirty: bool = False,
-    ) -> Field:
+    ) -> FieldXml:
         self._ensure_editable_sections()
         paragraph = self._resolve_paragraph_for_insert(section_index=section_index, paragraph_index=paragraph_index)
         begin_id = self._next_control_number(".//hp:fieldBegin/@id")
@@ -2107,7 +2107,7 @@ class HwpxDocument:
 
         section = self.sections[section_index]
         section.mark_modified()
-        return Field(self, section, field_begin)
+        return FieldXml(self, section, field_begin)
 
     def append_hyperlink(
         self,
@@ -2117,7 +2117,7 @@ class HwpxDocument:
         section_index: int = 0,
         paragraph_index: int | None = None,
         char_pr_id: str | None = None,
-    ) -> Field:
+    ) -> FieldXml:
         parameters: dict[str, int | str] = {"Command": target, "Path": target}
         if target.startswith("mailto:"):
             parameters["Category"] = "HWPHYPERLINK_TYPE_EMAIL"
@@ -2142,7 +2142,7 @@ class HwpxDocument:
         section_index: int = 0,
         paragraph_index: int | None = None,
         char_pr_id: str | None = None,
-    ) -> Field:
+    ) -> FieldXml:
         field = self.append_field(
             field_type="MAILMERGE",
             display_text=display_text,
@@ -2163,7 +2163,7 @@ class HwpxDocument:
         section_index: int = 0,
         paragraph_index: int | None = None,
         char_pr_id: str | None = None,
-    ) -> Field:
+    ) -> FieldXml:
         field = self.append_field(
             field_type="FORMULA",
             display_text=display_text,
@@ -2183,7 +2183,7 @@ class HwpxDocument:
         section_index: int = 0,
         paragraph_index: int | None = None,
         char_pr_id: str | None = None,
-    ) -> Field:
+    ) -> FieldXml:
         field = self.append_field(
             field_type="CROSSREF",
             display_text=display_text,

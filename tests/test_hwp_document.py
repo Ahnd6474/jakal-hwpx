@@ -4,7 +4,25 @@ from pathlib import Path
 
 import pytest
 
-from jakal_hwpx import DocInfoModel, HwpDocument, HwpDocumentProperties, HwpParagraphObject, HwpPureProfile, HwpSection, HwpxDocument, SectionModel
+from jakal_hwpx import (
+    DocInfoModel,
+    HwpDocument,
+    HwpDocumentProperties,
+    HwpEquationObject,
+    HwpFieldObject,
+    HwpHyperlinkObject,
+    HwpOleObject,
+    HwpParagraphObject,
+    HwpPictureObject,
+    HwpPureProfile,
+    HwpSection,
+    HwpShapeObject,
+    HwpTableObject,
+    RecordNode,
+    HwpxDocument,
+    SectionModel,
+    SectionParagraphModel,
+)
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -207,3 +225,96 @@ def test_hwp_document_supports_table_geometry_options(tmp_path: Path) -> None:
     text = reopened.get_document_text()
     for value in ("M1", "M2", "M3", "M4"):
         assert value in text
+
+
+def test_hwp_document_exposes_table_picture_and_hyperlink_objects(tmp_path: Path) -> None:
+    document = HwpDocument.blank()
+    image_bytes = document.binary_document().read_stream("BinData/BIN0001.bmp", decompress=False)
+
+    document.append_table(
+        rows=2,
+        cols=2,
+        cell_texts=[["T1", "T2"], ["T3", "T4"]],
+        row_heights=[101, 202],
+        col_widths=[1200, 1300],
+        cell_border_fill_ids={(0, 0): 7},
+        table_border_fill_id=6,
+    )
+    document.append_picture(image_bytes, extension="bmp")
+    document.append_hyperlink(
+        "https://example.com/object-layer",
+        text="OBJ-LINK",
+        metadata_fields=[9, 4, "anchor"],
+    )
+
+    table = next(table for table in document.tables() if any(cell.text == "T4" for cell in table.cells()))
+    picture = max(document.pictures(), key=lambda item: item.storage_id)
+    hyperlink = next(link for link in document.hyperlinks() if link.display_text == "OBJ-LINK")
+
+    assert isinstance(table, HwpTableObject)
+    assert table.row_count == 2
+    assert table.column_count == 2
+    assert table.row_heights == [101, 202]
+    assert table.table_border_fill_id == 6
+    assert table.cell(0, 0).text == "T1"
+    assert table.cell(0, 0).border_fill_id == 7
+    assert table.cell_text_matrix()[1][1] == "T4"
+
+    assert isinstance(picture, HwpPictureObject)
+    assert picture.bindata_path().endswith(".bmp")
+    assert picture.extension == "bmp"
+    assert picture.binary_data() == image_bytes
+
+    assert isinstance(hyperlink, HwpHyperlinkObject)
+    assert hyperlink.url == "https://example.com/object-layer"
+    assert hyperlink.display_text == "OBJ-LINK"
+    assert hyperlink.metadata_fields == ["9", "4", "anchor"]
+
+
+def test_hwp_control_objects_roundtrip_after_save(tmp_path: Path) -> None:
+    document = HwpDocument.blank()
+    image_bytes = document.binary_document().read_stream("BinData/BIN0001.bmp", decompress=False)
+    document.append_table("ROUNDTRIP-CELL")
+    document.append_picture(image_bytes, extension="bmp")
+    document.append_hyperlink("https://example.com/roundtrip", text="ROUNDTRIP-LINK")
+
+    output_path = tmp_path / "hwp_control_objects.hwp"
+    document.save(output_path)
+
+    reopened = HwpDocument.open(output_path)
+    assert any(cell.text == "ROUNDTRIP-CELL" for table in reopened.tables() for cell in table.cells())
+    assert any(picture.extension == "bmp" for picture in reopened.pictures())
+    assert any(link.url == "https://example.com/roundtrip" and link.display_text == "ROUNDTRIP-LINK" for link in reopened.hyperlinks())
+
+
+def test_hwp_document_exposes_field_shape_and_equation_objects(sample_hwp_path: Path) -> None:
+    document = HwpDocument.open(sample_hwp_path)
+
+    shapes = document.shapes()
+    equations = document.equations()
+
+    assert any(isinstance(shape, HwpShapeObject) for shape in shapes)
+    assert any(isinstance(equation, HwpEquationObject) for equation in equations)
+    assert any(equation.script for equation in equations)
+    assert any(shape.kind in {"rect", "line", "ellipse", "arc", "polygon", "curve", "container", "textart", "shape"} for shape in shapes)
+
+
+def test_hwp_hyperlinks_are_included_in_generic_fields() -> None:
+    document = HwpDocument.blank()
+    document.append_hyperlink("https://example.com/field-view", text="FIELD-VIEW")
+
+    fields = document.fields()
+    assert any(isinstance(field, HwpHyperlinkObject) for field in fields)
+    assert any(isinstance(field, HwpFieldObject) and getattr(field, "field_type", "") == "%hlk" for field in fields)
+
+
+def test_hwp_ole_wrapper_can_classify_ole_controls_without_sample() -> None:
+    document = HwpDocument.blank()
+    paragraph = SectionParagraphModel(section_index=0, index=0, header=document.section_model(0).paragraphs()[0].header)
+    control_node = RecordNode(tag_id=71, level=1, payload=b" osg" + (b"\x00" * 42))
+    shape_component = RecordNode(tag_id=76, level=2, payload=b"")
+    shape_component.add_child(RecordNode(tag_id=84, level=3, payload=b""))
+    control_node.add_child(shape_component)
+
+    ole = HwpOleObject(document, paragraph, control_node)
+    assert ole.kind == "ole"
