@@ -316,5 +316,66 @@ def test_hwp_ole_wrapper_can_classify_ole_controls_without_sample() -> None:
     shape_component.add_child(RecordNode(tag_id=84, level=3, payload=b""))
     control_node.add_child(shape_component)
 
-    ole = HwpOleObject(document, paragraph, control_node)
+    ole = HwpOleObject(document, paragraph, control_node, 0)
     assert ole.kind == "ole"
+
+
+def test_hwp_object_methods_can_modify_content_and_roundtrip(tmp_path: Path) -> None:
+    document = HwpDocument.blank()
+    image_bytes = document.binary_document().read_stream("BinData/BIN0001.bmp", decompress=False)
+    document.append_table(rows=1, cols=1, cell_texts=[["CELL-OLD"]])
+    document.append_hyperlink("https://example.com/old", text="LINK-OLD", metadata_fields=[1, 0, 0])
+    document.append_picture(image_bytes, extension="bmp")
+
+    table = document.tables()[-1]
+    hyperlink = document.hyperlinks()[-1]
+    picture = document.pictures()[-1]
+
+    table.set_cell_text(0, 0, "CELL-NEW")
+    table.set_row_heights([321])
+    table.set_table_border_fill_id(8)
+    hyperlink.set_url("https://example.com/new")
+    hyperlink.set_metadata_fields([9, 2, "dest"])
+    hyperlink.set_display_text("LINK-NEW")
+    picture.replace_binary(image_bytes, extension="bmp")
+
+    output_path = tmp_path / "hwp_object_methods.hwp"
+    document.save(output_path)
+    reopened = HwpDocument.open(output_path)
+
+    assert reopened.tables()[-1].cell(0, 0).text == "CELL-NEW"
+    assert reopened.tables()[-1].row_heights == [321]
+    assert reopened.tables()[-1].table_border_fill_id == 8
+    assert reopened.hyperlinks()[-1].url == "https://example.com/new"
+    assert reopened.hyperlinks()[-1].display_text == "LINK-NEW"
+    assert reopened.hyperlinks()[-1].metadata_fields == ["9", "2", "dest"]
+    assert reopened.pictures()[-1].binary_data() == image_bytes
+
+
+def test_hwp_paragraph_object_set_text_can_change_length(sample_hwp_path: Path, tmp_path: Path) -> None:
+    document = HwpDocument.open(sample_hwp_path)
+    paragraph = next(item for item in document.section(0).paragraphs() if "2027" in item.text)
+    paragraph.set_text(paragraph.text.replace("2027", "2035-UPDATED"))
+
+    output_path = tmp_path / "hwp_paragraph_set_text.hwp"
+    document.save(output_path)
+    reopened = HwpDocument.open(output_path)
+    assert "2035-UPDATED" in reopened.get_document_text()
+
+
+def test_hwp_equation_and_shape_object_methods_can_modify_records(sample_hwp_path: Path, tmp_path: Path) -> None:
+    document = HwpDocument.open(sample_hwp_path)
+    equation = document.equations()[0]
+    shape = document.shapes()[0]
+
+    original_size = shape.size()
+    equation.set_script("x+y")
+    shape.set_size(width=original_size["width"] + 10, height=original_size["height"] + 20)
+
+    output_path = tmp_path / "hwp_equation_shape_edit.hwp"
+    document.save(output_path)
+    reopened = HwpDocument.open(output_path)
+
+    assert reopened.equations()[0].script == "x+y"
+    assert reopened.shapes()[0].size()["width"] == original_size["width"] + 10
+    assert reopened.shapes()[0].size()["height"] == original_size["height"] + 20

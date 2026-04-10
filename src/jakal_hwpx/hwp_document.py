@@ -9,12 +9,15 @@ from typing import Callable
 from ._hancom import convert_document
 from .document import HwpxDocument
 from .hwp_binary import (
+    _build_hyperlink_ctrl_payload,
+    _build_hyperlink_para_text_payload,
     DocInfoModel,
     HwpBinaryDocument,
     HwpBinaryFileHeader,
     HwpDocumentProperties,
     HwpParagraph,
     HwpStreamCapacity,
+    ParagraphHeaderRecord,
     ParagraphTextRecord,
     RecordNode,
     SectionModel,
@@ -298,6 +301,96 @@ class HwpDocument:
             profile_root=self._pure_profile.root,
         )
 
+    def append_field(
+        self,
+        *,
+        field_type: str,
+        display_text: str | None = None,
+        name: str | None = None,
+        parameters: dict[str, str | int] | None = None,
+        editable: bool = False,
+        dirty: bool = False,
+        section_index: int = 0,
+        paragraph_index: int | None = None,
+    ) -> None:
+        self._mutate_via_hwpx(
+            lambda document: document.append_field(
+                field_type=field_type,
+                display_text=display_text,
+                name=name,
+                parameters=parameters,
+                editable=editable,
+                dirty=dirty,
+                section_index=section_index,
+                paragraph_index=paragraph_index,
+            )
+        )
+
+    def append_equation(
+        self,
+        script: str,
+        *,
+        width: int = 4800,
+        height: int = 2300,
+        section_index: int = 0,
+        paragraph_index: int | None = None,
+    ) -> None:
+        self._mutate_via_hwpx(
+            lambda document: document.append_equation(
+                script,
+                width=width,
+                height=height,
+                section_index=section_index,
+                paragraph_index=paragraph_index,
+            )
+        )
+
+    def append_shape(
+        self,
+        *,
+        kind: str = "rect",
+        text: str = "",
+        width: int = 12000,
+        height: int = 3200,
+        fill_color: str = "#FFFFFF",
+        line_color: str = "#000000",
+        section_index: int = 0,
+        paragraph_index: int | None = None,
+    ) -> None:
+        self._mutate_via_hwpx(
+            lambda document: document.append_shape(
+                kind=kind,
+                text=text,
+                width=width,
+                height=height,
+                fill_color=fill_color,
+                line_color=line_color,
+                section_index=section_index,
+                paragraph_index=paragraph_index,
+            )
+        )
+
+    def append_ole(
+        self,
+        name: str,
+        data: bytes,
+        *,
+        width: int = 42001,
+        height: int = 13501,
+        section_index: int = 0,
+        paragraph_index: int | None = None,
+    ) -> None:
+        self._mutate_via_hwpx(
+            lambda document: document.append_ole(
+                name,
+                data,
+                width=width,
+                height=height,
+                section_index=section_index,
+                paragraph_index=paragraph_index,
+            )
+        )
+
     def add_embedded_bindata(self, data: bytes, *, extension: str, storage_id: int | None = None) -> tuple[int, str]:
         self._invalidate_bridge()
         return self._binary_document.add_embedded_bindata(data, extension=extension, storage_id=storage_id)
@@ -337,6 +430,23 @@ class HwpDocument:
             self._pure_profile = HwpPureProfile.load_bundled()
         append_feature_from_profile(self._binary_document, self._pure_profile, feature)
 
+    def _mutate_via_hwpx(self, mutate: Callable[[HwpxDocument], object]) -> object:
+        bridge_document = self.to_hwpx_document(force_refresh=False)
+        result = mutate(bridge_document)
+        self._bridge_document = bridge_document
+        self._sync_from_bridge_document()
+        return result
+
+    def _sync_from_bridge_document(self) -> None:
+        if self._bridge_document is None:
+            return
+        workspace = self._ensure_bridge_workspace()
+        source_hwpx = workspace / "bridge_sync.hwpx"
+        output_hwp = workspace / "bridge_sync.hwp"
+        self._bridge_document.save(source_hwpx)
+        self._converter(source_hwpx, output_hwp, "HWP")
+        self._binary_document = HwpBinaryDocument.open(output_hwp)
+
     def _invalidate_bridge(self) -> None:
         self._bridge_document = None
 
@@ -359,14 +469,17 @@ class HwpSection:
         return self.document.binary_document().section_model(self.index)
 
     def controls(self) -> list["HwpControlObject"]:
+        section_model = self.model()
         controls: list[HwpControlObject] = []
-        for paragraph in self.model().paragraphs():
+        for paragraph in section_model.paragraphs():
+            control_ordinal = 0
             for control_node in paragraph.header.children:
                 if control_node.tag_id != TAG_CTRL_HEADER:
                     continue
-                wrapper = _build_control_wrapper(self.document, paragraph, control_node)
+                wrapper = _build_control_wrapper(self.document, section_model, paragraph, control_node, control_ordinal)
                 if wrapper is not None:
                     controls.append(wrapper)
+                control_ordinal += 1
         return controls
 
     def tables(self) -> list["HwpTableObject"]:
@@ -478,12 +591,47 @@ class HwpParagraphObject:
             count=count,
         )
 
+    def set_text(self, value: str) -> None:
+        model = self._document.section_model(self._section_index)
+        paragraph = model.paragraphs()[self._index]
+        text_record = paragraph.text_record()
+        if text_record is None:
+            raise ValueError("HWP paragraph does not contain a para text record.")
+        text_record.set_raw_text(value)
+        paragraph.header.char_count = len(value)
+        self._document.binary_document().replace_section_model(self._section_index, model)
+        self._document._invalidate_bridge()
+
+    def replace_text(self, old: str, new: str, *, count: int = -1) -> int:
+        model = self._document.section_model(self._section_index)
+        paragraph = model.paragraphs()[self._index]
+        text_record = paragraph.text_record()
+        if text_record is None or not old:
+            return 0
+        raw_text = text_record.raw_text
+        replaced = raw_text.count(old) if count < 0 else min(raw_text.count(old), count)
+        if replaced == 0:
+            return 0
+        updated = raw_text.replace(old, new) if count < 0 else raw_text.replace(old, new, count)
+        text_record.set_raw_text(updated)
+        paragraph.header.char_count = len(updated)
+        self._document.binary_document().replace_section_model(self._section_index, model)
+        self._document._invalidate_bridge()
+        return replaced
+
 
 class HwpControlObject:
-    def __init__(self, document: HwpDocument, paragraph: SectionParagraphModel, control_node: RecordNode):
+    def __init__(
+        self,
+        document: HwpDocument,
+        paragraph: SectionParagraphModel,
+        control_node: RecordNode,
+        control_ordinal: int,
+    ):
         self._document = document
         self._paragraph = paragraph
-        self._control_node = control_node
+        self._control_ordinal = control_ordinal
+        self._initial_control_node = control_node
 
     @property
     def document(self) -> HwpDocument:
@@ -499,17 +647,28 @@ class HwpControlObject:
 
     @property
     def control_node(self) -> RecordNode:
-        return self._control_node
+        return self._live_context()[2]
 
     @property
     def control_id(self) -> str:
-        payload = self._control_node.payload
+        payload = self.control_node.payload
         if len(payload) < 4:
             return ""
         return payload[:4][::-1].decode("latin1", errors="replace")
 
     def descendant_nodes(self) -> list[RecordNode]:
-        return list(self._control_node.iter_descendants())
+        return list(self.control_node.iter_descendants())
+
+    def _live_context(self) -> tuple[SectionModel, SectionParagraphModel, RecordNode]:
+        section_model = self._document.section_model(self.section_index)
+        paragraph = section_model.paragraphs()[self.paragraph_index]
+        controls = [child for child in paragraph.header.children if child.tag_id == TAG_CTRL_HEADER]
+        control_node = controls[self._control_ordinal]
+        return section_model, paragraph, control_node
+
+    def _commit(self, section_model: SectionModel) -> None:
+        self._document.binary_document().replace_section_model(self.section_index, section_model)
+        self._document._invalidate_bridge()
 
 
 @dataclass(frozen=True)
@@ -551,7 +710,7 @@ class HwpTableObject(HwpControlObject):
 
     def cells(self) -> list[HwpTableCellObject]:
         result: list[HwpTableCellObject] = []
-        children = self._control_node.children
+        children = self.control_node.children
         for index, node in enumerate(children):
             if node.tag_id != TAG_LIST_HEADER or len(node.payload) != 47:
                 continue
@@ -591,8 +750,54 @@ class HwpTableObject(HwpControlObject):
                 matrix[cell.row][cell.column] = cell.text
         return matrix
 
-    def _table_record(self) -> RecordNode:
-        for node in self._control_node.iter_descendants():
+    def set_cell_text(self, row: int, column: int, text: str) -> None:
+        section_model, _paragraph, control_node = self._live_context()
+        children = control_node.children
+        for index, node in enumerate(children):
+            if node.tag_id != TAG_LIST_HEADER or len(node.payload) != 47:
+                continue
+            payload = node.payload
+            current_column = int.from_bytes(payload[8:10], "little")
+            current_row = int.from_bytes(payload[10:12], "little")
+            if current_row != row or current_column != column:
+                continue
+            para_node = children[index + 1] if index + 1 < len(children) and children[index + 1].tag_id == TAG_PARA_HEADER else None
+            if not isinstance(para_node, ParagraphHeaderRecord):
+                raise ValueError("HWP table cell does not contain a writable paragraph header.")
+            text_record = next((child for child in para_node.children if isinstance(child, ParagraphTextRecord)), None)
+            if text_record is None:
+                raise ValueError("HWP table cell does not contain a para text record.")
+            text_record.set_raw_text(f"{text}\r")
+            para_node.char_count = len(text) + 1
+            self._commit(section_model)
+            return
+        raise IndexError(f"No HWP table cell at row={row}, column={column}.")
+
+    def set_row_heights(self, heights: Sequence[int]) -> None:
+        section_model, _paragraph, control_node = self._live_context()
+        values = [int(value) for value in heights]
+        if len(values) != self.row_count:
+            raise ValueError(f"row heights length must match row_count={self.row_count}.")
+        record = self._table_record(control_node)
+        payload = bytearray(record.payload)
+        start = 18
+        for index, value in enumerate(values):
+            payload[start + index * 2 : start + index * 2 + 2] = value.to_bytes(2, "little")
+        record.payload = bytes(payload)
+        self._commit(section_model)
+
+    def set_table_border_fill_id(self, border_fill_id: int) -> None:
+        section_model, _paragraph, control_node = self._live_context()
+        record = self._table_record(control_node)
+        payload = bytearray(record.payload)
+        offset = 18 + self.row_count * 2
+        payload[offset : offset + 2] = int(border_fill_id).to_bytes(2, "little")
+        record.payload = bytes(payload)
+        self._commit(section_model)
+
+    def _table_record(self, control_node: RecordNode | None = None) -> RecordNode:
+        target = self.control_node if control_node is None else control_node
+        for node in target.iter_descendants():
             if node.tag_id == TAG_TABLE:
                 return node
         raise ValueError("HWP table control does not contain a table record.")
@@ -619,8 +824,22 @@ class HwpPictureObject(HwpControlObject):
     def binary_data(self) -> bytes:
         return self.document.binary_document().read_stream(self.bindata_path(), decompress=False)
 
-    def _shape_picture_record(self) -> RecordNode:
-        for node in self._control_node.iter_descendants():
+    def replace_binary(self, data: bytes, *, extension: str | None = None) -> None:
+        if extension is None or extension.lower().lstrip(".") == (self.extension or "").lower():
+            self.document.binary_document().add_stream(self.bindata_path(), data)
+        else:
+            section_model, _paragraph, control_node = self._live_context()
+            storage_id, _ = self.document.add_embedded_bindata(data, extension=extension)
+            payload = bytearray(self._shape_picture_record(control_node).payload)
+            payload[71:73] = int(storage_id).to_bytes(2, "little")
+            self._shape_picture_record(control_node).payload = bytes(payload)
+            self._commit(section_model)
+            return
+        self.document._invalidate_bridge()
+
+    def _shape_picture_record(self, control_node: RecordNode | None = None) -> RecordNode:
+        target = self.control_node if control_node is None else control_node
+        for node in target.iter_descendants():
             if node.tag_id == TAG_SHAPE_COMPONENT_PICTURE:
                 return node
         raise ValueError("HWP picture control does not contain a shape picture record.")
@@ -635,7 +854,7 @@ class HwpFieldObject(HwpControlObject):
 class HwpHyperlinkObject(HwpFieldObject):
     @property
     def command(self) -> str:
-        payload = self._control_node.payload
+        payload = self.control_node.payload
         prefix_size = 9
         text_size = int.from_bytes(payload[prefix_size : prefix_size + 2], "little")
         start = prefix_size + 2
@@ -658,6 +877,26 @@ class HwpHyperlinkObject(HwpFieldObject):
     def display_text(self) -> str:
         return self._paragraph.text.replace("\r", "")
 
+    def set_url(self, url: str) -> None:
+        section_model, _paragraph, control_node = self._live_context()
+        control_node.payload = _build_hyperlink_ctrl_payload(url, metadata_fields=self.metadata_fields)
+        self._commit(section_model)
+
+    def set_metadata_fields(self, metadata_fields: Sequence[str | int]) -> None:
+        section_model, _paragraph, control_node = self._live_context()
+        control_node.payload = _build_hyperlink_ctrl_payload(self.url, metadata_fields=metadata_fields)
+        self._commit(section_model)
+
+    def set_display_text(self, text: str) -> None:
+        section_model, paragraph, _control_node = self._live_context()
+        text_record = paragraph.text_record()
+        if text_record is None:
+            raise ValueError("HWP hyperlink paragraph does not contain a para text record.")
+        raw_text = _build_hyperlink_para_text_payload(text).decode("utf-16-le", errors="ignore")
+        text_record.set_raw_text(raw_text)
+        paragraph.header.char_count = len(raw_text)
+        self._commit(section_model)
+
 class HwpEquationObject(HwpControlObject):
     @property
     def script(self) -> str:
@@ -670,24 +909,37 @@ class HwpEquationObject(HwpControlObject):
             script = script[2:]
         return script.strip()
 
-    def _eqedit_record(self) -> RecordNode | None:
-        for node in self._control_node.iter_descendants():
+    def _eqedit_record(self, control_node: RecordNode | None = None) -> RecordNode | None:
+        target = self.control_node if control_node is None else control_node
+        for node in target.iter_descendants():
             if node.tag_id == TAG_EQEDIT:
                 return node
         return None
+
+    def set_script(self, script: str) -> None:
+        section_model, _paragraph, control_node = self._live_context()
+        eqedit_record = self._eqedit_record(control_node)
+        if eqedit_record is None:
+            raise ValueError("HWP equation control does not contain an eqedit record.")
+        decoded = eqedit_record.payload[4:].decode("utf-16-le", errors="ignore")
+        prefix = "* " if decoded.startswith("* ") else ""
+        marker_index = decoded.find("Equation Version")
+        suffix = decoded[marker_index:] if marker_index >= 0 else ""
+        eqedit_record.payload = eqedit_record.payload[:4] + (prefix + script + suffix).encode("utf-16-le")
+        self._commit(section_model)
 
 
 class HwpShapeObject(HwpControlObject):
     @property
     def kind(self) -> str:
-        return _shape_kind_from_control_node(self._control_node)
+        return _shape_kind_from_control_node(self.control_node)
 
     @property
     def text(self) -> str:
         return self._paragraph.text.replace("\r", "")
 
     def descendant_tag_ids(self) -> list[int]:
-        return [node.tag_id for node in self._control_node.iter_descendants()]
+        return [node.tag_id for node in self.control_node.iter_descendants()]
 
     def size(self) -> dict[str, int]:
         record = self._shape_component_record()
@@ -698,11 +950,25 @@ class HwpShapeObject(HwpControlObject):
             "height": int.from_bytes(record.payload[24:28], "little", signed=False),
         }
 
-    def _shape_component_record(self) -> RecordNode | None:
-        for node in self._control_node.iter_descendants():
+    def _shape_component_record(self, control_node: RecordNode | None = None) -> RecordNode | None:
+        target = self.control_node if control_node is None else control_node
+        for node in target.iter_descendants():
             if node.tag_id == TAG_SHAPE_COMPONENT:
                 return node
         return None
+
+    def set_size(self, *, width: int | None = None, height: int | None = None) -> None:
+        section_model, _paragraph, control_node = self._live_context()
+        record = self._shape_component_record(control_node)
+        if record is None:
+            raise ValueError("HWP shape control does not contain a shape component record.")
+        payload = bytearray(record.payload)
+        if width is not None:
+            payload[20:24] = int(width).to_bytes(4, "little")
+        if height is not None:
+            payload[24:28] = int(height).to_bytes(4, "little")
+        record.payload = bytes(payload)
+        self._commit(section_model)
 
 
 class HwpOleObject(HwpShapeObject):
@@ -710,27 +976,39 @@ class HwpOleObject(HwpShapeObject):
     def kind(self) -> str:
         return "ole"
 
+    def replace_binary(self, data: bytes, *, extension: str | None = None) -> None:
+        bindata_path = next(
+            (stream_path for stream_path in self.document.bindata_stream_paths() if stream_path.endswith(".ole")),
+            None,
+        )
+        if bindata_path is None:
+            raise ValueError("No OLE BinData stream is available to replace.")
+        self.document.binary_document().add_stream(bindata_path, data)
+        self.document._invalidate_bridge()
+
 
 def _build_control_wrapper(
     document: HwpDocument,
+    section_model: SectionModel,
     paragraph: SectionParagraphModel,
     control_node: RecordNode,
+    control_ordinal: int,
 ) -> HwpControlObject | None:
     control_id = _control_id(control_node)
     if control_id == "tbl ":
-        return HwpTableObject(document, paragraph, control_node)
+        return HwpTableObject(document, paragraph, control_node, control_ordinal)
     if control_id == "%hlk":
-        return HwpHyperlinkObject(document, paragraph, control_node)
+        return HwpHyperlinkObject(document, paragraph, control_node, control_ordinal)
     if control_id.startswith("%"):
-        return HwpFieldObject(document, paragraph, control_node)
+        return HwpFieldObject(document, paragraph, control_node, control_ordinal)
     if control_id == "eqed":
-        return HwpEquationObject(document, paragraph, control_node)
+        return HwpEquationObject(document, paragraph, control_node, control_ordinal)
     if control_id == "gso " and _control_has_descendant(control_node, TAG_SHAPE_COMPONENT_OLE):
-        return HwpOleObject(document, paragraph, control_node)
+        return HwpOleObject(document, paragraph, control_node, control_ordinal)
     if control_id == "gso " and any(node.tag_id == TAG_SHAPE_COMPONENT_PICTURE for node in control_node.iter_descendants()):
-        return HwpPictureObject(document, paragraph, control_node)
+        return HwpPictureObject(document, paragraph, control_node, control_ordinal)
     if control_id == "gso ":
-        return HwpShapeObject(document, paragraph, control_node)
+        return HwpShapeObject(document, paragraph, control_node, control_ordinal)
     return None
 
 
