@@ -31,7 +31,7 @@
       "hancom_errors": [],
       "conversions": [],
       "artifacts": [
-        "D:\\GitHub\\jakal-hwpx\\examples\\output_bridge_stability_lab\\from_hwp_save_native_hwp\\native.hwp"
+        "D:\\GitHub\\jakal-hwpx\\examples\\output_bridge_stability_lab\\sample\\from_hwp_save_native_hwp\\native.hwp"
       ],
       "notes": []
     },
@@ -47,7 +47,7 @@
         "HWPX"
       ],
       "artifacts": [
-        "D:\\GitHub\\jakal-hwpx\\examples\\output_bridge_stability_lab\\from_hwp_save_hwpx_after_metadata_edit\\edited.hwpx"
+        "D:\\GitHub\\jakal-hwpx\\examples\\output_bridge_stability_lab\\sample\\from_hwp_save_hwpx_after_metadata_edit\\edited.hwpx"
       ],
       "notes": []
     },
@@ -78,7 +78,7 @@
         "HWPX"
       ],
       "artifacts": [
-        "D:\\GitHub\\jakal-hwpx\\examples\\output_bridge_stability_lab\\from_hwp_dispatch_save_hwpx\\dispatch.hwpx"
+        "D:\\GitHub\\jakal-hwpx\\examples\\output_bridge_stability_lab\\sample\\from_hwp_dispatch_save_hwpx\\dispatch.hwpx"
       ],
       "notes": []
     },
@@ -125,7 +125,7 @@
       "hancom_errors": [],
       "conversions": [],
       "artifacts": [
-        "D:\\GitHub\\jakal-hwpx\\examples\\output_bridge_stability_lab\\from_hwpx_save_native_hwpx\\native.hwpx"
+        "D:\\GitHub\\jakal-hwpx\\examples\\output_bridge_stability_lab\\sample\\from_hwpx_save_native_hwpx\\native.hwpx"
       ],
       "notes": []
     },
@@ -141,7 +141,7 @@
         "HWP"
       ],
       "artifacts": [
-        "D:\\GitHub\\jakal-hwpx\\examples\\output_bridge_stability_lab\\from_hwpx_save_hwp\\converted.hwp"
+        "D:\\GitHub\\jakal-hwpx\\examples\\output_bridge_stability_lab\\sample\\from_hwpx_save_hwp\\converted.hwp"
       ],
       "notes": []
     },
@@ -172,7 +172,7 @@
         "HWP"
       ],
       "artifacts": [
-        "D:\\GitHub\\jakal-hwpx\\examples\\output_bridge_stability_lab\\from_hwpx_dispatch_save_hwp\\dispatch.hwp"
+        "D:\\GitHub\\jakal-hwpx\\examples\\output_bridge_stability_lab\\sample\\from_hwpx_dispatch_save_hwp\\dispatch.hwp"
       ],
       "notes": []
     },
@@ -189,7 +189,7 @@
         "HWP"
       ],
       "artifacts": [
-        "D:\\GitHub\\jakal-hwpx\\examples\\output_bridge_stability_lab\\hwpx_document_reverse_helpers\\helper.hwp"
+        "D:\\GitHub\\jakal-hwpx\\examples\\output_bridge_stability_lab\\sample\\hwpx_document_reverse_helpers\\helper.hwp"
       ],
       "notes": []
     },
@@ -205,7 +205,7 @@
         "HWP"
       ],
       "artifacts": [
-        "D:\\GitHub\\jakal-hwpx\\examples\\output_bridge_stability_lab\\from_hwpx_modify_title_save_hwp\\title_modified.hwp"
+        "D:\\GitHub\\jakal-hwpx\\examples\\output_bridge_stability_lab\\sample\\from_hwpx_modify_title_save_hwp\\title_modified.hwp"
       ],
       "notes": []
     },
@@ -221,7 +221,7 @@
         "HWP"
       ],
       "artifacts": [
-        "D:\\GitHub\\jakal-hwpx\\examples\\output_bridge_stability_lab\\from_hwpx_append_paragraph_save_hwp\\paragraph_modified.hwp"
+        "D:\\GitHub\\jakal-hwpx\\examples\\output_bridge_stability_lab\\sample\\from_hwpx_append_paragraph_save_hwp\\paragraph_modified.hwp"
       ],
       "notes": []
     },
@@ -237,7 +237,7 @@
         "HWP"
       ],
       "artifacts": [
-        "D:\\GitHub\\jakal-hwpx\\examples\\output_bridge_stability_lab\\from_hwpx_append_table_save_hwp\\table_modified.hwp"
+        "D:\\GitHub\\jakal-hwpx\\examples\\output_bridge_stability_lab\\sample\\from_hwpx_append_table_save_hwp\\table_modified.hwp"
       ],
       "notes": []
     },
@@ -253,7 +253,7 @@
         "HWP"
       ],
       "artifacts": [
-        "D:\\GitHub\\jakal-hwpx\\examples\\output_bridge_stability_lab\\from_hwpx_append_hyperlink_save_hwp\\hyperlink_modified.hwp"
+        "D:\\GitHub\\jakal-hwpx\\examples\\output_bridge_stability_lab\\sample\\from_hwpx_append_hyperlink_save_hwp\\hyperlink_modified.hwp"
       ],
       "notes": []
     },
@@ -269,7 +269,7 @@
         "HWP"
       ],
       "artifacts": [
-        "D:\\GitHub\\jakal-hwpx\\examples\\output_bridge_stability_lab\\from_hwpx_append_field_save_hwp\\field_modified.hwp"
+        "D:\\GitHub\\jakal-hwpx\\examples\\output_bridge_stability_lab\\sample\\from_hwpx_append_field_save_hwp\\field_modified.hwp"
       ],
       "notes": []
     },
@@ -285,7 +285,7 @@
         "HWP"
       ],
       "artifacts": [
-        "D:\\GitHub\\jakal-hwpx\\examples\\output_bridge_stability_lab\\from_hwpx_append_equation_save_hwp\\equation_modified.hwp"
+        "D:\\GitHub\\jakal-hwpx\\examples\\output_bridge_stability_lab\\sample\\from_hwpx_append_equation_save_hwp\\equation_modified.hwp"
       ],
       "notes": []
     },
@@ -301,7 +301,7 @@
         "HWP"
       ],
       "artifacts": [
-        "D:\\GitHub\\jakal-hwpx\\examples\\output_bridge_stability_lab\\from_hwpx_append_shape_save_hwp\\shape_modified.hwp"
+        "D:\\GitHub\\jakal-hwpx\\examples\\output_bridge_stability_lab\\sample\\from_hwpx_append_shape_save_hwp\\shape_modified.hwp"
       ],
       "notes": []
     },
@@ -317,7 +317,7 @@
         "HWP"
       ],
       "artifacts": [
-        "D:\\GitHub\\jakal-hwpx\\examples\\output_bridge_stability_lab\\from_hwpx_append_ole_save_hwp\\ole_modified.hwp"
+        "D:\\GitHub\\jakal-hwpx\\examples\\output_bridge_stability_lab\\sample\\from_hwpx_append_ole_save_hwp\\ole_modified.hwp"
       ],
       "notes": []
     },
@@ -333,7 +333,7 @@
         "HWP"
       ],
       "artifacts": [
-        "D:\\GitHub\\jakal-hwpx\\examples\\output_bridge_stability_lab\\from_hwpx_mixed_edits_save_hwp\\mixed_modified.hwp"
+        "D:\\GitHub\\jakal-hwpx\\examples\\output_bridge_stability_lab\\sample\\from_hwpx_mixed_edits_save_hwp\\mixed_modified.hwp"
       ],
       "notes": []
     }
