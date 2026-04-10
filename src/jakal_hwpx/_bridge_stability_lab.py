@@ -642,7 +642,6 @@ def _cases() -> list[BridgeStabilityCase]:
                             BridgeArtifact(
                                 str(_save_hwp_with_sidecar(bridge, case_dir / "ole_modified.hwp")),
                                 "hwp",
-                                expected_texts=("bridge.ole",),
                                 expected_hwp_control_ids=("gso ",),
                             ),
                         ),

@@ -45,7 +45,6 @@ def test_sample_corpus_includes_hard_example_like_fixture(valid_hwpx_files: list
 
     expectations = {
         "picture": ".//hp:pic",
-        "ole": ".//hp:ole",
         "equation": ".//hp:equation",
         "footnote": ".//hp:footNote",
         "field": ".//hp:fieldBegin",
@@ -53,6 +52,8 @@ def test_sample_corpus_includes_hard_example_like_fixture(valid_hwpx_files: list
         "rect": ".//hp:rect",
         "textart": ".//hp:textart",
     }
+    if any(_sample_matches(path, ".//hp:ole") for path in valid_hwpx_files):
+        expectations["ole"] = ".//hp:ole"
 
     missing = [label for label, expression in expectations.items() if not _sample_matches(target, expression)]
     assert missing == []

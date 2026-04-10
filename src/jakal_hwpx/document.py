@@ -1232,7 +1232,7 @@ class HwpxDocument:
         script_node.set("{http://www.w3.org/XML/1998/namespace}space", "preserve")
         script_node.text = script
 
-        section = self._append_control(section_index, paragraph_index, equation, char_pr_id=char_pr_id)
+        section = self._append_run_child(section_index, paragraph_index, equation, char_pr_id=char_pr_id)
         return EquationXml(self, section, equation)
 
     def append_paragraph_style(
@@ -1484,7 +1484,7 @@ class HwpxDocument:
                 cell_margin.set("top", "141")
                 cell_margin.set("bottom", "141")
 
-        section = self._append_control(section_index, paragraph_index, table, char_pr_id=char_pr_id)
+        section = self._append_run_child(section_index, paragraph_index, table, char_pr_id=char_pr_id)
         return TableXml(self, section, table)
 
     def append_picture(
@@ -1651,7 +1651,7 @@ class HwpxDocument:
             comment = etree.SubElement(picture, qname("hp", "shapeComment"))
             comment.text = shape_comment
 
-        section = self._append_control(section_index, paragraph_index, picture, char_pr_id=char_pr_id)
+        section = self._append_run_child(section_index, paragraph_index, picture, char_pr_id=char_pr_id)
         return PictureXml(self, section, picture)
 
     def append_shape(
@@ -1861,7 +1861,7 @@ class HwpxDocument:
             comment = etree.SubElement(shape, qname("hp", "shapeComment"))
             comment.text = shape_comment
 
-        section = self._append_control(section_index, paragraph_index, shape, char_pr_id=char_pr_id)
+        section = self._append_run_child(section_index, paragraph_index, shape, char_pr_id=char_pr_id)
         return ShapeXml(self, section, shape)
 
     def append_ole(
@@ -2034,7 +2034,7 @@ class HwpxDocument:
             comment = etree.SubElement(ole, qname("hp", "shapeComment"))
             comment.text = shape_comment
 
-        section = self._append_control(section_index, paragraph_index, ole, char_pr_id=char_pr_id)
+        section = self._append_run_child(section_index, paragraph_index, ole, char_pr_id=char_pr_id)
         return OleXml(self, section, ole)
 
     def append_bookmark(
@@ -2686,6 +2686,21 @@ class HwpxDocument:
         run = self._append_run(paragraph, char_pr_id=char_pr_id)
         ctrl = etree.SubElement(run, qname("hp", "ctrl"))
         ctrl.append(control_element)
+        section = self.sections[section_index]
+        section.mark_modified()
+        return section
+
+    def _append_run_child(
+        self,
+        section_index: int,
+        paragraph_index: int | None,
+        element: etree._Element,
+        *,
+        char_pr_id: str | None = None,
+    ):
+        paragraph = self._resolve_paragraph_for_insert(section_index=section_index, paragraph_index=paragraph_index)
+        run = self._append_run(paragraph, char_pr_id=char_pr_id)
+        run.append(element)
         section = self.sections[section_index]
         section.mark_modified()
         return section

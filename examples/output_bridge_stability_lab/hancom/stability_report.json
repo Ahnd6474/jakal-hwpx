@@ -1,8 +1,8 @@
 {
   "case_count": 21,
-  "ok_count": 16,
-  "bridge_failure_count": 5,
-  "hancom_failure_count": 5,
+  "ok_count": 21,
+  "bridge_failure_count": 0,
+  "hancom_failure_count": 0,
   "hancom_skip_count": 0,
   "results": [
     {
@@ -227,20 +227,18 @@
     },
     {
       "name": "from_hwpx_append_table_save_hwp",
-      "ok": false,
-      "bridge_ok": false,
-      "bridge_errors": [
-        "Hancom conversion failed for C:\\Users\\ahnd6\\AppData\\Local\\Temp\\jakal_hwp_hwpx_bridge_caqsi8c4\\bridge_source.hwpx -> C:\\Users\\ahnd6\\AppData\\Local\\Temp\\jakal_hwp_hwpx_bridge_caqsi8c4\\bridge_output.hwp: The remote procedure call failed. (Exception from HRESULT: 0x800706BE)\nAt D:\\GitHub\\jakal-hwpx\\scripts\\run_hancom_smoke_validation.ps1:476 char:9\n+         $openResult = $hwp.Open($resolvedInput, \"\", \"\")\n+         ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~\n    + CategoryInfo          : OperationStopped: (:) [], COMException\n    + FullyQualifiedErrorId : System.Runtime.InteropServices.COMException"
-      ],
-      "hancom_status": "failed",
-      "hancom_ok": false,
-      "hancom_errors": [
-        "Hancom conversion failed for C:\\Users\\ahnd6\\AppData\\Local\\Temp\\jakal_hwp_hwpx_bridge_caqsi8c4\\bridge_source.hwpx -> C:\\Users\\ahnd6\\AppData\\Local\\Temp\\jakal_hwp_hwpx_bridge_caqsi8c4\\bridge_output.hwp: The remote procedure call failed. (Exception from HRESULT: 0x800706BE)\nAt D:\\GitHub\\jakal-hwpx\\scripts\\run_hancom_smoke_validation.ps1:476 char:9\n+         $openResult = $hwp.Open($resolvedInput, \"\", \"\")\n+         ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~\n    + CategoryInfo          : OperationStopped: (:) [], COMException\n    + FullyQualifiedErrorId : System.Runtime.InteropServices.COMException"
-      ],
+      "ok": true,
+      "bridge_ok": true,
+      "bridge_errors": [],
+      "hancom_status": "passed",
+      "hancom_ok": true,
+      "hancom_errors": [],
       "conversions": [
         "HWP"
       ],
-      "artifacts": [],
+      "artifacts": [
+        "D:\\GitHub\\jakal-hwpx\\examples\\output_bridge_stability_lab\\hancom\\from_hwpx_append_table_save_hwp\\table_modified.hwp"
+      ],
       "notes": []
     },
     {
@@ -277,74 +275,66 @@
     },
     {
       "name": "from_hwpx_append_equation_save_hwp",
-      "ok": false,
-      "bridge_ok": false,
-      "bridge_errors": [
-        "Hancom conversion failed for C:\\Users\\ahnd6\\AppData\\Local\\Temp\\jakal_hwp_hwpx_bridge_bqh7wf1t\\bridge_source.hwpx -> C:\\Users\\ahnd6\\AppData\\Local\\Temp\\jakal_hwp_hwpx_bridge_bqh7wf1t\\bridge_output.hwp: The remote procedure call failed. (Exception from HRESULT: 0x800706BE)\nAt D:\\GitHub\\jakal-hwpx\\scripts\\run_hancom_smoke_validation.ps1:476 char:9\n+         $openResult = $hwp.Open($resolvedInput, \"\", \"\")\n+         ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~\n    + CategoryInfo          : OperationStopped: (:) [], COMException\n    + FullyQualifiedErrorId : System.Runtime.InteropServices.COMException"
-      ],
-      "hancom_status": "failed",
-      "hancom_ok": false,
-      "hancom_errors": [
-        "Hancom conversion failed for C:\\Users\\ahnd6\\AppData\\Local\\Temp\\jakal_hwp_hwpx_bridge_bqh7wf1t\\bridge_source.hwpx -> C:\\Users\\ahnd6\\AppData\\Local\\Temp\\jakal_hwp_hwpx_bridge_bqh7wf1t\\bridge_output.hwp: The remote procedure call failed. (Exception from HRESULT: 0x800706BE)\nAt D:\\GitHub\\jakal-hwpx\\scripts\\run_hancom_smoke_validation.ps1:476 char:9\n+         $openResult = $hwp.Open($resolvedInput, \"\", \"\")\n+         ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~\n    + CategoryInfo          : OperationStopped: (:) [], COMException\n    + FullyQualifiedErrorId : System.Runtime.InteropServices.COMException"
-      ],
+      "ok": true,
+      "bridge_ok": true,
+      "bridge_errors": [],
+      "hancom_status": "passed",
+      "hancom_ok": true,
+      "hancom_errors": [],
       "conversions": [
         "HWP"
       ],
-      "artifacts": [],
+      "artifacts": [
+        "D:\\GitHub\\jakal-hwpx\\examples\\output_bridge_stability_lab\\hancom\\from_hwpx_append_equation_save_hwp\\equation_modified.hwp"
+      ],
       "notes": []
     },
     {
       "name": "from_hwpx_append_shape_save_hwp",
-      "ok": false,
-      "bridge_ok": false,
-      "bridge_errors": [
-        "Hancom conversion failed for C:\\Users\\ahnd6\\AppData\\Local\\Temp\\jakal_hwp_hwpx_bridge_2g_5z0jn\\bridge_source.hwpx -> C:\\Users\\ahnd6\\AppData\\Local\\Temp\\jakal_hwp_hwpx_bridge_2g_5z0jn\\bridge_output.hwp: The remote procedure call failed. (Exception from HRESULT: 0x800706BE)\nAt D:\\GitHub\\jakal-hwpx\\scripts\\run_hancom_smoke_validation.ps1:476 char:9\n+         $openResult = $hwp.Open($resolvedInput, \"\", \"\")\n+         ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~\n    + CategoryInfo          : OperationStopped: (:) [], COMException\n    + FullyQualifiedErrorId : System.Runtime.InteropServices.COMException"
-      ],
-      "hancom_status": "failed",
-      "hancom_ok": false,
-      "hancom_errors": [
-        "Hancom conversion failed for C:\\Users\\ahnd6\\AppData\\Local\\Temp\\jakal_hwp_hwpx_bridge_2g_5z0jn\\bridge_source.hwpx -> C:\\Users\\ahnd6\\AppData\\Local\\Temp\\jakal_hwp_hwpx_bridge_2g_5z0jn\\bridge_output.hwp: The remote procedure call failed. (Exception from HRESULT: 0x800706BE)\nAt D:\\GitHub\\jakal-hwpx\\scripts\\run_hancom_smoke_validation.ps1:476 char:9\n+         $openResult = $hwp.Open($resolvedInput, \"\", \"\")\n+         ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~\n    + CategoryInfo          : OperationStopped: (:) [], COMException\n    + FullyQualifiedErrorId : System.Runtime.InteropServices.COMException"
-      ],
+      "ok": true,
+      "bridge_ok": true,
+      "bridge_errors": [],
+      "hancom_status": "passed",
+      "hancom_ok": true,
+      "hancom_errors": [],
       "conversions": [
         "HWP"
       ],
-      "artifacts": [],
+      "artifacts": [
+        "D:\\GitHub\\jakal-hwpx\\examples\\output_bridge_stability_lab\\hancom\\from_hwpx_append_shape_save_hwp\\shape_modified.hwp"
+      ],
       "notes": []
     },
     {
       "name": "from_hwpx_append_ole_save_hwp",
-      "ok": false,
-      "bridge_ok": false,
-      "bridge_errors": [
-        "Hancom conversion failed for C:\\Users\\ahnd6\\AppData\\Local\\Temp\\jakal_hwp_hwpx_bridge_tvtx0tw0\\bridge_source.hwpx -> C:\\Users\\ahnd6\\AppData\\Local\\Temp\\jakal_hwp_hwpx_bridge_tvtx0tw0\\bridge_output.hwp: The remote procedure call failed. (Exception from HRESULT: 0x800706BE)\nAt D:\\GitHub\\jakal-hwpx\\scripts\\run_hancom_smoke_validation.ps1:476 char:9\n+         $openResult = $hwp.Open($resolvedInput, \"\", \"\")\n+         ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~\n    + CategoryInfo          : OperationStopped: (:) [], COMException\n    + FullyQualifiedErrorId : System.Runtime.InteropServices.COMException"
-      ],
-      "hancom_status": "failed",
-      "hancom_ok": false,
-      "hancom_errors": [
-        "Hancom conversion failed for C:\\Users\\ahnd6\\AppData\\Local\\Temp\\jakal_hwp_hwpx_bridge_tvtx0tw0\\bridge_source.hwpx -> C:\\Users\\ahnd6\\AppData\\Local\\Temp\\jakal_hwp_hwpx_bridge_tvtx0tw0\\bridge_output.hwp: The remote procedure call failed. (Exception from HRESULT: 0x800706BE)\nAt D:\\GitHub\\jakal-hwpx\\scripts\\run_hancom_smoke_validation.ps1:476 char:9\n+         $openResult = $hwp.Open($resolvedInput, \"\", \"\")\n+         ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~\n    + CategoryInfo          : OperationStopped: (:) [], COMException\n    + FullyQualifiedErrorId : System.Runtime.InteropServices.COMException"
-      ],
+      "ok": true,
+      "bridge_ok": true,
+      "bridge_errors": [],
+      "hancom_status": "passed",
+      "hancom_ok": true,
+      "hancom_errors": [],
       "conversions": [
         "HWP"
       ],
-      "artifacts": [],
+      "artifacts": [
+        "D:\\GitHub\\jakal-hwpx\\examples\\output_bridge_stability_lab\\hancom\\from_hwpx_append_ole_save_hwp\\ole_modified.hwp"
+      ],
       "notes": []
     },
     {
       "name": "from_hwpx_mixed_edits_save_hwp",
-      "ok": false,
-      "bridge_ok": false,
-      "bridge_errors": [
-        "Hancom conversion failed for C:\\Users\\ahnd6\\AppData\\Local\\Temp\\jakal_hwp_hwpx_bridge_iso3h0ej\\bridge_source.hwpx -> C:\\Users\\ahnd6\\AppData\\Local\\Temp\\jakal_hwp_hwpx_bridge_iso3h0ej\\bridge_output.hwp: The remote procedure call failed. (Exception from HRESULT: 0x800706BE)\nAt D:\\GitHub\\jakal-hwpx\\scripts\\run_hancom_smoke_validation.ps1:476 char:9\n+         $openResult = $hwp.Open($resolvedInput, \"\", \"\")\n+         ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~\n    + CategoryInfo          : OperationStopped: (:) [], COMException\n    + FullyQualifiedErrorId : System.Runtime.InteropServices.COMException"
-      ],
-      "hancom_status": "failed",
-      "hancom_ok": false,
-      "hancom_errors": [
-        "Hancom conversion failed for C:\\Users\\ahnd6\\AppData\\Local\\Temp\\jakal_hwp_hwpx_bridge_iso3h0ej\\bridge_source.hwpx -> C:\\Users\\ahnd6\\AppData\\Local\\Temp\\jakal_hwp_hwpx_bridge_iso3h0ej\\bridge_output.hwp: The remote procedure call failed. (Exception from HRESULT: 0x800706BE)\nAt D:\\GitHub\\jakal-hwpx\\scripts\\run_hancom_smoke_validation.ps1:476 char:9\n+         $openResult = $hwp.Open($resolvedInput, \"\", \"\")\n+         ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~\n    + CategoryInfo          : OperationStopped: (:) [], COMException\n    + FullyQualifiedErrorId : System.Runtime.InteropServices.COMException"
-      ],
+      "ok": true,
+      "bridge_ok": true,
+      "bridge_errors": [],
+      "hancom_status": "passed",
+      "hancom_ok": true,
+      "hancom_errors": [],
       "conversions": [
         "HWP"
       ],
-      "artifacts": [],
+      "artifacts": [
+        "D:\\GitHub\\jakal-hwpx\\examples\\output_bridge_stability_lab\\hancom\\from_hwpx_mixed_edits_save_hwp\\mixed_modified.hwp"
+      ],
       "notes": []
     }
   ]

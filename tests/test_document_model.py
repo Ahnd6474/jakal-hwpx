@@ -190,6 +190,7 @@ def test_append_table_picture_and_shape_roundtrip(tmp_path: Path) -> None:
     assert reopened_table.column_count == 2
     assert reopened_table.cell(0, 0).text == "A1"
     assert reopened_table.cell(1, 1).text == "B2"
+    assert reopened_table.element.getparent().tag.endswith("run")
 
     reopened_picture = reopened.pictures()[0]
     assert reopened_picture.binary_data() == image_bytes
@@ -199,6 +200,7 @@ def test_append_table_picture_and_shape_roundtrip(tmp_path: Path) -> None:
     assert reopened_picture.layout()["vertAlign"] == "CENTER"
     assert reopened_picture.layout()["horzOffset"] == "444"
     assert reopened_picture.out_margins() == {"left": 11, "right": 22, "top": 33, "bottom": 44}
+    assert reopened_picture.element.getparent().tag.endswith("run")
 
     reopened_shape = reopened.shapes()[0]
     assert reopened_shape.kind == "rect"
@@ -210,6 +212,7 @@ def test_append_table_picture_and_shape_roundtrip(tmp_path: Path) -> None:
     assert reopened_shape.layout()["horzAlign"] == "CENTER"
     assert reopened_shape.out_margins()["left"] == 12
     assert reopened_shape.out_margins()["right"] == 24
+    assert reopened_shape.element.getparent().tag.endswith("run")
 
 
 def test_append_shape_supports_additional_kinds(tmp_path: Path) -> None:
@@ -278,6 +281,7 @@ def test_append_ole_roundtrip(tmp_path: Path) -> None:
     assert manifest_item.get("media-type") == "application/ole"
     assert manifest_item.get("isEmbeded") == "0"
     assert isinstance(reopened.shapes()[0], OleXml)
+    assert reopened_ole.element.getparent().tag.endswith("run")
 
 
 def test_low_level_authoring_roundtrip(tmp_path: Path) -> None:
@@ -597,6 +601,7 @@ def test_append_header_footer_notes_number_equation_and_styles_roundtrip(tmp_pat
     assert reopened.equations()[0].layout()["allowOverlap"] == "1"
     assert reopened.equations()[0].layout()["horzAlign"] == "RIGHT"
     assert reopened.equations()[0].out_margins()["left"] == 13
+    assert reopened.equations()[0].element.getparent().tag.endswith("run")
     assert reopened.section_settings(0).margins()["header"] == 321
     assert reopened.section_settings(0).margins()["footer"] == 654
     assert reopened.section_settings(0).visibility()["hideFirstHeader"] == "0"
