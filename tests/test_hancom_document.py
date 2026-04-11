@@ -20,14 +20,6 @@ from jakal_hwpx import (
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 HWP_SAMPLE_DIR = REPO_ROOT / "examples" / "samples" / "hwp"
-NATIVE_HWP_PATH = (
-    REPO_ROOT
-    / "examples"
-    / "output_bridge_stability_lab"
-    / "hancom"
-    / "from_hwp_save_native_hwp"
-    / "native.hwp"
-)
 
 
 @pytest.fixture(scope="session")
@@ -446,11 +438,11 @@ def test_hancom_document_pure_hwp_roundtrip_preserves_page_numbers_note_settings
     assert reopened.section_xml(0).find(".//hp:endNotePr/hp:noteLine").get_attr("color") == "#445566"
 
 
-def test_hancom_document_can_extract_native_hwp_header_and_auto_number_controls(tmp_path: Path) -> None:
-    if not NATIVE_HWP_PATH.exists():
-        pytest.skip("native.hwp sample is not available in this workspace.")
-
-    document = HancomDocument.read_hwp(NATIVE_HWP_PATH)
+def test_hancom_document_can_extract_native_hwp_header_and_auto_number_controls(
+    sample_hwp_path: Path,
+    tmp_path: Path,
+) -> None:
+    document = HancomDocument.read_hwp(sample_hwp_path)
     assert document.sections
     assert document.sections[0].header_footer_blocks
     assert any(block.kind == "header" and block.text for block in document.sections[0].header_footer_blocks)

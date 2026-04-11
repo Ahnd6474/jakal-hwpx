@@ -7,8 +7,8 @@
 - `src/jakal_hwpx`: 패키지 소스 코드
 - `tests`: 테스트 코드
 - `examples/samples/hwpx`: 고정 테스트 fixture로 쓰는 HWPX 샘플
-- `examples/output_smoke`: 소규모 smoke corpus
-- `examples/output`: showcase 생성 결과물
+- `examples/output_smoke`: smoke 스크립트가 로컬에 생성하는 결과물 디렉터리 (`.gitignore`)
+- `examples/output`: showcase 스크립트가 로컬에 생성하는 결과물 디렉터리 (`.gitignore`)
 
 ## 요구 사항
 
@@ -59,7 +59,7 @@ doc.save("build/hello.hwpx")
 
 객체 기반 실험 API인 `HwpDocument`도 포함합니다. 이 레이어는 `HwpSection`, `HwpParagraphObject`를 통해 `.hwp` 문서를 `HwpxDocument`와 비슷한 방식으로 다루도록 맞춘 래퍼입니다. 현재 `.hwp -> HancomDocument IR -> HwpxDocument`와 `HwpxDocument -> HancomDocument IR -> .hwp`를 pure Python으로 수행하므로 `tables()`, `pictures()`, `append_paragraph()`, `append_table()`, `save(...hwpx)` 같은 고수준 흐름을 Hancom 자동화 없이 사용할 수 있습니다.
 
-`build_hwp_pure_profile()`는 `hwp_collection/`에서 `table + picture + hyperlink`가 함께 있는 donor를 골라 `base.hwp + feature templates`를 추출하고, `HwpDocument.blank_from_profile()`은 그 profile만으로 `append_table_pure()`, `append_picture_pure()`, `append_hyperlink_pure()`를 수행합니다.
+`build_hwp_pure_profile()`는 로컬 corpus 디렉터리인 `hwp_collection/`에서 `table + picture + hyperlink`가 함께 있는 donor를 골라 `base.hwp + feature templates`를 추출하고, `HwpDocument.blank_from_profile()`은 그 profile만으로 `append_table_pure()`, `append_picture_pure()`, `append_hyperlink_pure()`를 수행합니다.
 기본 bundled profile도 패키지에 포함되므로, donor나 profile 경로를 따로 넘기지 않아도 `HwpDocument.blank()`와 `append_*_pure()`를 바로 사용할 수 있습니다.
 
 ```python

@@ -1,32 +1,46 @@
 all_hwpx_flat/
 .idea/
-.venv
-manifests/
-scripts/
-/manifests/
 .artifacts/
-# Local build and temp artifacts
-.tmp/
 .codex-temp/
+.tmp/
+.tmp-build/
+.tmp_build/
+.tox/
+.venv/
+GitHubjakal-hwpx.tox.pytest_cache/
+
+# Local corpora and scratch files kept outside Git
+hard_case/
+hwp_collection/
+/예시.hwpx
+/빈 문서 1.hwpx
+/기출킬러양식.hwpx
+
+# Build and packaging artifacts
 build/
 dist/
-examples/output.zip
-examples/output_stability_lab/
+*.egg-info/
+.eggs/
+htmlcov/
 vendor/
+
+# Example and lab outputs generated locally
+examples/output.zip
+examples/output/
+examples/output_smoke/
+examples/output_stability_lab/
+examples/output_hwp_stability_lab/
+examples/output_bridge_stability_lab/
+examples/promo/output/
+
+# Test and runtime temp artifacts
 pytest-cache-files-*/
 .pytest_cache/
 .pytest-temp-*/
 .pytest-temp-validation-issue/
-.tmp_build/
+
 # Python cache
 __pycache__/
 *.py[cod]
 *.pyc.*
 .coverage
-.eggs/
-.tox/
-*.egg-info/
-htmlcov/
-hard_case/
-scripts/
-hwp_collection/

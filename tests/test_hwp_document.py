@@ -31,14 +31,6 @@ from jakal_hwpx import (
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 HWP_SAMPLE_DIR = REPO_ROOT / "examples" / "samples" / "hwp"
-NATIVE_HWP_PATH = (
-    REPO_ROOT
-    / "examples"
-    / "output_bridge_stability_lab"
-    / "hancom"
-    / "from_hwp_save_native_hwp"
-    / "native.hwp"
-)
 
 
 @pytest.fixture(scope="session")
@@ -669,11 +661,8 @@ def test_hwp_document_can_append_bookmark_and_notes_and_bridge_back(tmp_path: Pa
     assert any(item.kind == "endNote" and item.text == "Pure endnote" for item in bridged.notes())
 
 
-def test_hwp_document_pure_bridge_extracts_native_header_and_auto_number_controls(tmp_path: Path) -> None:
-    if not NATIVE_HWP_PATH.exists():
-        pytest.skip("native.hwp sample is not available in this workspace.")
-
-    document = HwpDocument.open(NATIVE_HWP_PATH)
+def test_hwp_document_pure_bridge_extracts_native_header_and_auto_number_controls(sample_hwp_path: Path) -> None:
+    document = HwpDocument.open(sample_hwp_path)
     bridged = document.to_hwpx_document()
 
     assert bridged.headers()

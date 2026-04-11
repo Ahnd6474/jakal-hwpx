@@ -1,410 +1,741 @@
-# `jakal_hwpx` 모듈 설명
+# `jakal_hwpx` Module Guide
 
-이 문서는 `src/jakal_hwpx/` 아래의 Python 패키지를 설명합니다.
+`jakal_hwpx`의 가장 안정적인 공용 편집 모델은 `HancomDocument`입니다.
 
-## 시작점
+이 객체는 `.hwpx`와 `.hwp` 사이에 놓이는 공통 IR이며, 문서 구조를 Python dataclass 중심으로 다룰 수 있게 해 줍니다.  
+실무 기준으로는 다음 흐름을 권장합니다.
 
-### `HwpxDocument`
+- `.hwpx`를 읽어서 수정: `HancomDocument.read_hwpx()`
+- `.hwp`를 읽어서 수정: `HancomDocument.read_hwp()`
+- 새 문서 조립: `HancomDocument.blank()`
+- 결과 저장:
+  - `.hwpx`로 저장: `write_to_hwpx()`
+  - `.hwp`로 저장: `write_to_hwp()`
 
-`HwpxDocument`는 이 패키지의 기본 진입점입니다.
+즉, `HwpxDocument`와 `HwpDocument`는 중요하지만, 앱 코드의 중심 편집 객체는 `HancomDocument`로 두는 편이 가장 단순합니다.
 
-다음 작업을 맡습니다.
+## 권장 진입점
 
-- 기존 `.hwpx` 열기
-- 빈 문서 만들기
-- 문서 메타데이터 읽기와 수정
-- 문단 텍스트 수정
-- 문단 추가
-- 패키지 파트 추가와 교체
-- 구조 및 참조 검증
-- 저장과 round-trip 확인
-
-예제:
+### 새 문서 만들기
 
 ```python
-from jakal_hwpx import HwpxDocument
+from jakal_hwpx import HancomDocument
 
-doc = HwpxDocument.open("example.hwpx")
-doc.replace_text("before", "after")
-doc.save("example-edited.hwpx")
+doc = HancomDocument.blank()
+doc.metadata.title = "API Sample"
+doc.append_paragraph("Hello HancomDocument")
+doc.write_to_hwpx("build/sample.hwpx")
 ```
 
-### `HwpxDocument` API 요약
+### `.hwpx` 읽어서 수정하기
 
-| 메서드 | 반환값 | 용도 |
-| --- | --- | --- |
-| `open(path)` | `HwpxDocument` | 기존 HWPX 패키지 열기 |
-| `blank()` | `HwpxDocument` | 기본 파트가 들어 있는 새 문서 만들기 |
-| `metadata()` | `DocumentMetadata` | 제목, 작성자, 주제, 키워드 같은 메타데이터 읽기 |
-| `set_metadata(**values)` | `None` | 메타데이터 수정 |
-| `get_document_text()` | `str` | 섹션 전체 본문 텍스트 추출. 검색/미리보기용이며 문단 인덱스 매핑용이 아님 |
-| `set_paragraph_text(section_index, paragraph_index, text)` | 문단 래퍼 | 특정 문단 텍스트 교체 |
-| `append_paragraph(text, section_index=0)` | 문단 래퍼 | 섹션 끝에 문단 추가 |
-| `replace_text(old, new, count=-1)` | `int` | 문서 전체에서 문자열 치환 |
-| `add_section(text=...)` | `SectionPart` | 새 섹션 추가 |
-| `section_settings(index)` | `SectionSettings` | 페이지 크기와 여백 설정 접근 |
-| `tables()`, `pictures()`, `notes()`, `bookmarks()`, `fields()` | 래퍼 리스트 | 표, 그림, 주석, 북마크, 필드 순회 |
-| `styles()`, `paragraph_styles()`, `character_styles()` | 래퍼 리스트 | 스타일 정의 조회 및 수정 |
-| `apply_style_to_paragraph(...)` | `None` | 한 문단에 스타일 적용 |
-| `apply_style_batch(...)` | `int` | 조건에 맞는 여러 문단에 스타일 적용 |
-| `append_bookmark(...)`, `append_hyperlink(...)`, `append_mail_merge_field(...)`, `append_calculation_field(...)`, `append_cross_reference(...)` | 래퍼 객체 | 북마크와 필드 계열 요소 생성 |
-| `add_or_replace_binary(...)` | `BinaryDataPart` | 패키지 내부 바이너리 추가 또는 교체 |
-| `compile(validate=True)` | `bytes` | 메모리에서 패키지 직렬화 |
-| `save(path, validate=True)` | `Path` | 디스크에 저장. 기본 검증에 제어문 보존 검사 포함 |
-| `validation_errors()` | `list[ValidationIssue]` | 패키지 구조 검증 |
-| `xml_validation_errors()` | `list[ValidationIssue]` | XML 루트 및 구조 점검 |
-| `reference_validation_errors()` | `list[ValidationIssue]` | 스타일, 필드, 북마크, manifest 참조 점검 |
-| `save_reopen_validation_errors()` | `list[ValidationIssue]` | 저장 후 재오픈 기준의 실용적 검증 |
+```python
+from jakal_hwpx import HancomDocument
 
-## 모듈 개요
+doc = HancomDocument.read_hwpx("input.hwpx")
+doc.append_paragraph("added from IR", section_index=0)
+doc.write_to_hwpx("build/edited.hwpx")
+```
 
-이 패키지는 크기가 아주 크지 않아서, 대부분의 작업은 `document.py`에서 시작한 뒤 필요할 때 `elements.py`의 래퍼 타입으로 내려가면 됩니다.
+### `.hwp` 읽어서 수정하기
 
-| 모듈 | 역할 | 언제 쓰는가 |
-| --- | --- | --- |
-| `document.py` | 고수준 문서 컨테이너와 편집 API | 거의 모든 작업의 시작점 |
-| `elements.py` | 표, 그림, 주석, 필드, 도형, 스타일 같은 요소 래퍼 | 특정 요소를 더 세밀하게 수정할 때 |
-| `parts.py` | XML, 텍스트, 바이너리, preview, manifest 파트 모델 | 패키지 내부 파트에 직접 접근할 때 |
-| `xmlnode.py` | XML 편의를 위한 작은 래퍼 | 확장 작업이나 내부 동작 이해가 필요할 때 |
-| `namespaces.py` | namespace 맵, QName helper, section 매칭 상수 | XPath나 XML 조작을 직접 쓸 때 |
-| `exceptions.py` | 패키지 전용 예외 타입 | 잘못된 HWPX 입력을 다룰 때 |
+```python
+from jakal_hwpx import HancomDocument
 
-## 패키지 구성
+doc = HancomDocument.read_hwp("input.hwp")
+doc.append_paragraph("added from IR", section_index=0)
+doc.write_to_hwp("build/edited.hwp")
+doc.write_to_hwpx("build/edited.hwpx")
+```
 
-### `document.py`
+## 왜 `HancomDocument` 중심인가
 
-문서 컨테이너와 편집 흐름을 담당하는 핵심 모듈입니다.
+`HancomDocument`는 다음 장점이 있습니다.
 
-주요 책임:
+- 입력 포맷이 `.hwpx`인지 `.hwp`인지 감출 수 있습니다.
+- 문서를 XML 노드나 binary record 대신 Python 객체로 다룰 수 있습니다.
+- section, block, style, metadata를 한 곳에서 조립할 수 있습니다.
+- 같은 IR에서 `.hwpx`와 `.hwp`를 모두 생성할 수 있습니다.
+- pure Python bridge가 기본이므로 Hancom 자동화에 의존하지 않는 경로를 기본으로 가져갈 수 있습니다.
 
-- HWPX zip 패키지 열기, 생성, 컴파일, 저장
-- 고수준 편집 API 제공
-- 내부 파트 보존과 갱신
-- 구조 검증 수행
+## 핵심 객체 모델
 
-자주 쓰는 진입점:
+### `HancomDocument`
 
-- `HwpxDocument.open()` / `HwpxDocument.blank()`
-- `set_metadata()`, `metadata()`, `get_document_text()`
-- `set_paragraph_text()`, `append_paragraph()`, `replace_text()`
-- `section_settings()`, `tables()`, `pictures()`, `notes()`, `fields()`
-- `validation_errors()`, `reference_validation_errors()`, `save_reopen_validation_errors()`
-- `compile()` / `save()`
+문서 전체를 나타냅니다.
 
-### `elements.py`
+주요 필드:
 
-문서 안의 고급 요소를 다루는 래퍼가 들어 있습니다.
+- `metadata: HancomMetadata`
+- `sections: list[HancomSection]`
+- `style_definitions: list[StyleDefinition]`
+- `paragraph_styles: list[ParagraphStyle]`
+- `character_styles: list[CharacterStyle]`
+- `source_format: str | None`
+
+주요 생성 API:
+
+- `HancomDocument.blank(*, converter=None) -> HancomDocument`
+- `HancomDocument.read_hwpx(path, *, converter=None) -> HancomDocument`
+- `HancomDocument.read_hwp(path, *, converter=None) -> HancomDocument`
+- `HancomDocument.from_hwpx_document(document, *, converter=None) -> HancomDocument`
+- `HancomDocument.from_hwp_document(document, *, converter=None) -> HancomDocument`
+
+주요 변환/저장 API:
+
+- `to_hwpx_document() -> HwpxDocument`
+- `write_to_hwpx(path, *, validate=True) -> Path`
+- `to_hwp_document(*, converter=None) -> HwpDocument`
+- `write_to_hwp(path, *, converter=None) -> Path`
+
+주요 append API:
+
+- `append_section() -> HancomSection`
+- `append_paragraph(text, *, section_index=0) -> Paragraph`
+- `append_table(..., section_index=0) -> Table`
+- `append_picture(name, data, ..., section_index=0) -> Picture`
+- `append_hyperlink(target, ..., section_index=0) -> Hyperlink`
+- `append_bookmark(name, *, section_index=0) -> Bookmark`
+- `append_field(..., section_index=0) -> Field`
+- `append_auto_number(..., section_index=0) -> AutoNumber`
+- `append_note(..., section_index=0) -> Note`
+- `append_footnote(..., section_index=0) -> Note`
+- `append_endnote(..., section_index=0) -> Note`
+- `append_equation(..., section_index=0) -> Equation`
+- `append_shape(..., section_index=0) -> Shape`
+- `append_ole(name, data, ..., section_index=0) -> Ole`
+- `append_header(text, ..., section_index=0) -> HeaderFooter`
+- `append_footer(text, ..., section_index=0) -> HeaderFooter`
+- `append_style(...) -> StyleDefinition`
+- `append_paragraph_style(...) -> ParagraphStyle`
+- `append_character_style(...) -> CharacterStyle`
+
+## IR dataclass 구조
+
+### `HancomMetadata`
+
+문서 메타데이터를 담습니다.
+
+주요 필드:
+
+- `title`
+- `language`
+- `creator`
+- `subject`
+- `description`
+- `lastsaveby`
+- `created`
+- `modified`
+- `date`
+- `keyword`
+- `extra`
 
 예:
 
-- 문단 스타일과 글자 스타일
-- 표와 셀
-- 그림
-- 각주와 미주
-- 수식
-- 북마크와 필드
-- 머리말과 꼬리말
+```python
+from jakal_hwpx import HancomDocument
 
-주로 보게 되는 메서드:
+doc = HancomDocument.blank()
+doc.metadata.title = "2026 Report"
+doc.metadata.creator = "jakal-hwpx"
+doc.metadata.subject = "Pure Python bridge"
+doc.metadata.keyword = "hwp,hwpx,bridge"
+```
 
-- `Table.set_cell_text()` / `Table.append_row()`
-- `HeaderFooterBlock.set_text()`
-- `Field.set_display_text()` / `Field.set_hyperlink_target()`
-- `SectionSettings.set_page_size()` / `SectionSettings.set_margins()`
-- `CharacterStyle.set_text_color()` / `ParagraphStyle.set_alignment()`
+### `HancomSection`
 
-Safety boundaries:
+section 단위 컨테이너입니다.
 
-- `Table.append_row()` fails fast if the template row contains preserved controls such as bookmarks, fields, or numbering controls.
-- `append_paragraph(..., template_index=...)` fails fast if the selected template paragraph contains preserved controls.
+주요 필드:
 
-### 자주 보이는 래퍼 타입
+- `settings: SectionSettings`
+- `header_footer_blocks: list[HeaderFooter]`
+- `blocks: list[HancomBlock]`
 
-| 타입 | 주요 속성/메서드 | 설명 |
-| --- | --- | --- |
-| `HeaderFooterBlock` | `text`, `set_text()`, `replace_text()` | `headers()`와 `footers()`가 반환 |
-| `Table` | `row_count`, `column_count`, `cells()`, `cell()`, `set_cell_text()`, `append_row()`, `merge_cells()` | 표 편집의 시작점 |
-| `TableCell` | `row`, `column`, `text`, `row_span`, `col_span`, `set_text()` | 표 셀 래퍼 |
-| `Picture` | `binary_item_id`, `shape_comment`, `binary_data()`, `replace_binary()` | 포함된 이미지 데이터 조회 및 교체 |
-| `SectionSettings` | `page_width`, `page_height`, `landscape`, `margins()`, `set_page_size()`, `set_margins()` | 섹션별 페이지 레이아웃 |
-| `StyleDefinition` | `style_id`, `name`, `set_name()`, `bind_refs()` | 상위 스타일 객체 |
-| `ParagraphStyle` | `alignment_horizontal`, `line_spacing`, `set_alignment()`, `set_line_spacing()` | 문단 레벨 서식 |
-| `CharacterStyle` | `text_color`, `height`, `set_text_color()`, `set_height()` | 문자 레벨 서식 |
-| `Note` | `kind`, `number`, `text`, `set_text()` | 각주와 미주 래퍼 |
-| `Bookmark` | `name`, `rename()` | 북마크 수정 |
-| `Field` | `field_type`, `field_id`, `parameter_map()`, `set_parameter()`, `set_display_text()` | 하이퍼링크, 메일 머지, 계산식, 상호 참조를 포함 |
-| `Equation` | `script`, `shape_comment` | 수식 스크립트 접근 |
-| `ShapeObject` | `kind`, `shape_comment`, `text`, `set_text()` | 텍스트가 있는 도형 수정 |
+`blocks` 안에는 문단, 표, 그림, 링크, 주석 같은 본문 block이 순서대로 들어갑니다.
 
-### `parts.py`
+### `HancomBlock`
 
-패키지 내부 파트를 다루는 저수준 모델이 들어 있습니다.
+본문에 들어갈 수 있는 block union입니다.
 
-주요 책임:
+지원 타입:
 
-- `header.xml`, `section*.xml`, `content.hpf` 같은 파트 표현
-- XML, 텍스트, 바이너리, preview 파트 구분
-- `content.hpf` 메타데이터 helper 제공
-
-### `xmlnode.py`
-
-다른 모듈에서 공통으로 쓰는 작은 XML 래퍼입니다.
-
-### `namespaces.py`
-
-namespace 상수, QName helper, section 경로 매칭 로직이 들어 있습니다.
-
-### `exceptions.py`
-
-잘못된 패키지나 검증 실패를 위한 커스텀 예외 타입입니다.
-
-## 검증 계층
-
-패키지는 서로 다른 성격의 검증 함수를 제공합니다.
-
-- `validation_errors()`
-- `xml_validation_errors()`
-- `reference_validation_errors()`
-- `control_preservation_validation_errors()`
-- `save_reopen_validation_errors()`
-- `roundtrip_validate()`
-
-실무적으로는 이렇게 보면 됩니다.
-
-- `validation_errors()`는 패키지 구조 문제를 잡습니다.
-- `xml_validation_errors()`는 XML 루트와 기본 구조 문제를 잡습니다.
-- `reference_validation_errors()`는 스타일, 필드, 북마크, manifest 참조 문제를 잡습니다.
-- `control_preservation_validation_errors()`는 텍스트 편집 과정에서 보존되어야 할 `hp:ctrl`, `hp:secPr` 계열 구조가 사라졌는지 추적합니다.
-- `save_reopen_validation_errors()`는 저장 후 다시 열리는지 확인하는 현실적인 smoke check입니다.
-
-## Stability Lab
-
-`scripts/run_stability_lab.py` builds a synthetic matrix of generic paragraph/container combinations, runs baseline round-trip saves, applies edit APIs, and verifies control signatures after `save(validate=True)`.
-
-Current matrix coverage:
-
-- top-level section paragraphs
-- headers and footers
-- table cells
-- shape drawText containers
-- footnotes and endnotes
-- mixtures of plain text, bookmarks, field begin/end pairs, and numbering controls
-
-## 공개 타입
-
-`jakal_hwpx` 루트에서 다시 export하는 타입은 아래와 같습니다.
-
-- `HwpxDocument`
-- `DocumentMetadata`
-- `HwpxPart`
-- `XmlPart`
-- `SectionPart`
-- `HeaderPart`
-- `ContentHpfPart`
-- `SettingsPart`
-- `VersionPart`
-- `MimetypePart`
-- `ContainerPart`
-- `ContainerRdfPart`
-- `ManifestPart`
-- `BinaryDataPart`
-- `GenericBinaryPart`
-- `GenericTextPart`
-- `GenericXmlPart`
-- `PreviewImagePart`
-- `PreviewTextPart`
-- `ScriptPart`
-- `Picture`
+- `Paragraph`
 - `Table`
-- `TableCell`
-- `Note`
-- `Equation`
+- `Picture`
+- `Hyperlink`
 - `Bookmark`
 - `Field`
 - `AutoNumber`
-- `HeaderFooterBlock`
-- `SectionSettings`
+- `Note`
+- `Equation`
+- `Shape`
+- `Ole`
+
+## block 타입 상세
+
+### `Paragraph`
+
+주요 필드:
+
+- `text: str`
+
+```python
+paragraph = doc.append_paragraph("body text")
+paragraph.text = "updated body text"
+```
+
+### `Table`
+
+주요 필드:
+
+- `rows`
+- `cols`
+- `cell_texts`
+- `row_heights`
+- `col_widths`
+- `cell_spans`
+- `cell_border_fill_ids`
+- `table_border_fill_id`
+
+```python
+table = doc.append_table(
+    rows=2,
+    cols=3,
+    cell_texts=[
+        ["A1", "B1", "C1"],
+        ["A2", "B2", "C2"],
+    ],
+    col_widths=[3000, 3000, 3000],
+)
+table.cell_texts[1][1] = "UPDATED"
+```
+
+### `Picture`
+
+주요 필드:
+
+- `name`
+- `data`
+- `extension`
+- `width`
+- `height`
+
+```python
+from pathlib import Path
+
+pic = doc.append_picture(
+    "chart.png",
+    Path("assets/chart.png").read_bytes(),
+    extension="png",
+    width=9000,
+    height=6000,
+)
+```
+
+### `Hyperlink`
+
+주요 필드:
+
+- `target`
+- `display_text`
+
+```python
+link = doc.append_hyperlink("https://example.com", display_text="Example")
+link.target = "https://openai.com"
+link.display_text = "OpenAI"
+```
+
+### `Bookmark`
+
+주요 필드:
+
+- `name`
+
+```python
+bookmark = doc.append_bookmark("summary_anchor")
+bookmark.name = "summary_anchor_v2"
+```
+
+### `Field`
+
+주요 필드:
+
+- `field_type`
+- `display_text`
+- `name`
+- `parameters`
+- `editable`
+- `dirty`
+
+```python
+field = doc.append_field(
+    field_type="FORMULA",
+    display_text="42",
+    parameters={"Expression": "40+2", "Command": "40+2"},
+)
+field.parameters["Expression"] = "50+8"
+field.display_text = "58"
+```
+
+### `AutoNumber`
+
+주요 필드:
+
+- `kind`
+- `number`
+- `number_type`
+
+```python
+doc.append_auto_number(number=1, number_type="PAGE", kind="newNum")
+```
+
+### `Note`
+
+주요 필드:
+
+- `kind`
+- `text`
+- `number`
+
+```python
+footnote = doc.append_footnote("footnote text", number=1)
+endnote = doc.append_endnote("endnote text", number=1)
+footnote.text = "updated footnote"
+```
+
+### `Equation`
+
+주요 필드:
+
+- `script`
+- `width`
+- `height`
+
+```python
+eq = doc.append_equation("x^2+y^2=z^2", width=5200, height=2400)
+eq.script = "\\frac{1}{2}"
+```
+
+### `Shape`
+
+주요 필드:
+
+- `kind`
+- `text`
+- `width`
+- `height`
+- `fill_color`
+- `line_color`
+
+```python
+shape = doc.append_shape(
+    kind="rect",
+    text="Box label",
+    width=12000,
+    height=3200,
+    fill_color="#F5F5F5",
+    line_color="#222222",
+)
+```
+
+### `Ole`
+
+주요 필드:
+
+- `name`
+- `data`
+- `width`
+- `height`
+
+```python
+from pathlib import Path
+
+ole = doc.append_ole(
+    "embedded.bin",
+    Path("assets/object.bin").read_bytes(),
+    width=42001,
+    height=13501,
+)
+```
+
+### `HeaderFooter`
+
+주요 필드:
+
+- `kind`
+- `text`
+- `apply_page_type`
+
+```python
+header = doc.append_header("Document Header", apply_page_type="BOTH")
+footer = doc.append_footer("Page Footer", apply_page_type="BOTH")
+header.text = "Updated Header"
+```
+
+## style 타입 상세
+
+### `StyleDefinition`
+
+주요 필드:
+
+- `name`
+- `style_id`
+- `english_name`
+- `style_type`
+- `para_pr_id`
+- `char_pr_id`
+- `next_style_id`
+- `lang_id`
+- `lock_form`
+
+### `ParagraphStyle`
+
+주요 필드:
+
+- `style_id`
+- `alignment_horizontal`
+- `alignment_vertical`
+- `line_spacing`
+
+### `CharacterStyle`
+
+주요 필드:
+
+- `style_id`
+- `text_color`
+- `height`
+
+예:
+
+```python
+style = doc.append_style(
+    "Body Center",
+    style_id="100",
+    para_pr_id="100",
+    char_pr_id="100",
+)
+para_style = doc.append_paragraph_style(
+    style_id="100",
+    alignment_horizontal="CENTER",
+    line_spacing=160,
+)
+char_style = doc.append_character_style(
+    style_id="100",
+    text_color="#112233",
+    height=1100,
+)
+```
+
+## `SectionSettings` 상세
+
+`HancomSection.settings`에 들어가는 객체입니다.
+
+주요 필드:
+
+- `page_width`
+- `page_height`
+- `landscape`
+- `margins`
+- `page_border_fills`
+- `visibility`
+- `grid`
+- `start_numbers`
+- `page_numbers`
+- `footnote_pr`
+- `endnote_pr`
+- `line_number_shape`
+
+설정 예:
+
+```python
+from jakal_hwpx import HancomDocument
+
+doc = HancomDocument.blank()
+section = doc.sections[0]
+
+section.settings.page_width = 60000
+section.settings.page_height = 85000
+section.settings.landscape = "NARROWLY"
+section.settings.margins = {
+    "left": 7000,
+    "right": 7000,
+    "top": 5000,
+    "bottom": 5000,
+    "header": 3000,
+    "footer": 3000,
+    "gutter": 0,
+}
+section.settings.visibility = {
+    "hideFirstHeader": "0",
+    "hideFirstFooter": "0",
+    "border": "SHOW_ALL",
+    "fill": "SHOW_ALL",
+    "showLineNumber": "1",
+}
+section.settings.grid = {
+    "lineGrid": 0,
+    "charGrid": 0,
+    "wonggojiFormat": 0,
+}
+section.settings.start_numbers = {
+    "pageStartsOn": "BOTH",
+    "page": "1",
+    "pic": "1",
+    "tbl": "1",
+    "equation": "1",
+}
+section.settings.page_numbers = [
+    {
+        "pos": "BOTTOM_CENTER",
+        "formatType": "DIGIT",
+        "sideChar": "NONE",
+    }
+]
+section.settings.footnote_pr = {
+    "numberShape": "DIGIT",
+    "placement": "EACH_COLUMN",
+}
+section.settings.endnote_pr = {
+    "numberShape": "DIGIT",
+    "placement": "END_OF_DOCUMENT",
+}
+```
+
+## 대표 사용 패턴
+
+### 1. `.hwpx`를 읽어서 IR 기준으로 수정 후 다시 `.hwpx` 저장
+
+```python
+from jakal_hwpx import HancomDocument
+
+doc = HancomDocument.read_hwpx("input.hwpx")
+
+doc.metadata.title = "Updated Title"
+doc.append_paragraph("added paragraph", section_index=0)
+doc.append_hyperlink("https://example.com/final", display_text="Final Link", section_index=0)
+doc.write_to_hwpx("build/output.hwpx")
+```
+
+### 2. `.hwp`를 읽어서 `.hwpx`와 `.hwp` 둘 다 내보내기
+
+```python
+from jakal_hwpx import HancomDocument
+
+doc = HancomDocument.read_hwp("input.hwp")
+doc.append_paragraph("bridge-added", section_index=0)
+doc.append_bookmark("appendix_anchor", section_index=0)
+doc.write_to_hwp("build/output.hwp")
+doc.write_to_hwpx("build/output.hwpx")
+```
+
+### 3. 새 문서를 section 중심으로 조립
+
+```python
+from pathlib import Path
+from jakal_hwpx import HancomDocument
+
+doc = HancomDocument.blank()
+doc.metadata.title = "Generated Document"
+
+section = doc.sections[0]
+section.settings.page_width = 60000
+section.settings.page_height = 85000
+
+doc.append_header("Generated Header", section_index=0)
+doc.append_footer("Generated Footer", section_index=0)
+doc.append_paragraph("First paragraph", section_index=0)
+doc.append_table(
+    rows=2,
+    cols=2,
+    cell_texts=[["A1", "B1"], ["A2", "B2"]],
+    section_index=0,
+)
+doc.append_picture(
+    "logo.png",
+    Path("assets/logo.png").read_bytes(),
+    extension="png",
+    section_index=0,
+)
+doc.append_footnote("footnote from IR", number=1, section_index=0)
+
+doc.write_to_hwpx("build/generated.hwpx")
+doc.write_to_hwp("build/generated.hwp")
+```
+
+### 4. style과 본문을 함께 조립
+
+```python
+from jakal_hwpx import HancomDocument
+
+doc = HancomDocument.blank()
+
+doc.append_style(
+    "Body Center",
+    style_id="100",
+    para_pr_id="100",
+    char_pr_id="100",
+)
+doc.append_paragraph_style(
+    style_id="100",
+    alignment_horizontal="CENTER",
+    line_spacing=160,
+)
+doc.append_character_style(
+    style_id="100",
+    text_color="#112233",
+    height=1100,
+)
+
+doc.append_paragraph("Styled paragraph")
+doc.write_to_hwpx("build/styled.hwpx")
+```
+
+## `HancomDocument`와 다른 객체의 관계
+
+### `HwpxDocument`
+
+`HwpxDocument`는 HWPX package를 직접 다루는 XML 중심 고수준 API입니다.
+
+언제 쓰면 좋은가:
+
+- 특정 XML wrapper 메서드를 직접 써야 할 때
+- package part, manifest, preview text까지 직접 만져야 할 때
+- 문단/표/그림 수정 후 즉시 validation API를 세밀하게 돌리고 싶을 때
+
+`HancomDocument`와의 연결:
+
+- `HancomDocument.from_hwpx_document(hwpx_doc)`
+- `HancomDocument.to_hwpx_document()`
+
+### `HwpDocument`
+
+`HwpDocument`는 native HWP binary를 직접 다루는 high-level API입니다.
+
+언제 쓰면 좋은가:
+
+- HWP binary stream capacity나 preview text를 직접 봐야 할 때
+- same-length text replacement 같은 native HWP 편집이 필요할 때
+- HWP low-level behavior를 디버깅할 때
+
+`HancomDocument`와의 연결:
+
+- `HancomDocument.from_hwp_document(hwp_doc)`
+- `HancomDocument.to_hwp_document()`
+
+### `HwpBinaryDocument`
+
+가장 저수준의 HWP binary reader/writer입니다.
+
+앱 코드의 기본 편집 진입점으로는 권장하지 않습니다.  
+inspection, reverse engineering, binary-level debugging 용도로 보는 편이 맞습니다.
+
+## 검증과 저장 전략
+
+`HancomDocument.write_to_hwpx()`는 내부적으로 `HwpxDocument.save(validate=True)`를 사용할 수 있으므로, 기본 `.hwpx` 저장에서는 validation을 같이 거는 편이 안전합니다.
+
+예:
+
+```python
+from jakal_hwpx import HancomDocument
+
+doc = HancomDocument.read_hwpx("input.hwpx")
+doc.append_paragraph("validated append")
+doc.write_to_hwpx("build/validated.hwpx", validate=True)
+```
+
+`.hwp` 쪽은 현재 기본 저장 경로가 pure Python writer이며, 필요하면 별도 smoke validation 스크립트로 Hancom 비교 검증을 돌릴 수 있습니다.
+
+## 공개 top-level export
+
+`jakal_hwpx` 루트 import에서 `HancomDocument` 중심으로 바로 쓸 수 있는 대표 타입은 다음입니다.
+
+IR 중심:
+
+- `HancomDocument`
+- `HancomMetadata`
+- `HancomSection`
+- `Paragraph`
+- `Table`
+- `Picture`
+- `Hyperlink`
+- `Bookmark`
+- `Field`
+- `AutoNumber`
+- `Note`
+- `Equation`
+- `Shape`
+- `Ole`
+- `HeaderFooter`
 - `StyleDefinition`
 - `ParagraphStyle`
 - `CharacterStyle`
-- `ShapeObject`
+- `SectionSettings`
+
+HWPX side:
+
+- `HwpxDocument`
+- `DocumentMetadata`
+- `HeaderFooterXml`
+- `TableXml`
+- `TableCellXml`
+- `PictureXml`
+- `NoteXml`
+- `BookmarkXml`
+- `FieldXml`
+- `AutoNumberXml`
+- `EquationXml`
+- `ShapeXml`
+- `OleXml`
+- `SectionSettingsXml`
+- `StyleDefinitionXml`
+- `ParagraphStyleXml`
+- `CharacterStyleXml`
+
+HWP side:
+
+- `HwpDocument`
+- `HwpBinaryDocument`
+- `HwpBinaryFileHeader`
+- `HwpDocumentProperties`
+- `DocInfoModel`
+- `HwpRecord`
+- `RecordNode`
+- `SectionModel`
+- `SectionParagraphModel`
+
+예외와 검증:
+
+- `ValidationIssue`
 - `HwpxError`
 - `HwpxValidationError`
 - `InvalidHwpxFileError`
+- `InvalidHwpFileError`
+- `HancomInteropError`
+- `HwpBinaryEditError`
 
-### 예외 타입
+## 테스트와 검증 도구
 
-| 타입 | 언제 보게 되는가 |
-| --- | --- |
-| `InvalidHwpxFileError` | 입력 파일이 zip 기반 HWPX가 아닐 때 |
-| `HwpxValidationError` | 열기, 컴파일, 저장 중 검증에 실패했을 때 |
-| `HwpxError` | 패키지 전용 오류의 상위 타입 |
+로컬 검증:
 
-## round-trip과 편집 모델
-
-### 안전한 편집 모델
-
-이 패키지는 가능한 한 원래 패키지 구조를 보존하는 방향으로 설계되어 있습니다.
-
-- 기존 파트를 메모리에 그대로 올립니다.
-- 알 수 없는 파트도 타입 추론을 통해 보존합니다.
-- 가능하면 zip entry 메타데이터도 유지합니다.
-- 저장 후 다시 열어서 검증할 수 있습니다.
-
-### 배포 보호(distribution protected) 문서
-
-`content.hpf`가 배포 보호 상태를 나타내면 편집 가능한 section XML이 없을 수 있습니다.
-
-이 경우:
-
-- 문서는 열 수 있습니다.
-- 구조 검증은 동작합니다.
-- 고수준 편집 API는 사용할 수 없을 수 있습니다.
-
-### 왜 element wrapper를 쓰는가
-
-HWPX 편집은 보통 여러 층을 함께 만집니다.
-
-- 문서 메타데이터
-- 패키지 manifest
-- section XML
-- 스타일 테이블
-- 포함된 바이너리
-
-`elements.py`의 래퍼는 이런 세부 XML 처리와 XPath 반복을 호출부 밖으로 밀어내고, 문서 도메인에 맞는 API를 제공합니다.
-
-## 자주 쓰는 패턴
-
-### 문서 열기와 검증
-
-```python
-from jakal_hwpx import HwpxDocument
-
-doc = HwpxDocument.open("example.hwpx")
-
-print(doc.metadata())
-print(doc.validation_errors())
-print(doc.reference_validation_errors())
+```bash
+python -m pip install -e .[dev]
+python -m pytest -q
+python scripts/run_stability_lab.py
 ```
 
-### 텍스트 수정과 저장
+선택적 Hancom smoke validation:
 
-```python
-from jakal_hwpx import HwpxDocument
-
-doc = HwpxDocument.open("example.hwpx")
-doc.replace_text("draft", "final")
-doc.save("example-final.hwpx")
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts/setup_hancom_security_module.ps1 -DownloadIfMissing
+powershell -ExecutionPolicy Bypass -File scripts/run_hancom_smoke_validation.ps1 -InputPath input.hwpx -OutputPath build\hancom-roundtrip.hwpx
 ```
 
-### 빈 문서 생성
+현재 권장 운영 모델은 다음과 같습니다.
 
-```python
-from jakal_hwpx import HwpxDocument
-
-doc = HwpxDocument.blank()
-doc.set_metadata(title="Generated")
-doc.set_paragraph_text(0, 0, "Hello")
-doc.save("build/blank.hwpx")
-```
-
-### 페이지 설정과 스타일 수정
-
-```python
-from jakal_hwpx import HwpxDocument
-
-doc = HwpxDocument.open("example.hwpx")
-
-settings = doc.section_settings(0)
-settings.set_page_size(width=60000, height=85000)
-settings.set_margins(left=7000, right=7000)
-
-style = doc.styles()[0]
-para_style = doc.paragraph_styles()[0]
-char_style = doc.character_styles()[0]
-
-style.set_name("Body Center")
-para_style.set_alignment(horizontal="CENTER")
-char_style.set_text_color("#112233")
-
-doc.apply_style_to_paragraph(
-    0,
-    0,
-    style_id=style.style_id,
-    para_pr_id=para_style.style_id,
-    char_pr_id=char_style.style_id,
-)
-doc.save("build/styled.hwpx")
-```
-
-### 표와 머리말/꼬리말 수정
-
-```python
-from jakal_hwpx import HwpxDocument
-
-doc = HwpxDocument.open("example.hwpx")
-
-if doc.headers():
-    doc.headers()[0].set_text("Edited header")
-if doc.footers():
-    doc.footers()[0].set_text("Edited footer")
-
-table = doc.tables()[0]
-table.set_cell_text(0, 0, "Updated value")
-table.append_row()[0].set_text("Appended row")
-
-doc.save("build/structured-edit.hwpx")
-```
-
-### 북마크와 동적 필드 생성
-
-```python
-from jakal_hwpx import HwpxDocument
-
-doc = HwpxDocument.blank()
-
-bookmark = doc.append_bookmark("summary_anchor")
-doc.append_hyperlink("https://example.com", display_text="Open Example")
-doc.append_mail_merge_field("customer_name", display_text="CUSTOMER_NAME")
-doc.append_calculation_field("40+2", display_text="42")
-doc.append_cross_reference(bookmark.name or "summary_anchor", display_text="Go to summary")
-
-assert doc.reference_validation_errors() == []
-doc.save("build/fields.hwpx")
-```
-
-### 바이너리 추가
-
-```python
-from jakal_hwpx import HwpxDocument
-
-doc = HwpxDocument.blank()
-doc.add_or_replace_binary(
-    "assets/custom.bin",
-    b"abc123",
-    media_type="application/octet-stream",
-    manifest_id="custom_asset",
-)
-
-assert doc.validation_errors() == []
-doc.save("build/with-binary.hwpx")
-```
-
-## 어떤 수준의 API를 쓸지 고르기
-
-가능하면 가장 높은 수준의 API부터 쓰는 편이 낫습니다.
-
-- 문서를 열고, 수정하고, 검증하고, 저장하는 작업은 `HwpxDocument`에서 시작하세요.
-- 표, 필드, 주석, 그림, 스타일 같은 특정 요소를 더 세밀하게 수정해야 하면 `elements.py` 래퍼를 쓰세요.
-- preview 파트, raw binary, custom package inspection처럼 패키지 내부 구조에 직접 접근해야 할 때만 `parts.py`로 내려가면 됩니다.
-
-## 저장소 내 관련 자산
-
-이 문서는 Python 패키지 자체를 다룹니다. 저장소에는 이 외에도 아래 항목이 있습니다.
-
-- `examples/samples/`
-- `examples/output_smoke/`
-- `examples/output/`
-- `examples/output/`
-
-`examples/` 아래의 샘플과 생성 산출물은 테스트 및 참조 자산이며 importable Python 패키지의 일부는 아닙니다.
+- 편집 중심 객체: `HancomDocument`
+- HWPX package 조작: `HwpxDocument`
+- native HWP 조작: `HwpDocument`
+- binary inspection: `HwpBinaryDocument`
+- 기본 변환/저장 경로: pure Python
+- Hancom 경로: 선택 검증용
