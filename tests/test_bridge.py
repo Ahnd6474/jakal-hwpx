@@ -47,8 +47,7 @@ def test_explicit_bridge_can_open_hwp_and_save_both_formats(
 
     assert output_hwpx.exists()
     assert output_hwp.exists()
-    assert "HWPX" in conversions
-    assert "HWP" not in conversions
+    assert conversions == []
 
 
 def test_explicit_bridge_can_open_hwpx_and_convert_back_to_hwp(
@@ -77,7 +76,7 @@ def test_explicit_bridge_can_open_hwpx_and_convert_back_to_hwp(
     bridge.save_hwp(output_hwp)
 
     assert output_hwp.exists()
-    assert "HWP" in conversions
+    assert conversions == []
 
 
 def test_hwpx_document_exposes_reverse_bridge_helpers(
@@ -108,4 +107,4 @@ def test_hwpx_document_exposes_reverse_bridge_helpers(
     output_hwp = tmp_path / "reverse_helper.hwp"
     document.save_as_hwp(output_hwp, converter=fake_converter)
     assert output_hwp.exists()
-    assert "HWP" in conversions
+    assert conversions == []

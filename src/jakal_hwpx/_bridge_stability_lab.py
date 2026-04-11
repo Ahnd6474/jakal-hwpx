@@ -28,6 +28,8 @@ class BridgeArtifact:
     expected_hwp_control_ids: tuple[str, ...] = ()
     hancom_roundtrip_title: str | None = None
     hancom_roundtrip_texts: tuple[str, ...] = ()
+    validate_hwp: Callable[[HwpDocument], list[str]] | None = None
+    validate_hwpx: Callable[[HwpxDocument], list[str]] | None = None
 
 
 @dataclass(frozen=True)
@@ -229,6 +231,8 @@ def _validate_artifact(artifact: BridgeArtifact) -> list[str]:
             for expected_control_id in artifact.expected_hwp_control_ids:
                 if expected_control_id not in control_ids:
                     errors.append(f"hwp artifact missing expected control {expected_control_id!r}: {path}")
+            if artifact.validate_hwp is not None:
+                errors.extend(artifact.validate_hwp(reopened))
     elif artifact.kind == "hwpx":
         try:
             reopened = HwpxDocument.open(path)
@@ -242,9 +246,219 @@ def _validate_artifact(artifact: BridgeArtifact) -> list[str]:
             for expected_text in artifact.expected_texts:
                 if expected_text not in reopened.get_document_text():
                     errors.append(f"hwpx artifact missing expected text {expected_text!r}: {path}")
+            if artifact.validate_hwpx is not None:
+                errors.extend(artifact.validate_hwpx(reopened))
     else:
         errors.append(f"unknown artifact kind: {artifact.kind}")
     return errors
+
+
+def _expect_hwp_section_settings(
+    *,
+    section_index: int = 0,
+    visibility: dict[str, str] | None = None,
+    page_numbers: list[dict[str, str]] | None = None,
+    footnote_pr: dict[str, object] | None = None,
+    endnote_pr: dict[str, object] | None = None,
+    section_count: int | None = None,
+) -> Callable[[HwpDocument], list[str]]:
+    def _validate(document: HwpDocument) -> list[str]:
+        errors: list[str] = []
+        binary = document.binary_document()
+        if section_count is not None and len(document.sections()) != section_count:
+            errors.append(f"section_count={len(document.sections())} != {section_count}")
+        if visibility is not None:
+            current_visibility = binary.section_definition_settings(section_index).get("visibility", {})
+            for key, expected in visibility.items():
+                if current_visibility.get(key) != expected:
+                    errors.append(f"visibility[{key}]={current_visibility.get(key)!r} != {expected!r}")
+        if page_numbers is not None:
+            current_page_numbers = binary.section_page_numbers(section_index)
+            if current_page_numbers != page_numbers:
+                errors.append(f"page_numbers={current_page_numbers!r} != {page_numbers!r}")
+        if footnote_pr is not None or endnote_pr is not None:
+            note_settings = binary.section_note_settings(section_index)
+            if footnote_pr is not None:
+                for path, expected in _flatten_expected_mapping(footnote_pr):
+                    actual = _resolve_nested_value(note_settings.get("footNotePr", {}), path)
+                    if actual != expected:
+                        errors.append(f"footNotePr.{'.'.join(path)}={actual!r} != {expected!r}")
+            if endnote_pr is not None:
+                for path, expected in _flatten_expected_mapping(endnote_pr):
+                    actual = _resolve_nested_value(note_settings.get("endNotePr", {}), path)
+                    if actual != expected:
+                        errors.append(f"endNotePr.{'.'.join(path)}={actual!r} != {expected!r}")
+        return errors
+
+    return _validate
+
+
+def _flatten_expected_mapping(values: dict[str, object], prefix: tuple[str, ...] = ()) -> list[tuple[tuple[str, ...], object]]:
+    flattened: list[tuple[tuple[str, ...], object]] = []
+    for key, value in values.items():
+        path = prefix + (key,)
+        if isinstance(value, dict):
+            flattened.extend(_flatten_expected_mapping(value, path))
+        else:
+            flattened.append((path, value))
+    return flattened
+
+
+def _resolve_nested_value(values: dict[str, object], path: tuple[str, ...]) -> object:
+    current: object = values
+    for key in path:
+        if not isinstance(current, dict):
+            return None
+        current = current.get(key)
+    return current
+
+
+def _ensure_hwpx_note_pr(document: HwpxDocument, kind: str):
+    section = document.section_xml(0)
+    node = section.find(f".//hp:{kind}")
+    if node is not None:
+        return node
+    sec_pr = section.find(".//hp:secPr")
+    if sec_pr is None:
+        raise ValueError("Section does not contain hp:secPr.")
+    if kind == "endNotePr":
+        sec_pr.append_xml(
+            '<hp:endNotePr xmlns:hp="http://www.hancom.co.kr/hwpml/2011/paragraph">'
+            '<hp:autoNumFormat type="DIGIT" userChar="" prefixChar="" suffixChar="" supscript="0"/>'
+            '<hp:noteLine length="-1" type="SOLID" width="0.12 mm" color="#000000"/>'
+            '<hp:noteSpacing betweenNotes="283" belowLine="567" aboveLine="850"/>'
+            '<hp:numbering type="CONTINUOUS" newNum="1"/>'
+            '<hp:placement place="END_OF_DOCUMENT" beneathText="0"/>'
+            '</hp:endNotePr>'
+        )
+    else:
+        sec_pr.append_xml(
+            '<hp:footNotePr xmlns:hp="http://www.hancom.co.kr/hwpml/2011/paragraph">'
+            '<hp:autoNumFormat type="DIGIT" userChar="" prefixChar="" suffixChar="" supscript="0"/>'
+            '<hp:noteLine length="-1" type="SOLID" width="0.12 mm" color="#000000"/>'
+            '<hp:noteSpacing betweenNotes="283" belowLine="567" aboveLine="850"/>'
+            '<hp:numbering type="CONTINUOUS" newNum="1"/>'
+            '<hp:placement place="EACH_COLUMN" beneathText="0"/>'
+            '</hp:footNotePr>'
+        )
+    node = section.find(f".//hp:{kind}")
+    if node is None:
+        raise ValueError(f"Failed to create {kind} node.")
+    return node
+
+
+def _exercise_from_hwpx_section_page_number_visibility(bridge: HwpHwpxBridge, case_dir: Path) -> BridgeExecution:
+    document = bridge.hwpx_document()
+    settings = document.section_settings(0)
+    line_shape = document.section_xml(0).find(".//hp:lineNumberShape")
+    if line_shape is None:
+        raise ValueError("Section does not contain hp:lineNumberShape.")
+    document.append_paragraph("BRIDGE-LINE-NUM-A")
+    document.append_paragraph("BRIDGE-LINE-NUM-B")
+    settings.set_visibility(hide_first_header=True, border="HIDE_FIRST", fill="SHOW_FIRST", show_line_number=True)
+    settings.set_start_numbers(page_starts_on="ODD", page=7, pic=8, tbl=9, equation=10)
+    line_shape.set_attr("countBy", 3).set_attr("distance", 150).set_attr("startNumber", 7).set_attr("restartType", 1)
+    document.append_control_xml(
+        '<hp:pageNum xmlns:hp="http://www.hancom.co.kr/hwpml/2011/paragraph" pos="BOTTOM_CENTER" formatType="DIGIT" sideChar="-"/>'
+    )
+    return BridgeExecution(
+        artifacts=(
+            BridgeArtifact(
+                str(_save_hwp_with_sidecar(bridge, case_dir / "section_page_number_visibility.hwp")),
+                "hwp",
+                expected_texts=("BRIDGE-LINE-NUM-A", "BRIDGE-LINE-NUM-B"),
+                expected_hwp_control_ids=("pgnp",),
+                validate_hwp=_expect_hwp_section_settings(
+                    section_index=0,
+                    visibility={
+                        "hideFirstHeader": "1",
+                        "border": "HIDE_FIRST",
+                        "fill": "SHOW_FIRST",
+                        "showLineNumber": "1",
+                    },
+                    page_numbers=[{"pos": "BOTTOM_CENTER", "formatType": "DIGIT", "sideChar": "-"}],
+                ),
+            ),
+        ),
+        exact_conversions=(),
+    )
+
+
+def _exercise_from_hwpx_section_note_settings(bridge: HwpHwpxBridge, case_dir: Path) -> BridgeExecution:
+    document = bridge.hwpx_document()
+    foot = _ensure_hwpx_note_pr(document, "footNotePr")
+    end = _ensure_hwpx_note_pr(document, "endNotePr")
+    document.append_footnote("BRIDGE-FOOTNOTE", number=1)
+    document.append_endnote("BRIDGE-ENDNOTE", number=2)
+    foot.find("./hp:autoNumFormat").set_attr("type", "ROMAN_SMALL").set_attr("prefixChar", "[").set_attr("suffixChar", "]").set_attr("supscript", 1)
+    foot.find("./hp:noteLine").set_attr("length", 1234).set_attr("type", "DASH").set_attr("width", "0.25 mm").set_attr("color", "#112233")
+    foot.find("./hp:noteSpacing").set_attr("betweenNotes", 444).set_attr("belowLine", 333).set_attr("aboveLine", 222)
+    foot.find("./hp:numbering").set_attr("type", "ON_PAGE").set_attr("newNum", 9)
+    foot.find("./hp:placement").set_attr("place", "RIGHT_MOST_COLUMN").set_attr("beneathText", 1)
+    end.find("./hp:autoNumFormat").set_attr("type", "LATIN_SMALL").set_attr("prefixChar", "(").set_attr("suffixChar", ")").set_attr("supscript", 0)
+    end.find("./hp:noteLine").set_attr("length", 4321).set_attr("type", "DOT").set_attr("width", "0.4 mm").set_attr("color", "#445566")
+    end.find("./hp:noteSpacing").set_attr("betweenNotes", 777).set_attr("belowLine", 666).set_attr("aboveLine", 555)
+    end.find("./hp:numbering").set_attr("type", "ON_SECTION").set_attr("newNum", 5)
+    end.find("./hp:placement").set_attr("place", "END_OF_SECTION").set_attr("beneathText", 0)
+    return BridgeExecution(
+        artifacts=(
+            BridgeArtifact(
+                str(_save_hwp_with_sidecar(bridge, case_dir / "section_note_settings.hwp")),
+                "hwp",
+                expected_texts=("BRIDGE-FOOTNOTE", "BRIDGE-ENDNOTE"),
+                expected_hwp_control_ids=("fn  ", "en  "),
+                validate_hwp=_expect_hwp_section_settings(
+                    section_index=0,
+                    footnote_pr={
+                        "numbering": {"type": "ON_PAGE", "newNum": "9"},
+                        "noteLine": {"length": "1234", "type": "DASH", "width": "0.25 mm", "color": "#112233"},
+                        "placement": {"place": "RIGHT_MOST_COLUMN", "beneathText": "1"},
+                    },
+                    endnote_pr={
+                        "numbering": {"type": "ON_SECTION", "newNum": "5"},
+                        "noteLine": {"length": "4321", "type": "DOT", "width": "0.4 mm", "color": "#445566"},
+                        "placement": {"place": "END_OF_SECTION", "beneathText": "0"},
+                    },
+                ),
+            ),
+        ),
+        exact_conversions=(),
+    )
+
+
+def _exercise_from_hwpx_multi_section(bridge: HwpHwpxBridge, case_dir: Path) -> BridgeExecution:
+    document = bridge.hwpx_document()
+    document.add_section(text="BRIDGE-SECTION-1")
+    document.section_settings(1).set_page_size(width=222222, height=333333)
+    return BridgeExecution(
+        artifacts=(
+            BridgeArtifact(
+                str(_save_hwp_with_sidecar(bridge, case_dir / "multi_section.hwp")),
+                "hwp",
+                expected_texts=("BRIDGE-SECTION-1",),
+                validate_hwp=_expect_hwp_section_settings(section_index=1, section_count=2),
+            ),
+        ),
+        exact_conversions=(),
+    )
+
+
+def _exercise_from_hwpx_header_footer_bookmark_newnum(bridge: HwpHwpxBridge, case_dir: Path) -> BridgeExecution:
+    document = bridge.hwpx_document()
+    document.append_header("BRIDGE-HEAD")
+    document.append_footer("BRIDGE-FOOT")
+    document.append_bookmark("bridge-anchor")
+    document.append_auto_number(number=7, number_type="PAGE", kind="newNum")
+    return BridgeExecution(
+        artifacts=(
+            BridgeArtifact(
+                str(_save_hwp_with_sidecar(bridge, case_dir / "header_footer_bookmark_newnum.hwp")),
+                "hwp",
+                expected_hwp_control_ids=("head", "foot", "bokm", "nwno"),
+            ),
+        ),
+        exact_conversions=(),
+    )
 
 
 def _validate_hancom_roundtrip_artifact(
@@ -253,8 +467,6 @@ def _validate_hancom_roundtrip_artifact(
     converter: Callable[[str | Path, str | Path, str], Path],
 ) -> tuple[list[str], list[str]]:
     if artifact.kind != "hwp":
-        return ([], [])
-    if artifact.hancom_roundtrip_title is None and not artifact.hancom_roundtrip_texts:
         return ([], [])
     roundtrip_hwpx = case_dir / f"{Path(artifact.path).stem}_roundtrip.hwpx"
     converter(artifact.path, roundtrip_hwpx, "HWPX")
@@ -323,11 +535,13 @@ def _run_case(case: BridgeStabilityCase, output_dir: Path, *, validate_with_hanc
             notes=[],
         )
 
+    bridge_conversions = list(conversions)
+
     for expected in execution.expected_conversions:
-        if expected not in conversions:
+        if expected not in bridge_conversions:
             bridge_errors.append(f"missing conversion call: {expected}")
-    if execution.exact_conversions is not None and tuple(conversions) != execution.exact_conversions:
-        bridge_errors.append(f"unexpected conversion sequence: {conversions} != {list(execution.exact_conversions)}")
+    if execution.exact_conversions is not None and tuple(bridge_conversions) != execution.exact_conversions:
+        bridge_errors.append(f"unexpected conversion sequence: {bridge_conversions} != {list(execution.exact_conversions)}")
     for artifact in execution.artifacts:
         bridge_errors.extend(_validate_artifact(artifact))
 
@@ -377,7 +591,7 @@ def _cases() -> list[BridgeStabilityCase]:
             source_kind="hwp",
             exercise=lambda bridge, _case_dir: (
                 lambda first=bridge.hwpx_document(), second=bridge.hwpx_document(): BridgeExecution(
-                    exact_conversions=("HWPX",),
+                    exact_conversions=(),
                     notes=(f"cache_identity={first is second}",),
                 )
             )(),
@@ -404,7 +618,7 @@ def _cases() -> list[BridgeStabilityCase]:
                                 expected_title="BRIDGE-HWP-HWPX",
                             ),
                         ),
-                        exact_conversions=("HWPX",),
+                        exact_conversions=(),
                     ),
                 )[1]
             )(),
@@ -415,7 +629,7 @@ def _cases() -> list[BridgeStabilityCase]:
             exercise=lambda bridge, _case_dir: (
                 bridge.hwpx_document(),
                 bridge.refresh_hwpx(),
-                BridgeExecution(expected_conversions=("HWPX",), exact_conversions=("HWPX", "HWPX")),
+                BridgeExecution(expected_conversions=(), exact_conversions=()),
             )[2],
         ),
         BridgeStabilityCase(
@@ -423,7 +637,7 @@ def _cases() -> list[BridgeStabilityCase]:
             source_kind="hwp",
             exercise=lambda bridge, case_dir: BridgeExecution(
                 artifacts=(BridgeArtifact(str(bridge.save(case_dir / "dispatch.hwpx")), "hwpx"),),
-                exact_conversions=("HWPX",),
+                exact_conversions=(),
             ),
         ),
         BridgeStabilityCase(
@@ -431,7 +645,7 @@ def _cases() -> list[BridgeStabilityCase]:
             source_kind="hwp",
             exercise=lambda bridge, _case_dir: (
                 lambda helper=bridge.hwp_document().bridge(), document=bridge.hwp_document().bridge().hwpx_document(): BridgeExecution(
-                    exact_conversions=("HWPX",),
+                    exact_conversions=(),
                     notes=(f"helper_bridge_type={type(helper).__name__}", f"hwpx_type={type(document).__name__}"),
                 )
             )(),
@@ -441,7 +655,7 @@ def _cases() -> list[BridgeStabilityCase]:
             source_kind="hwpx",
             exercise=lambda bridge, _case_dir: (
                 lambda first=bridge.hwp_document(), second=bridge.hwp_document(): BridgeExecution(
-                    exact_conversions=("HWP",),
+                    exact_conversions=(),
                     notes=(f"cache_identity={first is second}",),
                 )
             )(),
@@ -459,7 +673,7 @@ def _cases() -> list[BridgeStabilityCase]:
             source_kind="hwpx",
             exercise=lambda bridge, case_dir: BridgeExecution(
                 artifacts=(BridgeArtifact(str(_save_hwp_with_sidecar(bridge, case_dir / "converted.hwp")), "hwp"),),
-                exact_conversions=("HWP",),
+                exact_conversions=(),
             ),
         ),
         BridgeStabilityCase(
@@ -468,7 +682,7 @@ def _cases() -> list[BridgeStabilityCase]:
             exercise=lambda bridge, _case_dir: (
                 bridge.hwp_document(),
                 bridge.refresh_hwp(),
-                BridgeExecution(expected_conversions=("HWP",), exact_conversions=("HWP", "HWP")),
+                BridgeExecution(expected_conversions=(), exact_conversions=()),
             )[2],
         ),
         BridgeStabilityCase(
@@ -476,7 +690,7 @@ def _cases() -> list[BridgeStabilityCase]:
             source_kind="hwpx",
             exercise=lambda bridge, case_dir: BridgeExecution(
                 artifacts=(BridgeArtifact(str(_save_hwp_with_sidecar(bridge, case_dir / "dispatch.hwp")), "hwp"),),
-                exact_conversions=("HWP",),
+                exact_conversions=(),
             ),
         ),
         BridgeStabilityCase(
@@ -492,7 +706,7 @@ def _cases() -> list[BridgeStabilityCase]:
                                 "hwp",
                             ),
                         ),
-                        expected_conversions=("HWP",),
+                        expected_conversions=(),
                     ),
                 )[1]
             )(),
@@ -510,7 +724,7 @@ def _cases() -> list[BridgeStabilityCase]:
                                 "hwp",
                             ),
                         ),
-                        exact_conversions=("HWP",),
+                        exact_conversions=(),
                     ),
                 )[1]
             )(),
@@ -529,7 +743,7 @@ def _cases() -> list[BridgeStabilityCase]:
                                 expected_texts=("BRIDGE-HWPX-PARAGRAPH",),
                             ),
                         ),
-                        exact_conversions=("HWP",),
+                        exact_conversions=(),
                     ),
                 )[1]
             )(),
@@ -549,7 +763,7 @@ def _cases() -> list[BridgeStabilityCase]:
                                 expected_hwp_control_ids=("tbl ",),
                             ),
                         ),
-                        exact_conversions=("HWP",),
+                        exact_conversions=(),
                     ),
                 )[1]
             )(),
@@ -569,7 +783,7 @@ def _cases() -> list[BridgeStabilityCase]:
                                 expected_hwp_control_ids=("%hlk",),
                             ),
                         ),
-                        exact_conversions=("HWP",),
+                        exact_conversions=(),
                     ),
                 )[1]
             )(),
@@ -587,7 +801,7 @@ def _cases() -> list[BridgeStabilityCase]:
                                 "hwp",
                             ),
                         ),
-                        exact_conversions=("HWP",),
+                        exact_conversions=(),
                     ),
                 )[1]
             )(),
@@ -606,7 +820,7 @@ def _cases() -> list[BridgeStabilityCase]:
                                 expected_hwp_control_ids=("eqed",),
                             ),
                         ),
-                        exact_conversions=("HWP",),
+                        exact_conversions=(),
                     ),
                 )[1]
             )(),
@@ -626,7 +840,7 @@ def _cases() -> list[BridgeStabilityCase]:
                                 expected_hwp_control_ids=("gso ",),
                             ),
                         ),
-                        exact_conversions=("HWP",),
+                        exact_conversions=(),
                     ),
                 )[1]
             )(),
@@ -645,7 +859,7 @@ def _cases() -> list[BridgeStabilityCase]:
                                 expected_hwp_control_ids=("gso ",),
                             ),
                         ),
-                        exact_conversions=("HWP",),
+                        exact_conversions=(),
                     ),
                 )[1]
             )(),
@@ -668,10 +882,30 @@ def _cases() -> list[BridgeStabilityCase]:
                                 expected_hwp_control_ids=("tbl ", "%hlk", "eqed"),
                             ),
                         ),
-                        exact_conversions=("HWP",),
+                        exact_conversions=(),
                     ),
                 )[4]
             )(),
+        ),
+        BridgeStabilityCase(
+            name="from_hwpx_section_page_number_visibility_save_hwp",
+            source_kind="hwpx",
+            exercise=_exercise_from_hwpx_section_page_number_visibility,
+        ),
+        BridgeStabilityCase(
+            name="from_hwpx_section_note_settings_save_hwp",
+            source_kind="hwpx",
+            exercise=_exercise_from_hwpx_section_note_settings,
+        ),
+        BridgeStabilityCase(
+            name="from_hwpx_multi_section_save_hwp",
+            source_kind="hwpx",
+            exercise=_exercise_from_hwpx_multi_section,
+        ),
+        BridgeStabilityCase(
+            name="from_hwpx_header_footer_bookmark_newnum_save_hwp",
+            source_kind="hwpx",
+            exercise=_exercise_from_hwpx_header_footer_bookmark_newnum,
         ),
     ]
 

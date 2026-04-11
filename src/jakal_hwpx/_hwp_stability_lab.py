@@ -28,6 +28,7 @@ class HwpStabilityCase:
     expected_control_ids: tuple[str, ...] = ()
     min_bindata_delta: int = 0
     min_section_record_delta: int = 0
+    validate_document: Callable[[HwpDocument], list[str]] | None = None
 
 
 @dataclass(frozen=True)
@@ -108,6 +109,8 @@ def _run_case(case: HwpStabilityCase, output_dir: Path, *, validate_with_hancom:
             "section record growth "
             f"{mutated_section_record_count - before_section_record_count} was smaller than expected {case.min_section_record_delta}"
         )
+    if case.validate_document is not None:
+        binary_errors.extend(f"mutated: {message}" for message in case.validate_document(document))
 
     edited_path = output_dir / f"{case.name}_edited.hwp"
     document.save(edited_path)
@@ -127,6 +130,8 @@ def _run_case(case: HwpStabilityCase, output_dir: Path, *, validate_with_hancom:
         binary_errors.append(f"reopened bindata count {reopened_bindata_count} != mutated {mutated_bindata_count}")
     if reopened_section_record_count != mutated_section_record_count:
         binary_errors.append(f"reopened section record count {reopened_section_record_count} != mutated {mutated_section_record_count}")
+    if case.validate_document is not None:
+        binary_errors.extend(f"reopened: {message}" for message in case.validate_document(reopened))
 
     if validate_with_hancom:
         hancom_status, hancom_ok, hancom_errors, hancom_artifacts = _validate_with_hancom(output_dir, edited_path)
@@ -287,6 +292,7 @@ def _combo_case(
     min_section_record_delta: int,
     min_bindata_delta: int = 0,
     mutate: Callable[[HwpDocument], None],
+    validate_document: Callable[[HwpDocument], list[str]] | None = None,
 ) -> HwpStabilityCase:
     return HwpStabilityCase(
         name=name,
@@ -295,7 +301,76 @@ def _combo_case(
         expected_control_ids=expected_control_ids,
         min_bindata_delta=min_bindata_delta,
         min_section_record_delta=min_section_record_delta,
+        validate_document=validate_document,
     )
+
+
+def _expect_section_settings(
+    *,
+    section_index: int = 0,
+    visibility: dict[str, str] | None = None,
+    page_numbers: list[dict[str, str]] | None = None,
+    footnote_pr: dict[str, object] | None = None,
+    endnote_pr: dict[str, object] | None = None,
+    section_count: int | None = None,
+    page_width: int | None = None,
+    page_height: int | None = None,
+) -> Callable[[HwpDocument], list[str]]:
+    def _validate(document: HwpDocument) -> list[str]:
+        errors: list[str] = []
+        binary = document.binary_document()
+        if section_count is not None and len(document.sections()) != section_count:
+            errors.append(f"section_count={len(document.sections())} != {section_count}")
+        if page_width is not None or page_height is not None:
+            settings = binary.section_page_settings(section_index)
+            if page_width is not None and settings.get("page_width") != page_width:
+                errors.append(f"page_width={settings.get('page_width')} != {page_width}")
+            if page_height is not None and settings.get("page_height") != page_height:
+                errors.append(f"page_height={settings.get('page_height')} != {page_height}")
+        if visibility is not None:
+            current_visibility = binary.section_definition_settings(section_index).get("visibility", {})
+            for key, expected in visibility.items():
+                if current_visibility.get(key) != expected:
+                    errors.append(f"visibility[{key}]={current_visibility.get(key)!r} != {expected!r}")
+        if page_numbers is not None:
+            current_page_numbers = binary.section_page_numbers(section_index)
+            if current_page_numbers != page_numbers:
+                errors.append(f"page_numbers={current_page_numbers!r} != {page_numbers!r}")
+        if footnote_pr is not None or endnote_pr is not None:
+            note_settings = binary.section_note_settings(section_index)
+            if footnote_pr is not None:
+                for path, expected in _flatten_expected_mapping(footnote_pr):
+                    actual = _resolve_nested_value(note_settings.get("footNotePr", {}), path)
+                    if actual != expected:
+                        errors.append(f"footNotePr.{'.'.join(path)}={actual!r} != {expected!r}")
+            if endnote_pr is not None:
+                for path, expected in _flatten_expected_mapping(endnote_pr):
+                    actual = _resolve_nested_value(note_settings.get("endNotePr", {}), path)
+                    if actual != expected:
+                        errors.append(f"endNotePr.{'.'.join(path)}={actual!r} != {expected!r}")
+        return errors
+
+    return _validate
+
+
+def _flatten_expected_mapping(values: dict[str, object], prefix: tuple[str, ...] = ()) -> list[tuple[tuple[str, ...], object]]:
+    flattened: list[tuple[tuple[str, ...], object]] = []
+    for key, value in values.items():
+        path = prefix + (key,)
+        if isinstance(value, dict):
+            flattened.extend(_flatten_expected_mapping(value, path))
+        else:
+            flattened.append((path, value))
+    return flattened
+
+
+def _resolve_nested_value(values: dict[str, object], path: tuple[str, ...]) -> object:
+    current: object = values
+    for key in path:
+        if not isinstance(current, dict):
+            return None
+        current = current.get(key)
+    return current
 
 
 def _cases() -> list[HwpStabilityCase]:
@@ -644,10 +719,114 @@ def _cases() -> list[HwpStabilityCase]:
                 document.append_picture(jpg_bytes, extension="jpg"),
             ),
         ),
+        _combo_case(
+            "combo_17_section_page_number_visibility",
+            expected_texts=("LINE-NUM-A", "LINE-NUM-B"),
+            expected_control_ids=("pgnp",),
+            min_section_record_delta=4,
+            mutate=lambda document: (
+                document.append_paragraph("LINE-NUM-A", section_index=1),
+                document.append_paragraph("LINE-NUM-B", section_index=1),
+                document.apply_section_settings(
+                    section_index=1,
+                    visibility={
+                        "hideFirstHeader": "1",
+                        "border": "HIDE_FIRST",
+                        "fill": "SHOW_FIRST",
+                        "showLineNumber": "1",
+                    },
+                    start_numbers={"pageStartsOn": "ODD", "page": "7", "pic": "8", "tbl": "9", "equation": "10"},
+                ),
+                document.apply_section_page_numbers(
+                    [{"pos": "BOTTOM_CENTER", "formatType": "DIGIT", "sideChar": "-"}],
+                    section_index=1,
+                ),
+            ),
+            validate_document=_expect_section_settings(
+                section_index=1,
+                visibility={
+                    "hideFirstHeader": "1",
+                    "border": "HIDE_FIRST",
+                    "fill": "SHOW_FIRST",
+                    "showLineNumber": "1",
+                },
+                page_numbers=[{"pos": "BOTTOM_CENTER", "formatType": "DIGIT", "sideChar": "-"}],
+            ),
+        ),
+        _combo_case(
+            "combo_18_section_note_settings",
+            expected_texts=("FOOTNOTE-TEXT", "ENDNOTE-TEXT"),
+            expected_control_ids=("fn  ", "en  "),
+            min_section_record_delta=10,
+            mutate=lambda document: (
+                document.append_footnote("FOOTNOTE-TEXT", section_index=1),
+                document.append_endnote("ENDNOTE-TEXT", section_index=1),
+                document.apply_section_note_settings(
+                    section_index=1,
+                    footnote_pr={
+                        "autoNumFormat": {"type": "ROMAN_SMALL", "prefixChar": "[", "suffixChar": "]", "supscript": "1"},
+                        "numbering": {"type": "ON_PAGE", "newNum": "9"},
+                        "noteLine": {"length": "1234", "type": "DASH", "width": "0.25 mm", "color": "#112233"},
+                        "noteSpacing": {"aboveLine": "222", "belowLine": "333", "betweenNotes": "444"},
+                        "placement": {"place": "RIGHT_MOST_COLUMN", "beneathText": "1"},
+                    },
+                    endnote_pr={
+                        "autoNumFormat": {"type": "LATIN_SMALL", "prefixChar": "(", "suffixChar": ")"},
+                        "numbering": {"type": "ON_SECTION", "newNum": "5"},
+                        "noteLine": {"length": "4321", "type": "DOT", "width": "0.4 mm", "color": "#445566"},
+                        "noteSpacing": {"aboveLine": "555", "belowLine": "666", "betweenNotes": "777"},
+                        "placement": {"place": "END_OF_SECTION", "beneathText": "0"},
+                    },
+                ),
+            ),
+            validate_document=_expect_section_settings(
+                section_index=1,
+                footnote_pr={
+                    "numbering": {"type": "ON_PAGE", "newNum": "9"},
+                    "noteLine": {"length": "1234", "type": "DASH", "width": "0.25 mm", "color": "#112233"},
+                    "placement": {"place": "RIGHT_MOST_COLUMN", "beneathText": "1"},
+                },
+                endnote_pr={
+                    "numbering": {"type": "ON_SECTION", "newNum": "5"},
+                    "noteLine": {"length": "4321", "type": "DOT", "width": "0.4 mm", "color": "#445566"},
+                    "placement": {"place": "END_OF_SECTION", "beneathText": "0"},
+                },
+            ),
+        ),
+        _combo_case(
+            "combo_19_multi_section_layout",
+            expected_texts=("SECTION-ONE-LAYOUT", "SECTION-TWO-LAYOUT"),
+            expected_control_ids=(),
+            min_section_record_delta=2,
+            mutate=lambda document: (
+                document.ensure_section_count(3),
+                document.append_paragraph("SECTION-ONE-LAYOUT", section_index=1),
+                document.append_paragraph("SECTION-TWO-LAYOUT", section_index=2),
+                document.apply_section_settings(
+                    section_index=2,
+                    page_width=333333,
+                    page_height=444444,
+                    margins={"left": 1001, "right": 1002, "top": 1003, "bottom": 1004, "header": 1005, "footer": 1006, "gutter": 1007},
+                ),
+            ),
+            validate_document=_expect_section_settings(section_index=2, section_count=3, page_width=333333, page_height=444444),
+        ),
+        _combo_case(
+            "combo_20_header_footer_newnum_bookmark",
+            expected_texts=("HEAD-LINE", "FOOT-LINE"),
+            expected_control_ids=("head", "foot", "nwno", "bokm"),
+            min_section_record_delta=8,
+            mutate=lambda document: (
+                document.append_header("HEAD-LINE", section_index=1),
+                document.append_footer("FOOT-LINE", section_index=1),
+                document.append_auto_number(number=7, number_type="PAGE", kind="newNum", section_index=1),
+                document.append_bookmark("marker-1", section_index=1),
+            ),
+        ),
     )
     cases.extend(combo_cases)
 
-    assert len(cases) == 72, f"Expected 72 HWP stability cases, got {len(cases)}"
+    assert len(cases) == 76, f"Expected 76 HWP stability cases, got {len(cases)}"
     return cases
 
 

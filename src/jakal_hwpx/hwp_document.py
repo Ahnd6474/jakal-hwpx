@@ -6,7 +6,6 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
 
-from ._hancom import convert_document
 from .document import HwpxDocument
 from .hwp_binary import (
     _build_table_cell_list_header_payload,
@@ -30,6 +29,7 @@ from .hwp_binary import (
     RecordNode,
     SectionModel,
     SectionParagraphModel,
+    TAG_CTRL_DATA,
     TAG_CTRL_HEADER,
     TAG_EQEDIT,
     TAG_LIST_HEADER,
@@ -57,7 +57,7 @@ HancomConverter = Callable[[str | Path, str | Path, str], Path]
 class HwpDocument:
     def __init__(self, binary_document: HwpBinaryDocument, *, converter: HancomConverter | None = None):
         self._binary_document = binary_document
-        self._converter = converter or convert_document
+        self._converter = converter
         self._bridge_document: HwpxDocument | None = None
         self._bridge_temp_dir: Path | None = None
         self._pure_profile: HwpPureProfile | None = None
@@ -81,6 +81,7 @@ class HwpDocument:
         profile = HwpPureProfile.load(profile_root)
         instance = cls(HwpBinaryDocument.open(profile.base_path), converter=converter)
         instance._pure_profile = profile
+        instance._binary_document.reset_body_sections_to_blank()
         return instance
 
     @property
@@ -117,6 +118,7 @@ class HwpDocument:
         return self._binary_document.preview_text()
 
     def set_preview_text(self, value: str) -> None:
+        self._invalidate_bridge()
         self._binary_document.set_preview_text(value)
 
     def sections(self) -> list["HwpSection"]:
@@ -127,6 +129,69 @@ class HwpDocument:
 
     def section_model(self, section_index: int = 0) -> SectionModel:
         return self._binary_document.section_model(section_index)
+
+    def ensure_section_count(self, section_count: int) -> None:
+        self._invalidate_bridge()
+        self._binary_document.ensure_section_count(section_count)
+
+    def apply_section_settings(
+        self,
+        *,
+        section_index: int = 0,
+        page_width: int | None = None,
+        page_height: int | None = None,
+        landscape: str | None = None,
+        margins: dict[str, int] | None = None,
+        visibility: dict[str, str] | None = None,
+        grid: dict[str, int] | None = None,
+        start_numbers: dict[str, str] | None = None,
+    ) -> None:
+        self._invalidate_bridge()
+        self._binary_document.set_section_page_settings(
+            section_index,
+            page_width=page_width,
+            page_height=page_height,
+            landscape=landscape,
+            margins=margins,
+        )
+        self._binary_document.set_section_definition_settings(
+            section_index,
+            visibility=visibility,
+            grid=grid,
+            start_numbers=start_numbers,
+        )
+
+    def apply_section_page_border_fills(
+        self,
+        page_border_fills: list[dict[str, str | int]],
+        *,
+        section_index: int = 0,
+    ) -> None:
+        self._invalidate_bridge()
+        self._binary_document.set_section_page_border_fills(section_index, page_border_fills)
+
+    def apply_section_page_numbers(
+        self,
+        page_numbers: list[dict[str, str]],
+        *,
+        section_index: int = 0,
+    ) -> None:
+        self._invalidate_bridge()
+        self._binary_document.set_section_page_numbers(section_index, page_numbers)
+
+    def apply_section_note_settings(
+        self,
+        *,
+        section_index: int = 0,
+        footnote_pr: dict[str, object] | None = None,
+        endnote_pr: dict[str, object] | None = None,
+    ) -> None:
+        self._invalidate_bridge()
+        self._binary_document.set_section_note_settings(
+            section_index,
+            footnote_pr=footnote_pr,
+            endnote_pr=endnote_pr,
+        )
 
     def paragraphs(self, section_index: int = 0) -> list["HwpParagraphObject"]:
         return self.section(section_index).paragraphs()
@@ -146,6 +211,15 @@ class HwpDocument:
 
     def hyperlinks(self, section_index: int | None = None) -> list["HwpHyperlinkObject"]:
         return [control for control in self.controls(section_index) if isinstance(control, HwpHyperlinkObject)]
+
+    def bookmarks(self, section_index: int | None = None) -> list["HwpBookmarkObject"]:
+        return [control for control in self.controls(section_index) if isinstance(control, HwpBookmarkObject)]
+
+    def notes(self, section_index: int | None = None) -> list["HwpNoteObject"]:
+        return [control for control in self.controls(section_index) if isinstance(control, HwpNoteObject)]
+
+    def page_numbers(self, section_index: int | None = None) -> list["HwpPageNumObject"]:
+        return [control for control in self.controls(section_index) if isinstance(control, HwpPageNumObject)]
 
     def fields(self, section_index: int | None = None) -> list["HwpFieldObject"]:
         return [control for control in self.controls(section_index) if isinstance(control, HwpFieldObject)]
@@ -212,25 +286,15 @@ class HwpDocument:
         if self._bridge_document is not None and not force_refresh:
             return self._bridge_document
 
-        workspace = self._ensure_bridge_workspace()
-        source_hwp = workspace / "bridge_source.hwp"
-        output_hwpx = workspace / "bridge_output.hwpx"
-        self._binary_document.save_copy(source_hwp)
-        self._converter(source_hwp, output_hwpx, "HWPX")
-        self._bridge_document = HwpxDocument.open(output_hwpx)
+        from .hancom_document import HancomDocument
+
+        self._bridge_document = HancomDocument.from_hwp_document(self, converter=self._converter).to_hwpx_document()
         return self._bridge_document
 
     def save_as_hwpx(self, path: str | Path) -> Path:
         target_path = Path(path).expanduser().resolve()
         target_path.parent.mkdir(parents=True, exist_ok=True)
-        if self._bridge_document is not None:
-            self._bridge_document.save(target_path)
-            return target_path
-
-        workspace = self._ensure_bridge_workspace()
-        source_hwp = workspace / "export_source.hwp"
-        self._binary_document.save_copy(source_hwp)
-        self._converter(source_hwp, target_path, "HWPX")
+        self.to_hwpx_document(force_refresh=False).save(target_path)
         return target_path
 
     def save(self, path: str | Path | None = None) -> Path:
@@ -244,11 +308,9 @@ class HwpDocument:
         if self._bridge_document is None:
             return self._binary_document.save(path)
 
-        workspace = self._ensure_bridge_workspace()
-        temp_hwpx = workspace / "bridge_save.hwpx"
-        self._bridge_document.save(temp_hwpx)
-        self._converter(temp_hwpx, target_path, "HWP")
-        self._binary_document = HwpBinaryDocument.open(target_path)
+        self._sync_from_bridge_document()
+        self._binary_document.save(target_path)
+        self._binary_document.source_path = target_path
         return target_path
 
     def load_pure_profile(self, profile_root: str | Path) -> HwpPureProfile:
@@ -267,6 +329,7 @@ class HwpDocument:
         cell_spans: dict[tuple[int, int], tuple[int, int]] | None = None,
         cell_border_fill_ids: dict[tuple[int, int], int] | None = None,
         table_border_fill_id: int = 1,
+        section_index: int | None = None,
     ) -> None:
         self._invalidate_bridge()
         if self._pure_profile is None:
@@ -282,9 +345,16 @@ class HwpDocument:
             cell_border_fill_ids=cell_border_fill_ids,
             table_border_fill_id=table_border_fill_id,
             profile_root=self._pure_profile.root,
+            section_index=section_index,
         )
 
-    def append_picture(self, image_bytes: bytes | None = None, *, extension: str | None = None) -> None:
+    def append_picture(
+        self,
+        image_bytes: bytes | None = None,
+        *,
+        extension: str | None = None,
+        section_index: int | None = None,
+    ) -> None:
         self._invalidate_bridge()
         if self._pure_profile is None:
             self._pure_profile = HwpPureProfile.load_bundled()
@@ -292,6 +362,7 @@ class HwpDocument:
             image_bytes,
             extension=extension,
             profile_root=self._pure_profile.root,
+            section_index=section_index,
         )
 
     def append_hyperlink(
@@ -300,6 +371,7 @@ class HwpDocument:
         *,
         text: str | None = None,
         metadata_fields: Sequence[str | int] | None = None,
+        section_index: int | None = None,
     ) -> None:
         self._invalidate_bridge()
         if self._pure_profile is None:
@@ -309,6 +381,7 @@ class HwpDocument:
             text=text,
             metadata_fields=metadata_fields,
             profile_root=self._pure_profile.root,
+            section_index=section_index,
         )
 
     def append_field(
@@ -334,6 +407,102 @@ class HwpDocument:
             section_index=section_index,
             paragraph_index=paragraph_index,
         )
+
+    def append_bookmark(
+        self,
+        name: str,
+        *,
+        section_index: int = 0,
+        paragraph_index: int | None = None,
+    ) -> None:
+        self._invalidate_bridge()
+        self._binary_document.append_bookmark(name, section_index=section_index, paragraph_index=paragraph_index)
+
+    def append_note(
+        self,
+        text: str,
+        *,
+        kind: str = "footNote",
+        number: int | str | None = None,
+        section_index: int = 0,
+        paragraph_index: int | None = None,
+    ) -> None:
+        self._invalidate_bridge()
+        self._binary_document.append_note(
+            text,
+            kind=kind,
+            number=number,
+            section_index=section_index,
+            paragraph_index=paragraph_index,
+        )
+
+    def append_footnote(
+        self,
+        text: str,
+        *,
+        number: int | str | None = None,
+        section_index: int = 0,
+        paragraph_index: int | None = None,
+    ) -> None:
+        self.append_note(
+            text,
+            kind="footNote",
+            number=number,
+            section_index=section_index,
+            paragraph_index=paragraph_index,
+        )
+
+    def append_endnote(
+        self,
+        text: str,
+        *,
+        number: int | str | None = None,
+        section_index: int = 0,
+        paragraph_index: int | None = None,
+    ) -> None:
+        self.append_note(
+            text,
+            kind="endNote",
+            number=number,
+            section_index=section_index,
+            paragraph_index=paragraph_index,
+        )
+
+    def append_auto_number(
+        self,
+        *,
+        number: int | str = 1,
+        number_type: str = "PAGE",
+        kind: str = "newNum",
+        section_index: int = 0,
+        paragraph_index: int | None = None,
+    ) -> None:
+        self._invalidate_bridge()
+        self._binary_document.append_auto_number(
+            number=number,
+            number_type=number_type,
+            kind=kind,
+            section_index=section_index,
+            paragraph_index=paragraph_index,
+        )
+
+    def append_header(
+        self,
+        text: str,
+        *,
+        section_index: int = 0,
+    ) -> None:
+        self._invalidate_bridge()
+        self._binary_document.append_header(text, section_index=section_index)
+
+    def append_footer(
+        self,
+        text: str,
+        *,
+        section_index: int = 0,
+    ) -> None:
+        self._invalidate_bridge()
+        self._binary_document.append_footer(text, section_index=section_index)
 
     def append_equation(
         self,
@@ -444,12 +613,12 @@ class HwpDocument:
     def _sync_from_bridge_document(self) -> None:
         if self._bridge_document is None:
             return
-        workspace = self._ensure_bridge_workspace()
-        source_hwpx = workspace / "bridge_sync.hwpx"
-        output_hwp = workspace / "bridge_sync.hwp"
-        self._bridge_document.save(source_hwpx)
-        self._converter(source_hwpx, output_hwp, "HWP")
-        self._binary_document = HwpBinaryDocument.open(output_hwp)
+        from .hancom_document import HancomDocument
+
+        rebuilt = HancomDocument.from_hwpx_document(self._bridge_document, converter=self._converter).to_hwp_document(
+            converter=self._converter
+        )
+        self._binary_document = rebuilt.binary_document()
 
     def _invalidate_bridge(self) -> None:
         self._bridge_document = None
@@ -494,6 +663,15 @@ class HwpSection:
 
     def hyperlinks(self) -> list["HwpHyperlinkObject"]:
         return [control for control in self.controls() if isinstance(control, HwpHyperlinkObject)]
+
+    def bookmarks(self) -> list["HwpBookmarkObject"]:
+        return [control for control in self.controls() if isinstance(control, HwpBookmarkObject)]
+
+    def notes(self) -> list["HwpNoteObject"]:
+        return [control for control in self.controls() if isinstance(control, HwpNoteObject)]
+
+    def page_numbers(self) -> list["HwpPageNumObject"]:
+        return [control for control in self.controls() if isinstance(control, HwpPageNumObject)]
 
     def fields(self) -> list["HwpFieldObject"]:
         return [control for control in self.controls() if isinstance(control, HwpFieldObject)]
@@ -549,6 +727,65 @@ class HwpSection:
             section_index=self.index,
             paragraph_index=paragraph_index,
         )
+
+    def append_bookmark(self, name: str, *, paragraph_index: int | None = None) -> None:
+        self.document.append_bookmark(name, section_index=self.index, paragraph_index=paragraph_index)
+
+    def append_note(
+        self,
+        text: str,
+        *,
+        kind: str = "footNote",
+        number: int | str | None = None,
+        paragraph_index: int | None = None,
+    ) -> None:
+        self.document.append_note(
+            text,
+            kind=kind,
+            number=number,
+            section_index=self.index,
+            paragraph_index=paragraph_index,
+        )
+
+    def append_footnote(
+        self,
+        text: str,
+        *,
+        number: int | str | None = None,
+        paragraph_index: int | None = None,
+    ) -> None:
+        self.append_note(text, kind="footNote", number=number, paragraph_index=paragraph_index)
+
+    def append_endnote(
+        self,
+        text: str,
+        *,
+        number: int | str | None = None,
+        paragraph_index: int | None = None,
+    ) -> None:
+        self.append_note(text, kind="endNote", number=number, paragraph_index=paragraph_index)
+
+    def append_auto_number(
+        self,
+        *,
+        number: int | str = 1,
+        number_type: str = "PAGE",
+        kind: str = "newNum",
+        paragraph_index: int | None = None,
+    ) -> None:
+        self.document.append_auto_number(
+            number=number,
+            number_type=number_type,
+            kind=kind,
+            section_index=self.index,
+            paragraph_index=paragraph_index,
+        )
+
+    def append_header(self, text: str) -> None:
+        self.document.append_header(text, section_index=self.index)
+
+    def append_footer(self, text: str) -> None:
+        self.document.append_footer(text, section_index=self.index)
 
     def append_equation(
         self,
@@ -1109,6 +1346,15 @@ class HwpPictureObject(HwpControlObject):
         suffix = Path(self.bindata_path()).suffix
         return suffix.lstrip(".") or None
 
+    def size(self) -> dict[str, int]:
+        shape_component = self._shape_component_record()
+        if shape_component is None or len(shape_component.payload) < 28:
+            return {"width": 0, "height": 0}
+        return {
+            "width": int.from_bytes(shape_component.payload[20:24], "little", signed=False),
+            "height": int.from_bytes(shape_component.payload[24:28], "little", signed=False),
+        }
+
     def binary_data(self) -> bytes:
         return self.document.binary_document().read_stream(self.bindata_path(), decompress=False)
 
@@ -1131,6 +1377,36 @@ class HwpPictureObject(HwpControlObject):
             if node.tag_id == TAG_SHAPE_COMPONENT_PICTURE:
                 return node
         raise ValueError("HWP picture control does not contain a shape picture record.")
+
+    def _shape_component_record(self, control_node: RecordNode | None = None) -> RecordNode | None:
+        target = self.control_node if control_node is None else control_node
+        for node in target.iter_descendants():
+            if node.tag_id == TAG_SHAPE_COMPONENT:
+                return node
+        return None
+
+
+class HwpBookmarkObject(HwpControlObject):
+    @property
+    def name(self) -> str:
+        data_node = next((child for child in self.control_node.children if child.tag_id == TAG_CTRL_DATA), None)
+        if data_node is None or len(data_node.payload) < 12:
+            return ""
+        name_size = int.from_bytes(data_node.payload[10:12], "little", signed=False)
+        encoded_name = data_node.payload[12 : 12 + name_size * 2]
+        return encoded_name.decode("utf-16-le", errors="ignore")
+
+    def rename(self, value: str) -> None:
+        section_model, _paragraph, control_node = self._live_context()
+        data_node = next((child for child in control_node.children if child.tag_id == TAG_CTRL_DATA), None)
+        if data_node is None:
+            raise ValueError("HWP bookmark control does not contain ctrl data.")
+        prefix = data_node.payload[:10]
+        payload = bytearray(prefix)
+        payload.extend(len(value).to_bytes(2, "little", signed=False))
+        payload.extend(value.encode("utf-16-le"))
+        data_node.payload = bytes(payload)
+        self._commit(section_model)
 
 
 class HwpFieldObject(HwpControlObject):
@@ -1185,6 +1461,135 @@ class HwpHyperlinkObject(HwpFieldObject):
         paragraph.header.char_count = len(raw_text)
         self._commit(section_model)
 
+
+class HwpAutoNumberObject(HwpControlObject):
+    @property
+    def kind(self) -> str:
+        return "newNum" if self.control_id == "nwno" else "autoNum"
+
+    @property
+    def number(self) -> str | None:
+        payload = self.control_node.payload
+        if self.control_id == "nwno" and len(payload) >= 10:
+            return str(int.from_bytes(payload[8:10], "little"))
+        if self.control_id == "atno":
+            return "1"
+        return None
+
+    @property
+    def number_type(self) -> str:
+        return "PAGE"
+
+    def set_number(self, value: int | str) -> None:
+        if self.control_id != "nwno":
+            raise ValueError("Only newNum controls support explicit numeric rewrites in the native HWP wrapper.")
+        section_model, _paragraph, control_node = self._live_context()
+        payload = bytearray(control_node.payload)
+        payload[8:10] = int(value).to_bytes(2, "little", signed=False)
+        control_node.payload = bytes(payload)
+        self._commit(section_model)
+
+
+class HwpHeaderFooterObject(HwpControlObject):
+    @property
+    def kind(self) -> str:
+        return "header" if self.control_id == "head" else "footer"
+
+    @property
+    def text(self) -> str:
+        return _collect_text_from_node(self.control_node).replace("\r", "").strip()
+
+    def set_text(self, value: str) -> None:
+        section_model, _paragraph, control_node = self._live_context()
+        paragraph_headers = [node for node in control_node.children if isinstance(node, ParagraphHeaderRecord)]
+        if not paragraph_headers:
+            raise ValueError("HWP header/footer control does not contain a writable paragraph header.")
+        target = paragraph_headers[0]
+        text_record = next((child for child in target.children if isinstance(child, ParagraphTextRecord)), None)
+        raw_text = f"{value}\r" if value else ""
+        if text_record is None:
+            text_record = ParagraphTextRecord(level=target.level + 1, raw_text=raw_text)
+            target.children.insert(0, text_record)
+        else:
+            text_record.set_raw_text(raw_text)
+        target.char_count = len(raw_text)
+        target.sync_payload()
+        self._commit(section_model)
+
+
+class HwpNoteObject(HwpControlObject):
+    @property
+    def kind(self) -> str:
+        return "footNote" if self.control_id == "fn  " else "endNote"
+
+    @property
+    def number(self) -> str | None:
+        return None
+
+    @property
+    def text(self) -> str:
+        return _collect_text_from_node(self.control_node).replace("\r", "").strip()
+
+    def set_text(self, value: str) -> None:
+        section_model, _paragraph, control_node = self._live_context()
+        paragraph_headers = [node for node in control_node.children if isinstance(node, ParagraphHeaderRecord)]
+        if not paragraph_headers:
+            raise ValueError("HWP note control does not contain a writable paragraph header.")
+        target = paragraph_headers[0]
+        text_record = next((child for child in target.children if isinstance(child, ParagraphTextRecord)), None)
+        raw_text = f"{value}\r" if value else ""
+        if text_record is None:
+            text_record = ParagraphTextRecord(level=target.level + 1, raw_text=raw_text)
+            target.children.insert(0, text_record)
+        else:
+            text_record.set_raw_text(raw_text)
+        target.char_count = 0x80000000 | len(raw_text)
+        target.sync_payload()
+        self._commit(section_model)
+
+
+class HwpPageNumObject(HwpControlObject):
+    @property
+    def pos(self) -> str:
+        payload = self.control_node.payload
+        attributes = int.from_bytes(payload[4:8].ljust(4, b"\x00"), "little")
+        positions = {
+            0: "NONE",
+            1: "TOP_LEFT",
+            2: "TOP_CENTER",
+            3: "TOP_RIGHT",
+            4: "BOTTOM_LEFT",
+            5: "BOTTOM_CENTER",
+            6: "BOTTOM_RIGHT",
+            7: "OUTSIDE_TOP",
+            8: "OUTSIDE_BOTTOM",
+            9: "INSIDE_TOP",
+            10: "INSIDE_BOTTOM",
+        }
+        return positions.get((attributes >> 8) & 0x0F, "BOTTOM_CENTER")
+
+    @property
+    def format_type(self) -> str:
+        payload = self.control_node.payload
+        attributes = int.from_bytes(payload[4:8].ljust(4, b"\x00"), "little")
+        formats = {
+            0: "DIGIT",
+            1: "CIRCLED_DIGIT",
+            2: "ROMAN_CAPITAL",
+            3: "ROMAN_SMALL",
+            4: "LATIN_CAPITAL",
+            5: "LATIN_SMALL",
+        }
+        return formats.get(attributes & 0xFF, "DIGIT")
+
+    @property
+    def side_char(self) -> str:
+        payload = self.control_node.payload
+        if len(payload) < 16:
+            return "-"
+        return payload[14:16].decode("utf-16-le", errors="ignore") or "-"
+
+
 class HwpEquationObject(HwpControlObject):
     @property
     def script(self) -> str:
@@ -1193,9 +1598,12 @@ class HwpEquationObject(HwpControlObject):
             return ""
         decoded = eqedit_record.payload[4:].decode("utf-16-le", errors="ignore")
         script = decoded.split("Equation Version", 1)[0].replace("\x00", "").strip()
+        if "ь" in script:
+            script = script.split("ь", 1)[0]
+        script = "".join(character for character in script if ord(character) >= 32 or character in "\t\n")
         if script.startswith("* "):
             script = script[2:]
-        return script.strip()
+        return script.rstrip("`").strip()
 
     def _eqedit_record(self, control_node: RecordNode | None = None) -> RecordNode | None:
         target = self.control_node if control_node is None else control_node
@@ -1264,14 +1672,20 @@ class HwpOleObject(HwpShapeObject):
     def kind(self) -> str:
         return "ole"
 
-    def replace_binary(self, data: bytes, *, extension: str | None = None) -> None:
+    def bindata_path(self) -> str:
         bindata_path = next(
             (stream_path for stream_path in self.document.bindata_stream_paths() if stream_path.endswith(".ole")),
             None,
         )
         if bindata_path is None:
-            raise ValueError("No OLE BinData stream is available to replace.")
-        self.document.binary_document().add_stream(bindata_path, data)
+            raise ValueError("No OLE BinData stream is available.")
+        return bindata_path
+
+    def binary_data(self) -> bytes:
+        return self.document.binary_document().read_stream(self.bindata_path(), decompress=False)
+
+    def replace_binary(self, data: bytes, *, extension: str | None = None) -> None:
+        self.document.binary_document().add_stream(self.bindata_path(), data)
         self.document._invalidate_bridge()
 
 
@@ -1285,10 +1699,20 @@ def _build_control_wrapper(
     control_id = _control_id(control_node)
     if control_id == "tbl ":
         return HwpTableObject(document, paragraph, control_node, control_ordinal)
+    if control_id == "bokm":
+        return HwpBookmarkObject(document, paragraph, control_node, control_ordinal)
+    if control_id in {"fn  ", "en  "}:
+        return HwpNoteObject(document, paragraph, control_node, control_ordinal)
     if control_id == "%hlk":
         return HwpHyperlinkObject(document, paragraph, control_node, control_ordinal)
     if control_id.startswith("%"):
         return HwpFieldObject(document, paragraph, control_node, control_ordinal)
+    if control_id in {"atno", "nwno"}:
+        return HwpAutoNumberObject(document, paragraph, control_node, control_ordinal)
+    if control_id in {"head", "foot"}:
+        return HwpHeaderFooterObject(document, paragraph, control_node, control_ordinal)
+    if control_id == "pgnp":
+        return HwpPageNumObject(document, paragraph, control_node, control_ordinal)
     if control_id == "eqed":
         return HwpEquationObject(document, paragraph, control_node, control_ordinal)
     if control_id == "gso " and _control_has_descendant(control_node, TAG_SHAPE_COMPONENT_OLE):

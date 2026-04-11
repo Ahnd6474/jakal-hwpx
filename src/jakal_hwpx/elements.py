@@ -1257,6 +1257,7 @@ class SectionSettingsXml:
                 "fill",
                 "hideFirstPageNum",
                 "hideFirstEmptyLine",
+                "showLineNumber",
             )
         }
 
@@ -1270,6 +1271,7 @@ class SectionSettingsXml:
         fill: str | None = None,
         hide_first_page_num: bool | None = None,
         hide_first_empty_line: bool | None = None,
+        show_line_number: bool | None = None,
     ) -> None:
         node = _first_node(self.element, "./hp:visibility")
         _set_optional_attributes(
@@ -1281,6 +1283,7 @@ class SectionSettingsXml:
             fill=fill,
             hideFirstPageNum=hide_first_page_num,
             hideFirstEmptyLine=hide_first_empty_line,
+            showLineNumber=show_line_number,
         )
         self.section.mark_modified()
 

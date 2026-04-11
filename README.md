@@ -53,13 +53,13 @@ doc.set_paragraph_text(0, 0, "Hello HWPX")
 doc.save("build/hello.hwpx")
 ```
 
-이 패키지는 ZIP 기반 HWPX 패키지를 주 대상으로 동작합니다. `.hwp -> .hwpx` 변환기는 여전히 번들하지 않습니다.
+이 패키지는 ZIP 기반 HWPX 패키지를 주 대상으로 동작합니다. `.hwp <-> .hwpx` pure-python 브리지도 포함하지만, Hancom과 byte-identical한 완전 호환 변환기를 목표로 하지는 않습니다.
 
 실험적 저수준 `.hwp` 지원도 포함합니다. `HwpBinaryDocument`는 Compound File 기반 legacy HWP 문서에서 `FileHeader`, `DocInfo`, `BodyText/Section*`, `PrvText`를 읽고, 기존 스트림 크기를 보존하는 범위에서 미리보기 텍스트와 본문 텍스트의 same-length 치환을 저장할 수 있습니다.
 
-객체 기반 실험 API인 `HwpDocument`도 포함합니다. 이 레이어는 `HwpSection`, `HwpParagraphObject`를 통해 `.hwp` 문서를 `HwpxDocument`와 비슷한 방식으로 다루도록 맞춘 래퍼입니다. Windows에서 한컴오피스 자동화가 가능한 환경이라면 내부적으로 `.hwp -> .hwpx -> HwpxDocument` 브리지를 사용해 `tables()`, `pictures()`, `append_paragraph()`, `append_table()` 같은 고수준 API도 그대로 위임할 수 있습니다.
+객체 기반 실험 API인 `HwpDocument`도 포함합니다. 이 레이어는 `HwpSection`, `HwpParagraphObject`를 통해 `.hwp` 문서를 `HwpxDocument`와 비슷한 방식으로 다루도록 맞춘 래퍼입니다. 현재 `.hwp -> HancomDocument IR -> HwpxDocument`와 `HwpxDocument -> HancomDocument IR -> .hwp`를 pure Python으로 수행하므로 `tables()`, `pictures()`, `append_paragraph()`, `append_table()`, `save(...hwpx)` 같은 고수준 흐름을 Hancom 자동화 없이 사용할 수 있습니다.
 
-Windows + Hancom automation 없이도 pure-python 실험 경로를 추가했습니다. `build_hwp_pure_profile()`는 `hwp_collection/`에서 `table + picture + hyperlink`가 함께 있는 donor를 골라 `base.hwp + feature templates`를 추출하고, `HwpDocument.blank_from_profile()`은 그 profile만으로 `append_table_pure()`, `append_picture_pure()`, `append_hyperlink_pure()`를 수행합니다.
+`build_hwp_pure_profile()`는 `hwp_collection/`에서 `table + picture + hyperlink`가 함께 있는 donor를 골라 `base.hwp + feature templates`를 추출하고, `HwpDocument.blank_from_profile()`은 그 profile만으로 `append_table_pure()`, `append_picture_pure()`, `append_hyperlink_pure()`를 수행합니다.
 기본 bundled profile도 패키지에 포함되므로, donor나 profile 경로를 따로 넘기지 않아도 `HwpDocument.blank()`와 `append_*_pure()`를 바로 사용할 수 있습니다.
 
 ```python
@@ -74,11 +74,12 @@ paragraph = next(p for p in doc.section(0).paragraphs() if "2027" in p.text)
 paragraph.replace_text_same_length("2027", "2028", count=1)
 doc.save("build/edited.hwp")
 
-# Hancom automation is available:
+# Pure-python HWP <-> HWPX bridge:
 doc = HwpDocument.open("input.hwp")
 doc.append_paragraph("Bridge paragraph")
-doc.append_hyperlink("https://example.com", display_text="Example")
+doc.append_hyperlink("https://example.com", text="Example")
 doc.save("build/edited_via_bridge.hwp")
+doc.save("build/edited_via_bridge.hwpx")
 
 # Pure-python experimental path:
 from jakal_hwpx import HwpDocument, build_hwp_pure_profile
@@ -150,15 +151,15 @@ doc.save("build/bundled_pure_output.hwp")
 - Python `3.11`, `3.12`, `3.13`
 - ZIP 기반 `HWPX` 패키지의 열기, 수정, 검증, 컴파일, 저장
 - legacy binary `.hwp` 파일의 저수준 열기, 스트림 파싱, 미리보기/본문 same-length 수정, 저장
-- Windows + Hancom automation 환경에서 `.hwp`의 high-level HWPX bridge editing
+- Hancom automation 없이 `.hwp`의 pure-python high-level HWPX bridge editing / export
 - `hwp_collection` 기반 pure-python profile build 및 template-backed `append_table_pure()/append_picture_pure()/append_hyperlink_pure()`
 - `jakal_hwpx` top-level export를 통한 문서 편집 흐름
 
 비지원:
 
-- `.hwp -> .hwpx` 변환기 번들 제공
-- 새로운 `.hwp` 문서 blank 생성이나 전체 OLE Compound File 재작성
-- Hancom automation이 없는 환경에서 `.hwp`에 대한 HWPX 수준의 고수준 편집
+- Hancom과 동일 fidelity의 `.hwp <-> .hwpx` 완전 변환기
+- multi-section / header-footer / note / bookmark까지 포함한 full-fidelity HWP binary writer
+- donor/profile 없이 모든 HWP control을 임의 구조로 생성하는 범용 pure-python authoring
 - top-level `jakal_hwpx` export 밖의 내부 import 경로에 대한 호환성 보장
 
 ## 예제
@@ -235,7 +236,7 @@ powershell -ExecutionPolicy Bypass -File scripts/run_hancom_smoke_validation.ps1
 powershell -ExecutionPolicy Bypass -File scripts/run_hancom_corpus_smoke_validation.ps1
 ```
 
-The Hancom smoke validator registers the official security module, calls `RegisterModule("FilePathCheckDLL", "FilePathCheckerModuleExample")`, and emits a structured `.run.json` log. It also fails fast when existing `Hwp.exe` processes would make COM validation unreliable.
+Pure-python bridge가 기본 경로이고, Hancom smoke validator는 선택적 호환성 검증용입니다. 이 스크립트는 공식 security module을 등록하고 `RegisterModule("FilePathCheckDLL", "FilePathCheckerModuleExample")`를 호출한 뒤 구조화된 `.run.json` 로그를 남깁니다. 또한 기존 `Hwp.exe` 프로세스 때문에 COM 검증이 흔들릴 수 있는 경우 즉시 실패합니다.
 
 테스트는 `examples/samples/hwpx/` 아래의 고정 fixture corpus를 사용합니다. 로컬과 CI가 같은 경로를 사용하도록 고정해 두었기 때문에 테스트 커버리지가 실행 환경에 따라 흔들리지 않습니다.
 

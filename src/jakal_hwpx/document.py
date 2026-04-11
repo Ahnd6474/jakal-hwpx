@@ -2223,14 +2223,12 @@ class HwpxDocument:
         return output_path
 
     def to_hwp_document(self, *, converter=None):
-        from .bridge import HwpHwpxBridge
+        from .hancom_document import HancomDocument
 
-        return HwpHwpxBridge.from_hwpx(self, converter=converter).hwp_document(force_refresh=True)
+        return HancomDocument.from_hwpx_document(self, converter=converter).to_hwp_document(converter=converter)
 
     def save_as_hwp(self, path: str | os.PathLike[str], *, converter=None, force_refresh: bool = True) -> Path:
-        from .bridge import HwpHwpxBridge
-
-        return HwpHwpxBridge.from_hwpx(self, converter=converter).save_hwp(path, force_refresh=force_refresh)
+        return self.to_hwp_document(converter=converter).save(path)
 
     def bridge(self, *, converter=None):
         from .bridge import HwpHwpxBridge

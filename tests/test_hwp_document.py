@@ -6,11 +6,15 @@ import pytest
 
 from jakal_hwpx import (
     DocInfoModel,
+    HwpAutoNumberObject,
+    HwpBookmarkObject,
     HwpDocument,
     HwpDocumentProperties,
     HwpEquationObject,
     HwpFieldObject,
+    HwpHeaderFooterObject,
     HwpHyperlinkObject,
+    HwpNoteObject,
     HwpOleObject,
     HwpParagraphObject,
     HwpPictureObject,
@@ -27,6 +31,14 @@ from jakal_hwpx import (
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 HWP_SAMPLE_DIR = REPO_ROOT / "examples" / "samples" / "hwp"
+NATIVE_HWP_PATH = (
+    REPO_ROOT
+    / "examples"
+    / "output_bridge_stability_lab"
+    / "hancom"
+    / "from_hwp_save_native_hwp"
+    / "native.hwp"
+)
 
 
 @pytest.fixture(scope="session")
@@ -76,6 +88,187 @@ def test_hwp_document_pure_append_paragraph_roundtrips(sample_hwp_path: Path, tm
     document.save(output_path)
     reopened = HwpDocument.open(output_path)
     assert "Pure document paragraph" in reopened.get_document_text()
+
+
+def test_hwp_document_blank_starts_without_profile_body_text(tmp_path: Path) -> None:
+    document = HwpDocument.blank()
+
+    assert document.get_document_text().strip() == ""
+    assert document.preview_text() == ""
+
+    output_path = tmp_path / "blank_document.hwp"
+    document.save(output_path)
+
+    reopened = HwpDocument.open(output_path)
+    assert reopened.get_document_text().strip() == ""
+    assert reopened.preview_text() == ""
+
+
+def test_hwp_document_append_paragraph_can_auto_grow_sections(tmp_path: Path) -> None:
+    document = HwpDocument.blank()
+
+    document.append_paragraph("SECTION-0", section_index=0)
+    document.append_paragraph("SECTION-2", section_index=2)
+    document.append_paragraph("SECTION-3", section_index=3)
+
+    output_path = tmp_path / "multi_section_append.hwp"
+    document.save(output_path)
+
+    reopened = HwpDocument.open(output_path)
+    assert len(reopened.sections()) == 4
+    assert any(paragraph.text.strip() == "SECTION-0" for paragraph in reopened.section(0).paragraphs())
+    assert any(paragraph.text.strip() == "SECTION-2" for paragraph in reopened.section(2).paragraphs())
+    assert any(paragraph.text.strip() == "SECTION-3" for paragraph in reopened.section(3).paragraphs())
+    assert "목 차" not in reopened.get_document_text()
+
+
+def test_hwp_document_bridge_section_settings_roundtrip_to_native_hwp(tmp_path: Path) -> None:
+    document = HwpDocument.blank()
+    settings = document.section_settings(0)
+    settings.set_page_size(width=123456, height=98765, landscape="LANDSCAPE")
+    settings.set_margins(left=1111, right=2222, top=3333, bottom=4444, header=5555, footer=6666, gutter=7777)
+
+    output_path = tmp_path / "bridge_section_settings.hwp"
+    document.save(output_path)
+
+    reopened = HwpDocument.open(output_path).to_hwpx_document()
+    reopened_settings = reopened.section_settings(0)
+    assert reopened_settings.page_width == 123456
+    assert reopened_settings.page_height == 98765
+    assert reopened_settings.margins()["left"] == 1111
+    assert reopened_settings.margins()["right"] == 2222
+    assert reopened_settings.margins()["top"] == 3333
+    assert reopened_settings.margins()["bottom"] == 4444
+    assert reopened_settings.margins()["header"] == 5555
+    assert reopened_settings.margins()["footer"] == 6666
+    assert reopened_settings.margins()["gutter"] == 7777
+
+
+def test_hwp_document_can_roundtrip_section_page_border_fills_to_native_hwp(tmp_path: Path) -> None:
+    document = HwpDocument.blank()
+    document.apply_section_page_border_fills(
+        [
+            {
+                "type": "BOTH",
+                "borderFillIDRef": "1",
+                "textBorder": "BORDER",
+                "headerInside": "1",
+                "footerInside": "1",
+                "fillArea": "BORDER",
+                "left": 2222,
+                "right": 3333,
+                "top": 4444,
+                "bottom": 5555,
+            },
+            {
+                "type": "EVEN",
+                "borderFillIDRef": "1",
+                "textBorder": "PAPER",
+                "headerInside": "0",
+                "footerInside": "0",
+                "fillArea": "BORDER",
+                "left": 123,
+                "right": 456,
+                "top": 789,
+                "bottom": 987,
+            },
+            {
+                "type": "ODD",
+                "borderFillIDRef": "1",
+                "textBorder": "BORDER",
+                "headerInside": "0",
+                "footerInside": "0",
+                "fillArea": "PAPER",
+                "left": 11,
+                "right": 22,
+                "top": 33,
+                "bottom": 44,
+            },
+        ]
+    )
+
+    output_path = tmp_path / "bridge_section_page_border_fill.hwp"
+    document.save(output_path)
+
+    reopened = HwpDocument.open(output_path).to_hwpx_document()
+    both = reopened.section_xml(0).find(".//hp:pageBorderFill[@type='BOTH']")
+    even = reopened.section_xml(0).find(".//hp:pageBorderFill[@type='EVEN']")
+    odd = reopened.section_xml(0).find(".//hp:pageBorderFill[@type='ODD']")
+    assert both is not None
+    assert even is not None
+    assert odd is not None
+    assert both.get_attr("textBorder") == "BORDER"
+    assert both.get_attr("headerInside") == "1"
+    assert both.get_attr("footerInside") == "1"
+    assert both.get_attr("fillArea") == "BORDER"
+    assert both.find("./hp:offset").get_attr("left") == "2222"
+    assert both.find("./hp:offset").get_attr("right") == "3333"
+    assert even.get_attr("fillArea") == "BORDER"
+    assert even.find("./hp:offset").get_attr("top") == "789"
+    assert odd.get_attr("textBorder") == "BORDER"
+    assert odd.find("./hp:offset").get_attr("bottom") == "44"
+
+
+def test_hwp_document_can_roundtrip_section_definition_settings_to_native_hwp(tmp_path: Path) -> None:
+    document = HwpDocument.blank()
+    settings = document.section_settings(0)
+    settings.set_grid(line_grid=42, char_grid=21, wonggoji_format=True)
+    settings.set_start_numbers(page_starts_on="ODD", page=7, pic=8, tbl=9, equation=10)
+    settings.set_visibility(
+        hide_first_header=True,
+        hide_first_footer=True,
+        hide_first_master_page=True,
+        hide_first_page_num=True,
+        hide_first_empty_line=True,
+    )
+
+    output_path = tmp_path / "bridge_section_definition_settings.hwp"
+    document.save(output_path)
+
+    reopened = HwpDocument.open(output_path).to_hwpx_document()
+    reopened_settings = reopened.section_settings(0)
+    assert reopened_settings.grid() == {"lineGrid": 42, "charGrid": 21, "wonggojiFormat": 1}
+    assert reopened_settings.start_numbers() == {
+        "pageStartsOn": "ODD",
+        "page": "7",
+        "pic": "8",
+        "tbl": "9",
+        "equation": "10",
+    }
+    assert reopened_settings.visibility()["hideFirstHeader"] == "1"
+    assert reopened_settings.visibility()["hideFirstFooter"] == "1"
+    assert reopened_settings.visibility()["hideFirstMasterPage"] == "1"
+    assert reopened_settings.visibility()["hideFirstPageNum"] == "1"
+    assert reopened_settings.visibility()["hideFirstEmptyLine"] == "1"
+
+
+def test_hwp_document_can_roundtrip_native_show_line_number_with_best_effort_line_number_shape(tmp_path: Path) -> None:
+    document = HwpDocument.blank()
+    document.set_paragraph_text(0, 0, "alpha")
+    document.append_paragraph("beta")
+    document.append_paragraph("gamma")
+    settings = document.section_settings(0)
+    settings.set_visibility(show_line_number=True)
+    line_number_shape = document.section_xml(0).find(".//hp:lineNumberShape")
+    assert line_number_shape is not None
+    line_number_shape.set_attr("restartType", 1).set_attr("countBy", 3).set_attr("distance", 150).set_attr("startNumber", 7)
+
+    output_path = tmp_path / "native_show_line_number.hwp"
+    document.save(output_path)
+
+    reopened_hwp = HwpDocument.open(output_path)
+    native_settings = reopened_hwp.binary_document().section_definition_settings(0)
+    assert native_settings["visibility"]["showLineNumber"] == "1"
+
+    reopened = reopened_hwp.to_hwpx_document()
+    reopened_settings = reopened.section_settings(0)
+    assert reopened_settings.visibility()["showLineNumber"] == "1"
+    reopened_line_number = reopened.section_xml(0).find(".//hp:lineNumberShape")
+    assert reopened_line_number is not None
+    assert reopened_line_number.get_attr("restartType") == "0"
+    assert reopened_line_number.get_attr("countBy") == "0"
+    assert reopened_line_number.get_attr("distance") == "0"
+    assert reopened_line_number.get_attr("startNumber") == "0"
 
 
 def test_hwp_paragraph_object_can_replace_same_length_text_and_roundtrip(
@@ -140,8 +333,7 @@ def test_hwp_document_can_bridge_to_hwpx_high_level_api(
     output_hwp = tmp_path / "bridged.hwp"
     document.save(output_hwp)
     assert output_hwp.exists()
-    assert any(item[2] == "HWPX" for item in conversions)
-    assert any(item[2] == "HWP" for item in conversions)
+    assert conversions == []
 
 
 def test_hwp_document_exposes_direct_pure_python_control_append_methods(tmp_path: Path) -> None:
@@ -411,14 +603,82 @@ def test_hwp_section_append_helpers_create_controls_in_target_section() -> None:
     section = document.section(0)
 
     section.append_field(field_type="DATE")
+    section.append_bookmark("SEC-BOOKMARK")
+    section.append_footnote("SEC-FOOTNOTE")
+    section.append_endnote("SEC-ENDNOTE")
+    section.append_auto_number(number=7, kind="newNum")
+    section.append_header("SEC-HEADER")
+    section.append_footer("SEC-FOOTER")
     section.append_equation("a+b")
     section.append_shape(kind="ellipse", text="SEC-SHAPE")
     section.append_ole("sec.ole", b"section-ole")
 
     assert any(field.field_type == "%dat" for field in section.fields())
+    assert any(isinstance(control, HwpBookmarkObject) and control.name == "SEC-BOOKMARK" for control in section.controls())
+    assert any(isinstance(control, HwpNoteObject) and control.kind == "footNote" and control.text == "SEC-FOOTNOTE" for control in section.controls())
+    assert any(isinstance(control, HwpNoteObject) and control.kind == "endNote" and control.text == "SEC-ENDNOTE" for control in section.controls())
+    assert any(isinstance(control, HwpAutoNumberObject) and control.kind == "newNum" for control in section.controls())
+    assert any(isinstance(control, HwpHeaderFooterObject) and control.kind == "header" and control.text == "SEC-HEADER" for control in section.controls())
+    assert any(isinstance(control, HwpHeaderFooterObject) and control.kind == "footer" and control.text == "SEC-FOOTER" for control in section.controls())
     assert any(equation.script == "a+b" for equation in section.equations())
     assert any(shape.kind == "ellipse" for shape in section.shapes())
     assert len(section.oles()) == 1
+
+
+def test_hwp_document_can_append_header_footer_and_new_number_and_bridge_back(tmp_path: Path) -> None:
+    document = HwpDocument.blank()
+
+    document.append_header("PURE-HEADER")
+    document.append_footer("PURE-FOOTER")
+    document.append_auto_number(number=7, kind="newNum")
+
+    output_path = tmp_path / "hwp_header_footer_number.hwp"
+    document.save(output_path)
+
+    reopened = HwpDocument.open(output_path)
+    controls = reopened.section(0).controls()
+    assert any(isinstance(control, HwpHeaderFooterObject) and control.kind == "header" and control.text == "PURE-HEADER" for control in controls)
+    assert any(isinstance(control, HwpHeaderFooterObject) and control.kind == "footer" and control.text == "PURE-FOOTER" for control in controls)
+    assert any(isinstance(control, HwpAutoNumberObject) and control.kind == "newNum" and control.number == "7" for control in controls)
+
+    bridged = reopened.to_hwpx_document()
+    assert bridged.headers()[0].text == "PURE-HEADER"
+    assert bridged.footers()[0].text == "PURE-FOOTER"
+    assert any(item.kind == "newNum" and item.number == "7" for item in bridged.auto_numbers())
+
+
+def test_hwp_document_can_append_bookmark_and_notes_and_bridge_back(tmp_path: Path) -> None:
+    document = HwpDocument.blank()
+
+    document.append_paragraph("BASE")
+    document.append_bookmark("py_anchor")
+    document.append_footnote("Pure footnote", number=1)
+    document.append_endnote("Pure endnote", number=2)
+
+    output_path = tmp_path / "hwp_bookmark_notes.hwp"
+    document.save(output_path)
+
+    reopened = HwpDocument.open(output_path)
+    assert any(isinstance(control, HwpBookmarkObject) and control.name == "py_anchor" for control in reopened.controls())
+    assert any(isinstance(control, HwpNoteObject) and control.kind == "footNote" and control.text == "Pure footnote" for control in reopened.controls())
+    assert any(isinstance(control, HwpNoteObject) and control.kind == "endNote" and control.text == "Pure endnote" for control in reopened.controls())
+
+    bridged = reopened.to_hwpx_document()
+    assert any(item.name == "py_anchor" for item in bridged.bookmarks())
+    assert any(item.kind == "footNote" and item.text == "Pure footnote" for item in bridged.notes())
+    assert any(item.kind == "endNote" and item.text == "Pure endnote" for item in bridged.notes())
+
+
+def test_hwp_document_pure_bridge_extracts_native_header_and_auto_number_controls(tmp_path: Path) -> None:
+    if not NATIVE_HWP_PATH.exists():
+        pytest.skip("native.hwp sample is not available in this workspace.")
+
+    document = HwpDocument.open(NATIVE_HWP_PATH)
+    bridged = document.to_hwpx_document()
+
+    assert bridged.headers()
+    assert any((header.text or "").strip() for header in bridged.headers())
+    assert any(item.kind == "autoNum" for item in bridged.auto_numbers())
 
 
 def test_hwp_document_append_methods_support_paragraph_index() -> None:

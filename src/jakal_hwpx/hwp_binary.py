@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 import struct
 import zlib
 from collections.abc import Sequence
@@ -166,6 +167,54 @@ _PICTURE_SHAPE_PICTURE = bytes.fromhex(
     "00000000000000000000000100"
 )
 
+_CONTROL_MARKER_CODES = {
+    "head": 0x10,
+    "foot": 0x10,
+    "atno": 0x12,
+    "nwno": 0x15,
+    "pgnp": 0x15,
+    "fn  ": 0x11,
+    "en  ": 0x11,
+    "bokm": 0x16,
+}
+_AUTO_NUMBER_TYPE_CODES = {
+    "PAGE": 0x0C,
+}
+
+_HEADER_CTRL_HEADER = bytes.fromhex("646165680000000002000000")
+_HEADER_LIST_HEADER = bytes.fromhex("01000000000000003ebc00009b100000000000000000000000000000000000000000")
+_HEADER_PARA_HEADER = bytes.fromhex("01000080000000001b000a00010000000100000000800000")
+_HEADER_PARA_CHAR_SHAPE = bytes.fromhex("0000000014000000")
+_HEADER_PARA_LINE_SEG = bytes.fromhex("00000000000000006400000064000000550000003c000000000000003cbc000000000600")
+
+_FOOTER_CTRL_HEADER = bytes.fromhex("746f6f6600000000")
+_FOOTER_LIST_HEADER = bytes.fromhex("01000000400000003ebc00009c100000000000000000000000000000000000000000")
+_FOOTER_PARA_HEADER = bytes.fromhex("01000080000000002f00000001000000010000000080")
+_FOOTER_PARA_CHAR_SHAPE = bytes.fromhex("000000006a000000")
+_FOOTER_PARA_LINE_SEG = bytes.fromhex("00000000000000008403000084030000fd0200001c020000000000003cbc000000000600")
+
+_BOOKMARK_CTRL_DATA_PREFIX = bytes.fromhex("1b020100000000400100")
+
+_FOOTNOTE_CTRL_HEADER = bytes.fromhex("20206e6601000000000029000000000000000000")
+_ENDNOTE_CTRL_HEADER = bytes.fromhex("20206e6501000000000029000000000000000000")
+_NOTE_LIST_HEADER = bytes.fromhex("01000000000000000000000000000000")
+_NOTE_PARA_HEADER = bytes.fromhex("000000800000000000000000010000000000010000000000")
+_NOTE_CHAR_SHAPE = bytes.fromhex("0000000000000000")
+_NOTE_LINE_SEG = bytes.fromhex("0000000000000000e8030000e803000052030000580200000000000018a6000000000600")
+
+_BLANK_DROP_CONTROL_IDS = {
+    "atno",
+    "bokm",
+    "en  ",
+    "eqed",
+    "fn  ",
+    "foot",
+    "gso ",
+    "head",
+    "nwno",
+    "tbl ",
+}
+
 
 def _build_control_id_payload(control_id: str) -> bytes:
     normalized = control_id[:4].ljust(4)
@@ -191,6 +240,618 @@ def _build_minimal_shape_component_payload(width: int, height: int) -> bytes:
     payload[20:24] = int(width).to_bytes(4, "little", signed=False)
     payload[24:28] = int(height).to_bytes(4, "little", signed=False)
     return bytes(payload)
+
+
+def _decode_control_id_payload(payload: bytes) -> str:
+    if len(payload) < 4:
+        return ""
+    return payload[:4][::-1].decode("latin1", errors="replace")
+
+
+def _iter_paragraph_raw_text_tokens(raw_text: str) -> Iterator[tuple[str, str, str]]:
+    encoded = raw_text.encode("utf-16-le")
+    if not encoded:
+        return
+    units = list(struct.unpack("<" + "H" * (len(encoded) // 2), encoded))
+    text_buffer: list[str] = []
+    index = 0
+    while index < len(units):
+        value = units[index]
+        if value >= 32:
+            text_buffer.append(chr(value))
+            index += 1
+            continue
+
+        if value in (9, 10, 13):
+            text_buffer.append(chr(value))
+
+        if (
+            index + 7 < len(units)
+            and units[index + 3] == 0
+            and units[index + 4] == 0
+            and units[index + 5] == 0
+            and units[index + 6] == 0
+        ):
+            if text_buffer:
+                fragment = "".join(text_buffer)
+                yield ("text", "", fragment)
+                text_buffer = []
+            token_bytes = struct.pack("<8H", *units[index : index + 8])
+            control_id = token_bytes[2:6][::-1].decode("latin1", errors="replace")
+            yield ("control", control_id, token_bytes.decode("utf-16-le", errors="ignore"))
+            index += 8
+            continue
+
+        index += 1
+
+    if text_buffer:
+        yield ("text", "", "".join(text_buffer))
+
+
+def _is_blank_preserved_control_id(control_id: str) -> bool:
+    return not (control_id.startswith("%") or control_id in _BLANK_DROP_CONTROL_IDS)
+
+
+def _build_blank_paragraph_raw_text(raw_text: str) -> str:
+    kept_fragments = [
+        fragment
+        for token_kind, control_id, fragment in _iter_paragraph_raw_text_tokens(raw_text)
+        if token_kind == "control" and _is_blank_preserved_control_id(control_id)
+    ]
+    return "".join(kept_fragments) + "\r"
+
+
+def _build_blank_section_model(model: "SectionModel", *, section_index: int | None = None) -> "SectionModel":
+    target_section_index = model.section_index if section_index is None else section_index
+    paragraphs = model.paragraphs()
+    if not paragraphs:
+        blank_model = SectionModel(section_index=target_section_index, roots=[])
+        blank_model.append_paragraph("\r")
+        return blank_model
+
+    source_header = paragraphs[0].header
+    blank_raw_text = _build_blank_paragraph_raw_text(paragraphs[0].raw_text)
+    blank_children: list[RecordNode] = []
+    text_record_added = False
+
+    for child in source_header.children:
+        if isinstance(child, ParagraphTextRecord):
+            blank_children.append(
+                ParagraphTextRecord(
+                    level=child.level,
+                    raw_text=blank_raw_text,
+                    header_size=child.header_size,
+                    offset=child.offset,
+                )
+            )
+            text_record_added = True
+            continue
+        if child.tag_id == TAG_CTRL_HEADER:
+            control_id = _decode_control_id_payload(child.payload)
+            if _is_blank_preserved_control_id(control_id):
+                blank_children.append(child.clone())
+            continue
+        blank_children.append(child.clone())
+
+    if not text_record_added:
+        blank_children.insert(0, ParagraphTextRecord(level=source_header.level + 1, raw_text=blank_raw_text))
+
+    blank_header = ParagraphHeaderRecord(
+        level=source_header.level,
+        char_count=len(blank_raw_text),
+        control_mask=source_header.control_mask,
+        para_shape_id=source_header.para_shape_id,
+        style_id=source_header.style_id,
+        split_flags=source_header.split_flags,
+        header_size=source_header.header_size,
+        offset=source_header.offset,
+        trailing_payload=source_header.trailing_payload,
+    )
+    blank_header.children = blank_children
+    blank_header.sync_payload()
+    return SectionModel(section_index=target_section_index, roots=[blank_header])
+
+
+def _find_section_definition_control_node(model: "SectionModel") -> RecordNode | None:
+    paragraphs = model.paragraphs()
+    if not paragraphs:
+        return None
+    for child in paragraphs[0].header.children:
+        if child.tag_id == TAG_CTRL_HEADER and _decode_control_id_payload(child.payload) == "secd":
+            return child
+    return None
+
+
+def _find_child_record(node: RecordNode, tag_id: int) -> RecordNode | None:
+    return next((child for child in node.children if child.tag_id == tag_id), None)
+
+
+def _find_paragraph_control_node(model: "SectionModel", control_id: str) -> RecordNode | None:
+    paragraphs = model.paragraphs()
+    if not paragraphs:
+        return None
+    encoded = _build_control_id_payload(control_id)
+    for child in paragraphs[0].header.children:
+        if child.tag_id == TAG_CTRL_HEADER and child.payload[:4] == encoded:
+            return child
+    return None
+
+
+def _insert_paragraph_control_node(model: "SectionModel", control_node: RecordNode, *, after_control_id: str | None = None) -> None:
+    paragraphs = model.paragraphs()
+    if not paragraphs:
+        raise HwpBinaryEditError("Section does not contain a writable paragraph for inserting controls.")
+    children = paragraphs[0].header.children
+    insert_at = len(children)
+    if after_control_id is not None:
+        encoded = _build_control_id_payload(after_control_id)
+        for index, child in enumerate(children):
+            if child.tag_id == TAG_CTRL_HEADER and child.payload[:4] == encoded:
+                insert_at = index + 1
+                break
+    children.insert(insert_at, control_node)
+
+
+_SECTION_DEF_HIDE_HEADER_FLAG = 1 << 0
+_SECTION_DEF_HIDE_FOOTER_FLAG = 1 << 1
+_SECTION_DEF_HIDE_MASTER_PAGE_FLAG = 1 << 2
+_SECTION_DEF_HIDE_PAGE_NUM_FLAG = 1 << 5
+_SECTION_DEF_HIDE_EMPTY_LINE_FLAG = 1 << 19
+_SECTION_DEF_WONGGOJI_FORMAT_FLAG = 1 << 22
+_SECTION_PAGE_STARTS_ON_MASK = 0x3
+_SECTION_PAGE_STARTS_ON_CODES = {
+    "BOTH": 0,
+    "EVEN": 1,
+    "ODD": 2,
+}
+_SECTION_PAGE_STARTS_ON_VALUES = {value: key for key, value in _SECTION_PAGE_STARTS_ON_CODES.items()}
+_PAGE_HIDING_FLAGS = {
+    "hideFirstHeader": 0x01,
+    "hideFirstFooter": 0x02,
+    "hideFirstMasterPage": 0x04,
+    "hideBorder": 0x08,
+    "hideFill": 0x10,
+    "hideFirstPageNum": 0x20,
+}
+_SECTION_DEF_BORDER_FIRST_FLAG = 1 << 8
+_SECTION_DEF_FILL_FIRST_FLAG = 1 << 9
+_PAGE_NUM_POSITION_CODES = {
+    "NONE": 0,
+    "TOP_LEFT": 1,
+    "TOP_CENTER": 2,
+    "TOP_RIGHT": 3,
+    "BOTTOM_LEFT": 4,
+    "BOTTOM_CENTER": 5,
+    "BOTTOM_RIGHT": 6,
+    "OUTSIDE_TOP": 7,
+    "OUTSIDE_BOTTOM": 8,
+    "INSIDE_TOP": 9,
+    "INSIDE_BOTTOM": 10,
+}
+_PAGE_NUM_POSITION_VALUES = {value: key for key, value in _PAGE_NUM_POSITION_CODES.items()}
+_NUMBER_TYPE_CODES = {
+    "DIGIT": 0,
+    "CIRCLED_DIGIT": 1,
+    "ROMAN_CAPITAL": 2,
+    "ROMAN_SMALL": 3,
+    "LATIN_CAPITAL": 4,
+    "LATIN_SMALL": 5,
+    "CIRCLED_LATIN_CAPITAL": 6,
+    "CIRCLED_LATIN_SMALL": 7,
+    "HANGUL_SYLLABLE": 8,
+    "CIRCLED_HANGUL_SYLLABLE": 9,
+    "HANGUL_JAMO": 10,
+    "CIRCLED_HANGUL_JAMO": 11,
+    "HANGUL_PHONETIC": 12,
+    "IDEOGRAPH": 13,
+    "CIRCLED_IDEOGRAPH": 14,
+    "DECAGON_CIRCLE_HANGUL": 15,
+    "DECAGON_CIRCLE_HANJA": 16,
+}
+_NUMBER_TYPE_VALUES = {value: key for key, value in _NUMBER_TYPE_CODES.items()}
+_NOTE_PLACEMENT_CODES = {
+    "EACH_COLUMN": 0,
+    "MERGED_COLUMN": 1,
+    "RIGHT_MOST_COLUMN": 2,
+    "END_OF_DOCUMENT": 0,
+    "END_OF_SECTION": 1,
+}
+_NOTE_NUMBERING_CODES = {
+    "CONTINUOUS": 0,
+    "ON_SECTION": 1,
+    "ON_PAGE": 2,
+}
+_NOTE_NUMBERING_VALUES = {value: key for key, value in _NOTE_NUMBERING_CODES.items()}
+_NOTE_LINE_TYPE_CODES = {
+    "SOLID": 1,
+    "DOT": 2,
+    "DASH": 3,
+}
+_NOTE_LINE_TYPE_VALUES = {value: key for key, value in _NOTE_LINE_TYPE_CODES.items()}
+_NOTE_LINE_WIDTH_CODES = {
+    "0.1 mm": 0,
+    "0.12 mm": 1,
+    "0.15 mm": 2,
+    "0.2 mm": 3,
+    "0.25 mm": 4,
+    "0.3 mm": 5,
+    "0.4 mm": 6,
+    "0.5 mm": 7,
+    "0.6 mm": 8,
+    "0.7 mm": 9,
+    "1.0 mm": 10,
+    "1.5 mm": 11,
+    "2.0 mm": 12,
+    "3.0 mm": 13,
+    "4.0 mm": 14,
+    "5.0 mm": 15,
+}
+_NOTE_LINE_WIDTH_VALUES = {value: key for key, value in _NOTE_LINE_WIDTH_CODES.items()}
+
+
+def _parse_section_definition_payload(payload: bytes) -> dict[str, object]:
+    body = payload[4:].ljust(26, b"\x00")
+    attributes = int.from_bytes(body[0:4], "little")
+    return {
+        "attributes": attributes,
+        "space_columns": int.from_bytes(body[4:6], "little"),
+        "line_grid": int.from_bytes(body[6:8], "little"),
+        "char_grid": int.from_bytes(body[8:10], "little"),
+        "tab_stop": int.from_bytes(body[10:14], "little"),
+        "numbering_shape_id": int.from_bytes(body[14:16], "little"),
+        "page": int.from_bytes(body[16:18], "little"),
+        "pic": int.from_bytes(body[18:20], "little"),
+        "tbl": int.from_bytes(body[20:22], "little"),
+        "equation": int.from_bytes(body[22:24], "little"),
+        "language": int.from_bytes(body[24:26], "little"),
+    }
+
+
+def _build_section_definition_payload(
+    payload: bytes,
+    *,
+    visibility: dict[str, str] | None = None,
+    grid: dict[str, int] | None = None,
+    start_numbers: dict[str, str] | None = None,
+) -> bytes:
+    updated = bytearray(payload[:30].ljust(30, b"\x00"))
+    attributes = int.from_bytes(updated[4:8], "little")
+    if visibility is not None:
+        visibility_flags = {
+            "hideFirstHeader": _SECTION_DEF_HIDE_HEADER_FLAG,
+            "hideFirstFooter": _SECTION_DEF_HIDE_FOOTER_FLAG,
+            "hideFirstMasterPage": _SECTION_DEF_HIDE_MASTER_PAGE_FLAG,
+            "hideFirstPageNum": _SECTION_DEF_HIDE_PAGE_NUM_FLAG,
+            "hideFirstEmptyLine": _SECTION_DEF_HIDE_EMPTY_LINE_FLAG,
+        }
+        for key, flag in visibility_flags.items():
+            if key not in visibility or visibility[key] is None:
+                continue
+            if str(visibility[key]) in {"1", "true", "True"}:
+                attributes |= flag
+            else:
+                attributes &= ~flag
+    if grid is not None:
+        if "lineGrid" in grid and grid["lineGrid"] is not None:
+            updated[10:12] = int(grid["lineGrid"]).to_bytes(2, "little", signed=False)
+        if "charGrid" in grid and grid["charGrid"] is not None:
+            updated[12:14] = int(grid["charGrid"]).to_bytes(2, "little", signed=False)
+        if "wonggojiFormat" in grid and grid["wonggojiFormat"] is not None:
+            if int(grid["wonggojiFormat"]):
+                attributes |= _SECTION_DEF_WONGGOJI_FORMAT_FLAG
+            else:
+                attributes &= ~_SECTION_DEF_WONGGOJI_FORMAT_FLAG
+    if start_numbers is not None:
+        for key, offset in {"page": 20, "pic": 22, "tbl": 24, "equation": 26}.items():
+            if key in start_numbers and start_numbers[key] is not None:
+                updated[offset : offset + 2] = int(start_numbers[key]).to_bytes(2, "little", signed=False)
+    updated[4:8] = attributes.to_bytes(4, "little", signed=False)
+    return bytes(updated) + payload[30:]
+
+
+def _parse_page_starts_on_payload(payload: bytes) -> str:
+    attributes = int.from_bytes(payload[4:8].ljust(4, b"\x00"), "little")
+    return _SECTION_PAGE_STARTS_ON_VALUES.get(attributes & _SECTION_PAGE_STARTS_ON_MASK, "BOTH")
+
+
+def _build_page_starts_on_payload(page_starts_on: str) -> bytes:
+    code = _SECTION_PAGE_STARTS_ON_CODES.get(str(page_starts_on).upper(), 0)
+    return _build_control_id_payload("pgct") + code.to_bytes(4, "little", signed=False)
+
+
+def _parse_page_hiding_payload(payload: bytes) -> dict[str, str]:
+    attributes = int.from_bytes(payload[4:8].ljust(4, b"\x00"), "little")
+    return {
+        "hideFirstHeader": "1" if attributes & _PAGE_HIDING_FLAGS["hideFirstHeader"] else "0",
+        "hideFirstFooter": "1" if attributes & _PAGE_HIDING_FLAGS["hideFirstFooter"] else "0",
+        "hideFirstMasterPage": "1" if attributes & _PAGE_HIDING_FLAGS["hideFirstMasterPage"] else "0",
+        "hideFirstPageNum": "1" if attributes & _PAGE_HIDING_FLAGS["hideFirstPageNum"] else "0",
+        "hideBorder": "1" if attributes & _PAGE_HIDING_FLAGS["hideBorder"] else "0",
+        "hideFill": "1" if attributes & _PAGE_HIDING_FLAGS["hideFill"] else "0",
+    }
+
+
+def _build_page_hiding_payload(visibility: dict[str, str]) -> bytes:
+    attributes = 0
+    for key, flag in _PAGE_HIDING_FLAGS.items():
+        value = visibility.get(key)
+        if value is not None and str(value) in {"1", "true", "True"}:
+            attributes |= flag
+    return _build_control_id_payload("pghd") + attributes.to_bytes(4, "little", signed=False)
+
+
+def _parse_page_num_payload(payload: bytes) -> dict[str, str]:
+    attributes = int.from_bytes(payload[4:8].ljust(4, b"\x00"), "little")
+    side_char = payload[14:16].decode("utf-16-le", errors="ignore") if len(payload) >= 16 else "-"
+    return {
+        "pos": _PAGE_NUM_POSITION_VALUES.get((attributes >> 8) & 0x0F, "BOTTOM_CENTER"),
+        "formatType": _NUMBER_TYPE_VALUES.get(attributes & 0xFF, "DIGIT"),
+        "sideChar": side_char or "-",
+    }
+
+
+def _build_page_num_payload(page_num: dict[str, str]) -> bytes:
+    format_code = _NUMBER_TYPE_CODES.get(str(page_num.get("formatType", "DIGIT")).upper(), 0)
+    position_code = _PAGE_NUM_POSITION_CODES.get(str(page_num.get("pos", "BOTTOM_CENTER")).upper(), 5)
+    attributes = format_code | (position_code << 8)
+    side_char = str(page_num.get("sideChar", "-"))[:1]
+    return (
+        _build_control_id_payload("pgnp")
+        + attributes.to_bytes(4, "little", signed=False)
+        + ("\x00\x00\x00" + side_char).encode("utf-16-le")
+    )
+
+
+def _parse_note_shape_payload(payload: bytes, *, kind: str) -> dict[str, object]:
+    values = payload[:26].ljust(26, b"\x00")
+    attributes = int.from_bytes(values[0:4], "little")
+    line_type_code = values[20] if len(values) > 20 else 1
+    line_width_code = values[21] if len(values) > 21 else 1
+    if kind == "endNotePr":
+        place = {0: "END_OF_DOCUMENT", 1: "END_OF_SECTION"}.get((attributes >> 8) & 0x03, "END_OF_DOCUMENT")
+        length = str(int.from_bytes(values[12:14], "little", signed=False))
+    else:
+        place = {0: "EACH_COLUMN", 1: "MERGED_COLUMN", 2: "RIGHT_MOST_COLUMN"}.get((attributes >> 8) & 0x03, "EACH_COLUMN")
+        length = str(int.from_bytes(values[12:14], "little", signed=True))
+    return {
+        "autoNumFormat": {
+            "type": _NUMBER_TYPE_VALUES.get(attributes & 0xFF, "DIGIT"),
+            "userChar": values[4:6].decode("utf-16-le", errors="ignore").rstrip("\x00"),
+            "prefixChar": values[6:8].decode("utf-16-le", errors="ignore").rstrip("\x00"),
+            "suffixChar": values[8:10].decode("utf-16-le", errors="ignore").rstrip("\x00"),
+            "supscript": "1" if attributes & (1 << 12) else "0",
+        },
+        "numbering": {
+            "type": _NOTE_NUMBERING_VALUES.get((attributes >> 10) & 0x03, "CONTINUOUS"),
+            "newNum": str(int.from_bytes(values[10:12], "little")),
+        },
+        "noteLine": {
+            "length": length,
+            "type": _NOTE_LINE_TYPE_VALUES.get(line_type_code, "SOLID"),
+            "width": _NOTE_LINE_WIDTH_VALUES.get(line_width_code, "0.12 mm"),
+            "color": _parse_colorref(values[22:26]),
+        },
+        "noteSpacing": {
+            "aboveLine": str(int.from_bytes(values[14:16], "little")),
+            "belowLine": str(int.from_bytes(values[16:18], "little")),
+            "betweenNotes": str(int.from_bytes(values[18:20], "little")),
+        },
+        "placement": {
+            "place": place,
+            "beneathText": "1" if attributes & (1 << 13) else "0",
+        },
+    }
+
+
+def _build_note_shape_payload(payload: bytes, *, note_pr: dict[str, object], kind: str) -> bytes:
+    original = payload[:26].ljust(26, b"\x00")
+    attributes = int.from_bytes(original[0:4], "little")
+    auto_num = dict(note_pr.get("autoNumFormat", {}))
+    numbering = dict(note_pr.get("numbering", {}))
+    note_line = dict(note_pr.get("noteLine", {}))
+    note_spacing = dict(note_pr.get("noteSpacing", {}))
+    placement = dict(note_pr.get("placement", {}))
+    attributes &= ~0xFF
+    attributes |= _NUMBER_TYPE_CODES.get(str(auto_num.get("type", "DIGIT")).upper(), 0)
+    attributes &= ~(0x03 << 8)
+    if kind == "endNotePr":
+        attributes |= ({ "END_OF_DOCUMENT": 0, "END_OF_SECTION": 1 }.get(str(placement.get("place", "END_OF_DOCUMENT")).upper(), 0) << 8)
+    else:
+        attributes |= ({ "EACH_COLUMN": 0, "MERGED_COLUMN": 1, "RIGHT_MOST_COLUMN": 2 }.get(str(placement.get("place", "EACH_COLUMN")).upper(), 0) << 8)
+    attributes &= ~(0x03 << 10)
+    attributes |= (_NOTE_NUMBERING_CODES.get(str(numbering.get("type", "CONTINUOUS")).upper(), 0) << 10)
+    if str(auto_num.get("supscript", "0")) in {"1", "true", "True"}:
+        attributes |= 1 << 12
+    else:
+        attributes &= ~(1 << 12)
+    if str(placement.get("beneathText", "0")) in {"1", "true", "True"}:
+        attributes |= 1 << 13
+    else:
+        attributes &= ~(1 << 13)
+    updated = bytearray(26)
+    updated[0:4] = attributes.to_bytes(4, "little", signed=False)
+    updated[4:6] = str(auto_num.get("userChar", ""))[:1].encode("utf-16-le")
+    updated[6:8] = str(auto_num.get("prefixChar", ""))[:1].encode("utf-16-le")
+    updated[8:10] = str(auto_num.get("suffixChar", ""))[:1].encode("utf-16-le")
+    updated[10:12] = int(numbering.get("newNum", 1)).to_bytes(2, "little", signed=False)
+    length_value = int(str(note_line.get("length", -1)))
+    if kind == "endNotePr":
+        updated[12:14] = (length_value & 0xFFFF).to_bytes(2, "little", signed=False)
+    else:
+        updated[12:14] = length_value.to_bytes(2, "little", signed=True)
+    updated[14:16] = int(note_spacing.get("aboveLine", 850)).to_bytes(2, "little", signed=False)
+    updated[16:18] = int(note_spacing.get("belowLine", 567)).to_bytes(2, "little", signed=False)
+    updated[18:20] = int(note_spacing.get("betweenNotes", 283)).to_bytes(2, "little", signed=False)
+    updated[20] = _NOTE_LINE_TYPE_CODES.get(str(note_line.get("type", "SOLID")).upper(), 1)
+    updated[21] = _NOTE_LINE_WIDTH_CODES.get(str(note_line.get("width", "0.12 mm")), 1)
+    updated[22:26] = _build_colorref(str(note_line.get("color", "#000000")))
+    return bytes(updated) + payload[26:]
+
+
+def _parse_colorref(payload: bytes) -> str:
+    values = payload[:4].ljust(4, b"\x00")
+    blue = values[0]
+    green = values[1]
+    red = values[2]
+    return f"#{red:02X}{green:02X}{blue:02X}"
+
+
+def _build_colorref(value: str) -> bytes:
+    normalized = str(value).strip().lstrip("#")
+    if len(normalized) != 6:
+        normalized = "000000"
+    red = int(normalized[0:2], 16)
+    green = int(normalized[2:4], 16)
+    blue = int(normalized[4:6], 16)
+    return bytes((blue, green, red, 0))
+
+
+def _parse_page_def_payload(payload: bytes) -> dict[str, int]:
+    values = list(struct.unpack("<10I", payload[:40].ljust(40, b"\x00")))
+    return {
+        "page_width": values[0],
+        "page_height": values[1],
+        "left": values[2],
+        "right": values[3],
+        "top": values[4],
+        "header": values[5],
+        "footer": values[6],
+        "bottom": values[7],
+        "gutter": values[8],
+    }
+
+
+def _build_page_def_payload(
+    payload: bytes,
+    *,
+    page_width: int | None = None,
+    page_height: int | None = None,
+    landscape: str | None = None,
+    margins: dict[str, int] | None = None,
+) -> bytes:
+    values = list(struct.unpack("<10I", payload[:40].ljust(40, b"\x00")))
+    width = values[0] if page_width is None else int(page_width)
+    height = values[1] if page_height is None else int(page_height)
+    if landscape is not None and page_width is None and page_height is None:
+        normalized_landscape = str(landscape).upper()
+        if normalized_landscape == "LANDSCAPE" and width < height:
+            width, height = height, width
+        elif normalized_landscape in {"WIDELY", "PORTRAIT"} and width > height:
+            width, height = height, width
+    values[0] = width
+    values[1] = height
+    margin_mapping = {
+        "left": 2,
+        "right": 3,
+        "top": 4,
+        "header": 5,
+        "footer": 6,
+        "bottom": 7,
+        "gutter": 8,
+    }
+    for key, index in margin_mapping.items():
+        if margins is not None and key in margins and margins[key] is not None:
+            values[index] = int(margins[key])
+    updated = struct.pack("<10I", *values)
+    return updated + payload[40:]
+
+
+_SECTION_PAGE_BORDER_FILL_TYPES = ("BOTH", "EVEN", "ODD")
+_PAGE_BORDER_FILL_TEXT_BORDER_FLAG = 0x01
+_PAGE_BORDER_FILL_HEADER_INSIDE_FLAG = 0x02
+_PAGE_BORDER_FILL_FOOTER_INSIDE_FLAG = 0x04
+_PAGE_BORDER_FILL_BORDER_AREA_FLAG = 0x10
+
+
+def _parse_page_border_fill_payload(payload: bytes, *, border_type: str) -> dict[str, str | int]:
+    values = payload[:14].ljust(14, b"\x00")
+    flags, left, right, top, bottom, border_fill_id = struct.unpack("<I5H", values)
+    return {
+        "type": border_type,
+        "borderFillIDRef": str(border_fill_id),
+        "textBorder": "PAPER" if flags & _PAGE_BORDER_FILL_TEXT_BORDER_FLAG else "BORDER",
+        "headerInside": "1" if flags & _PAGE_BORDER_FILL_HEADER_INSIDE_FLAG else "0",
+        "footerInside": "1" if flags & _PAGE_BORDER_FILL_FOOTER_INSIDE_FLAG else "0",
+        "fillArea": "BORDER" if flags & _PAGE_BORDER_FILL_BORDER_AREA_FLAG else "PAPER",
+        "left": left,
+        "right": right,
+        "top": top,
+        "bottom": bottom,
+    }
+
+
+def _build_page_border_fill_payload(
+    payload: bytes,
+    *,
+    border_fill: dict[str, str | int],
+) -> bytes:
+    values = payload[:14].ljust(14, b"\x00")
+    flags, left, right, top, bottom, border_fill_id = struct.unpack("<I5H", values)
+    if str(border_fill.get("textBorder", "PAPER")).upper() == "PAPER":
+        flags |= _PAGE_BORDER_FILL_TEXT_BORDER_FLAG
+    else:
+        flags &= ~_PAGE_BORDER_FILL_TEXT_BORDER_FLAG
+    if str(border_fill.get("headerInside", "0")) in {"1", "true", "True"}:
+        flags |= _PAGE_BORDER_FILL_HEADER_INSIDE_FLAG
+    else:
+        flags &= ~_PAGE_BORDER_FILL_HEADER_INSIDE_FLAG
+    if str(border_fill.get("footerInside", "0")) in {"1", "true", "True"}:
+        flags |= _PAGE_BORDER_FILL_FOOTER_INSIDE_FLAG
+    else:
+        flags &= ~_PAGE_BORDER_FILL_FOOTER_INSIDE_FLAG
+    if str(border_fill.get("fillArea", "PAPER")).upper() == "BORDER":
+        flags |= _PAGE_BORDER_FILL_BORDER_AREA_FLAG
+    else:
+        flags &= ~_PAGE_BORDER_FILL_BORDER_AREA_FLAG
+    left = int(border_fill.get("left", left))
+    right = int(border_fill.get("right", right))
+    top = int(border_fill.get("top", top))
+    bottom = int(border_fill.get("bottom", bottom))
+    border_fill_id = int(border_fill.get("borderFillIDRef", border_fill_id))
+    updated = struct.pack("<I5H", flags, left, right, top, bottom, border_fill_id)
+    return updated + payload[14:]
+
+
+def _build_control_marker_text(control_id: str) -> str:
+    marker_code = _CONTROL_MARKER_CODES.get(control_id)
+    if marker_code is None:
+        raise ValueError(f"Unsupported control marker id: {control_id}")
+    control_payload = _build_control_id_payload(control_id)
+    first_unit = int.from_bytes(control_payload[0:2], "little")
+    second_unit = int.from_bytes(control_payload[2:4], "little")
+    units = (marker_code, first_unit, second_unit, 0, 0, 0, 0, marker_code)
+    return struct.pack("<8H", *units).decode("utf-16-le", errors="ignore")
+
+
+def _build_auto_number_payload(kind: str, *, number: int | str, number_type: str) -> bytes:
+    if kind == "newNum":
+        payload = bytearray(_build_control_id_payload("nwno"))
+        payload.extend((0).to_bytes(4, "little"))
+        payload.extend(int(number).to_bytes(2, "little", signed=False))
+        return bytes(payload)
+    if kind == "autoNum":
+        payload = bytearray(_build_control_id_payload("atno"))
+        payload.extend((0).to_bytes(4, "little"))
+        payload.extend(_AUTO_NUMBER_TYPE_CODES.get(str(number_type).upper(), 0x0C).to_bytes(4, "little"))
+        payload.extend((0).to_bytes(4, "little"))
+        return bytes(payload)
+    raise ValueError("append_auto_number() kind must be 'newNum' or 'autoNum'.")
+
+
+def _build_bookmark_ctrl_data_payload(name: str) -> bytes:
+    encoded_name = name.encode("utf-16-le")
+    payload = bytearray(_BOOKMARK_CTRL_DATA_PREFIX)
+    payload.extend(len(name).to_bytes(2, "little", signed=False))
+    payload.extend(encoded_name)
+    return bytes(payload)
+
+
+def _build_note_ctrl_payload(control_id: str) -> bytes:
+    if control_id == "fn  ":
+        return _FOOTNOTE_CTRL_HEADER
+    if control_id == "en  ":
+        return _ENDNOTE_CTRL_HEADER
+    raise ValueError(f"Unsupported note control id: {control_id}")
 
 
 def _normalize_stream_path(path: str | tuple[str, ...] | list[str]) -> str:
@@ -1487,6 +2148,306 @@ class HwpBinaryDocument:
     def replace_section_model(self, section_index: int, model: SectionModel) -> None:
         self.replace_section_records(section_index, model.to_records())
 
+    def ensure_section_count(self, section_count: int) -> None:
+        if section_count < 1:
+            raise ValueError("section_count must be at least 1.")
+
+        current_count = len(self.section_stream_paths())
+        if current_count == 0:
+            raise InvalidHwpFileError("HWP document does not contain any BodyText/Section streams.")
+
+        while current_count < section_count:
+            template_index = 1 if current_count > 1 else current_count - 1
+            template_model = _build_blank_section_model(self.section_model(template_index), section_index=current_count)
+            raw = template_model.to_bytes()
+            if self._stream_is_compressed("BodyText/Section0"):
+                compressor = zlib.compressobj(level=9, wbits=-15)
+                payload = compressor.compress(raw) + compressor.flush()
+            else:
+                payload = raw
+            self.add_stream(f"BodyText/Section{current_count}", payload)
+            current_count += 1
+
+        self._set_document_properties_section_count(current_count)
+
+    def reset_body_sections_to_blank(self) -> None:
+        section_paths = self.section_stream_paths()
+        for section_index, _path in enumerate(section_paths):
+            self.replace_section_model(section_index, _build_blank_section_model(self.section_model(section_index)))
+        self._set_document_properties_section_count(len(section_paths))
+        self.set_preview_text("")
+
+    def section_page_settings(self, section_index: int) -> dict[str, int]:
+        self.ensure_section_count(section_index + 1)
+        section_definition = _find_section_definition_control_node(self.section_model(section_index))
+        if section_definition is None:
+            return {}
+        page_def = _find_child_record(section_definition, TAG_PAGE_DEF)
+        if page_def is None:
+            return {}
+        return _parse_page_def_payload(page_def.payload)
+
+    def set_section_page_settings(
+        self,
+        section_index: int,
+        *,
+        page_width: int | None = None,
+        page_height: int | None = None,
+        landscape: str | None = None,
+        margins: dict[str, int] | None = None,
+    ) -> None:
+        self.ensure_section_count(section_index + 1)
+        model = self.section_model(section_index)
+        section_definition = _find_section_definition_control_node(model)
+        if section_definition is None:
+            raise HwpBinaryEditError(f"Section {section_index} does not contain a writable secd control.")
+        page_def = _find_child_record(section_definition, TAG_PAGE_DEF)
+        if page_def is None:
+            raise HwpBinaryEditError(f"Section {section_index} does not contain a writable page_def record.")
+        page_def.payload = _build_page_def_payload(
+            page_def.payload,
+            page_width=page_width,
+            page_height=page_height,
+            landscape=landscape,
+            margins=margins,
+        )
+        self.replace_section_model(section_index, model)
+
+    def section_page_border_fills(self, section_index: int) -> list[dict[str, str | int]]:
+        self.ensure_section_count(section_index + 1)
+        section_definition = _find_section_definition_control_node(self.section_model(section_index))
+        if section_definition is None:
+            return []
+        records = [child for child in section_definition.children if child.tag_id == TAG_PAGE_BORDER_FILL]
+        fills: list[dict[str, str | int]] = []
+        for index, record in enumerate(records):
+            border_type = _SECTION_PAGE_BORDER_FILL_TYPES[index] if index < len(_SECTION_PAGE_BORDER_FILL_TYPES) else f"EXTRA_{index}"
+            fills.append(_parse_page_border_fill_payload(record.payload, border_type=border_type))
+        return fills
+
+    def set_section_page_border_fills(
+        self,
+        section_index: int,
+        page_border_fills: list[dict[str, str | int]],
+    ) -> None:
+        self.ensure_section_count(section_index + 1)
+        model = self.section_model(section_index)
+        section_definition = _find_section_definition_control_node(model)
+        if section_definition is None:
+            raise HwpBinaryEditError(f"Section {section_index} does not contain a writable secd control.")
+        records = [child for child in section_definition.children if child.tag_id == TAG_PAGE_BORDER_FILL]
+        if not records:
+            raise HwpBinaryEditError(f"Section {section_index} does not contain writable page_border_fill records.")
+        record_by_type = {
+            _SECTION_PAGE_BORDER_FILL_TYPES[index]: record
+            for index, record in enumerate(records[: len(_SECTION_PAGE_BORDER_FILL_TYPES)])
+        }
+        for border_fill in page_border_fills:
+            border_type = str(border_fill.get("type", "BOTH")).upper()
+            record = record_by_type.get(border_type)
+            if record is None:
+                continue
+            record.payload = _build_page_border_fill_payload(record.payload, border_fill=border_fill)
+        self.replace_section_model(section_index, model)
+
+    def section_definition_settings(self, section_index: int) -> dict[str, object]:
+        self.ensure_section_count(section_index + 1)
+        model = self.section_model(section_index)
+        section_definition = _find_section_definition_control_node(model)
+        if section_definition is None:
+            return {}
+        values = _parse_section_definition_payload(section_definition.payload)
+        page_hiding = _parse_page_hiding_payload(_find_paragraph_control_node(model, "pghd").payload) if _find_paragraph_control_node(model, "pghd") is not None else {}
+        page_starts_on = "BOTH"
+        page_starts_on_control = _find_paragraph_control_node(model, "pgct")
+        if page_starts_on_control is not None:
+            page_starts_on = _parse_page_starts_on_payload(page_starts_on_control.payload)
+        attributes = int(values.get("attributes", 0))
+        border_hidden = page_hiding.get("hideBorder") == "1"
+        fill_hidden = page_hiding.get("hideFill") == "1"
+        border_first = bool(attributes & _SECTION_DEF_BORDER_FIRST_FLAG)
+        fill_first = bool(attributes & _SECTION_DEF_FILL_FIRST_FLAG)
+        return {
+            "visibility": {
+                "hideFirstHeader": page_hiding.get("hideFirstHeader", "0"),
+                "hideFirstFooter": page_hiding.get("hideFirstFooter", "0"),
+                "hideFirstMasterPage": page_hiding.get("hideFirstMasterPage", "0"),
+                "hideFirstPageNum": page_hiding.get("hideFirstPageNum", "0"),
+                "hideFirstEmptyLine": "1" if attributes & _SECTION_DEF_HIDE_EMPTY_LINE_FLAG else "0",
+                "border": "HIDE_FIRST" if border_hidden and border_first else "HIDE_ALL" if border_hidden else "SHOW_FIRST" if border_first else "SHOW_ALL",
+                "fill": "HIDE_FIRST" if fill_hidden and fill_first else "HIDE_ALL" if fill_hidden else "SHOW_FIRST" if fill_first else "SHOW_ALL",
+                "showLineNumber": "1" if _section_uses_synthetic_line_number_layout(model) else "0",
+            },
+            "grid": {
+                "lineGrid": int(values.get("line_grid", 0)),
+                "charGrid": int(values.get("char_grid", 0)),
+                "wonggojiFormat": 1 if attributes & _SECTION_DEF_WONGGOJI_FORMAT_FLAG else 0,
+            },
+            "start_numbers": {
+                "pageStartsOn": page_starts_on,
+                "page": str(values.get("page", 0)),
+                "pic": str(values.get("pic", 0)),
+                "tbl": str(values.get("tbl", 0)),
+                "equation": str(values.get("equation", 0)),
+            },
+        }
+
+    def set_section_definition_settings(
+        self,
+        section_index: int,
+        *,
+        visibility: dict[str, str] | None = None,
+        grid: dict[str, int] | None = None,
+        start_numbers: dict[str, str] | None = None,
+    ) -> None:
+        self.ensure_section_count(section_index + 1)
+        model = self.section_model(section_index)
+        section_definition = _find_section_definition_control_node(model)
+        if section_definition is None:
+            raise HwpBinaryEditError(f"Section {section_index} does not contain a writable secd control.")
+        section_definition.payload = _build_section_definition_payload(
+            section_definition.payload,
+            visibility=visibility,
+            grid=grid,
+            start_numbers=start_numbers,
+        )
+        if visibility is not None:
+            current = self.section_definition_settings(section_index)["visibility"]
+            current.update({key: value for key, value in visibility.items() if value is not None})
+            border_value = str(current.get("border", "SHOW_ALL")).upper()
+            fill_value = str(current.get("fill", "SHOW_ALL")).upper()
+            payload = bytearray(section_definition.payload)
+            attributes = int.from_bytes(payload[4:8], "little")
+            if border_value in {"SHOW_FIRST", "HIDE_FIRST"}:
+                attributes |= _SECTION_DEF_BORDER_FIRST_FLAG
+            else:
+                attributes &= ~_SECTION_DEF_BORDER_FIRST_FLAG
+            if fill_value in {"SHOW_FIRST", "HIDE_FIRST"}:
+                attributes |= _SECTION_DEF_FILL_FIRST_FLAG
+            else:
+                attributes &= ~_SECTION_DEF_FILL_FIRST_FLAG
+            payload[4:8] = attributes.to_bytes(4, "little", signed=False)
+            section_definition.payload = bytes(payload)
+            page_hiding_visibility = {
+                "hideFirstHeader": current.get("hideFirstHeader", "0"),
+                "hideFirstFooter": current.get("hideFirstFooter", "0"),
+                "hideFirstMasterPage": current.get("hideFirstMasterPage", "0"),
+                "hideFirstPageNum": current.get("hideFirstPageNum", "0"),
+                "hideBorder": "1" if border_value in {"HIDE_FIRST", "HIDE_ALL"} else "0",
+                "hideFill": "1" if fill_value in {"HIDE_FIRST", "HIDE_ALL"} else "0",
+            }
+            page_hiding_control = _find_paragraph_control_node(model, "pghd")
+            if any(value == "1" for value in page_hiding_visibility.values()):
+                if page_hiding_control is None:
+                    page_hiding_control = RecordNode(tag_id=TAG_CTRL_HEADER, level=1, payload=_build_page_hiding_payload(page_hiding_visibility))
+                    _insert_paragraph_control_node(model, page_hiding_control, after_control_id="cold")
+                else:
+                    page_hiding_control.payload = _build_page_hiding_payload(page_hiding_visibility)
+            elif page_hiding_control is not None:
+                for paragraph in model.paragraphs():
+                    if page_hiding_control in paragraph.header.children:
+                        paragraph.header.children.remove(page_hiding_control)
+                        break
+            if visibility.get("showLineNumber") is not None:
+                _apply_section_show_line_numbers(model, str(current.get("showLineNumber", "0")) in {"1", "true", "True"})
+        if start_numbers is not None and start_numbers.get("pageStartsOn") is not None:
+            page_starts_on = str(start_numbers.get("pageStartsOn", "BOTH")).upper()
+            page_starts_on_control = _find_paragraph_control_node(model, "pgct")
+            if page_starts_on == "BOTH":
+                if page_starts_on_control is not None:
+                    model.paragraphs()[0].header.children.remove(page_starts_on_control)
+            else:
+                if page_starts_on_control is None:
+                    page_starts_on_control = RecordNode(
+                        tag_id=TAG_CTRL_HEADER,
+                        level=1,
+                        payload=_build_page_starts_on_payload(page_starts_on),
+                    )
+                    _insert_paragraph_control_node(model, page_starts_on_control, after_control_id="secd")
+                else:
+                    page_starts_on_control.payload = _build_page_starts_on_payload(page_starts_on)
+        self.replace_section_model(section_index, model)
+
+    def section_page_numbers(self, section_index: int) -> list[dict[str, str]]:
+        self.ensure_section_count(section_index + 1)
+        model = self.section_model(section_index)
+        page_numbers: list[dict[str, str]] = []
+        for paragraph in model.paragraphs():
+            for child in paragraph.header.children:
+                if child.tag_id == TAG_CTRL_HEADER and child.payload[:4] == _build_control_id_payload("pgnp"):
+                    page_numbers.append(_parse_page_num_payload(child.payload))
+        return page_numbers
+
+    def set_section_page_numbers(self, section_index: int, page_numbers: list[dict[str, str]]) -> None:
+        self.ensure_section_count(section_index + 1)
+        model = self.section_model(section_index)
+        use_synthetic_line_numbers = _section_uses_synthetic_line_number_layout(model)
+        for paragraph in model.paragraphs():
+            paragraph.header.children = [
+                child
+                for child in paragraph.header.children
+                if not (child.tag_id == TAG_CTRL_HEADER and child.payload[:4] == _build_control_id_payload("pgnp"))
+            ]
+        for page_num in page_numbers:
+            raw_text = _build_control_marker_text("pgnp") + "\r"
+            paragraph = model.append_paragraph(raw_text)
+            if use_synthetic_line_numbers:
+                _ensure_paragraph_line_seg(paragraph)
+            paragraph.header.add_child(
+                RecordNode(tag_id=TAG_CTRL_HEADER, level=1, payload=_build_page_num_payload(page_num))
+            )
+        self.replace_section_model(section_index, model)
+
+    def section_note_settings(self, section_index: int) -> dict[str, dict[str, object]]:
+        self.ensure_section_count(section_index + 1)
+        section_definition = _find_section_definition_control_node(self.section_model(section_index))
+        if section_definition is None:
+            return {}
+        records = [child for child in section_definition.children if child.tag_id == TAG_FOOTNOTE_SHAPE]
+        settings: dict[str, dict[str, object]] = {}
+        if len(records) >= 1:
+            settings["footNotePr"] = _parse_note_shape_payload(records[0].payload, kind="footNotePr")
+        if len(records) >= 2:
+            settings["endNotePr"] = _parse_note_shape_payload(records[1].payload, kind="endNotePr")
+        return settings
+
+    def set_section_note_settings(
+        self,
+        section_index: int,
+        *,
+        footnote_pr: dict[str, object] | None = None,
+        endnote_pr: dict[str, object] | None = None,
+    ) -> None:
+        self.ensure_section_count(section_index + 1)
+        model = self.section_model(section_index)
+        section_definition = _find_section_definition_control_node(model)
+        if section_definition is None:
+            raise HwpBinaryEditError(f"Section {section_index} does not contain a writable secd control.")
+        records = [child for child in section_definition.children if child.tag_id == TAG_FOOTNOTE_SHAPE]
+        if len(records) >= 1 and footnote_pr is not None:
+            records[0].payload = _build_note_shape_payload(records[0].payload, note_pr=footnote_pr, kind="footNotePr")
+        if len(records) >= 2 and endnote_pr is not None:
+            records[1].payload = _build_note_shape_payload(records[1].payload, note_pr=endnote_pr, kind="endNotePr")
+        self.replace_section_model(section_index, model)
+
+    def _set_document_properties_section_count(self, section_count: int) -> None:
+        model = self.docinfo_model()
+        properties_record = model.document_properties_record()
+        properties = properties_record.to_properties()
+        properties_record.properties = HwpDocumentProperties(
+            section_count=section_count,
+            page_start_number=properties.page_start_number,
+            footnote_start_number=properties.footnote_start_number,
+            endnote_start_number=properties.endnote_start_number,
+            picture_start_number=properties.picture_start_number,
+            table_start_number=properties.table_start_number,
+            equation_start_number=properties.equation_start_number,
+            list_id=properties.list_id,
+            paragraph_id=properties.paragraph_id,
+            character_unit_position=properties.character_unit_position,
+        )
+        self.replace_docinfo_model(model)
+
     def append_paragraph(
         self,
         text: str,
@@ -1497,7 +2458,9 @@ class HwpBinaryDocument:
         split_flags: int = 0,
         control_mask: int = 0,
     ) -> SectionParagraphModel:
+        self.ensure_section_count(section_index + 1)
         model = self.section_model(section_index)
+        use_synthetic_line_numbers = _section_uses_synthetic_line_number_layout(model)
         paragraph = model.append_paragraph(
             text,
             para_shape_id=para_shape_id,
@@ -1505,6 +2468,8 @@ class HwpBinaryDocument:
             split_flags=split_flags,
             control_mask=control_mask,
         )
+        if use_synthetic_line_numbers:
+            _ensure_paragraph_line_seg(paragraph)
         self.replace_section_model(section_index, model)
         return paragraph
 
@@ -1609,6 +2574,7 @@ class HwpBinaryDocument:
             control_node.add_child(RecordNode(tag_id=TAG_CTRL_DATA, level=2, payload=parameter_text.encode("utf-16-le")))
 
         model = self.section_model(target_section_index)
+        use_synthetic_line_numbers = _section_uses_synthetic_line_number_layout(model)
         if paragraph_index is None or paragraph_index < 0:
             paragraph = model.append_paragraph(
                 f"{display_value}\r",
@@ -1620,8 +2586,139 @@ class HwpBinaryDocument:
                 f"{display_value}\r",
                 control_mask=1 if editable or dirty else 0,
             )
+        if use_synthetic_line_numbers:
+            _ensure_paragraph_line_seg(paragraph)
         paragraph.header.add_child(control_node)
         self.replace_section_model(target_section_index, model)
+
+    def append_auto_number(
+        self,
+        *,
+        number: int | str = 1,
+        number_type: str = "PAGE",
+        kind: str = "newNum",
+        section_index: int | None = None,
+        paragraph_index: int | None = None,
+    ) -> None:
+        normalized_kind = kind.strip()
+        if normalized_kind not in {"newNum", "autoNum"}:
+            raise ValueError("append_auto_number() kind must be 'newNum' or 'autoNum'.")
+
+        target_section_index = self._resolve_append_section_index(None, section_index)
+        model = self.section_model(target_section_index)
+        use_synthetic_line_numbers = _section_uses_synthetic_line_number_layout(model)
+        control_id = "nwno" if normalized_kind == "newNum" else "atno"
+        raw_text = _build_control_marker_text(control_id) + "\r"
+        if paragraph_index is None or paragraph_index < 0:
+            paragraph = model.append_paragraph(raw_text)
+        else:
+            paragraph = model.insert_paragraph(paragraph_index, raw_text)
+        if use_synthetic_line_numbers:
+            _ensure_paragraph_line_seg(paragraph)
+        control_node = RecordNode(
+            tag_id=TAG_CTRL_HEADER,
+            level=1,
+            payload=_build_auto_number_payload(normalized_kind, number=number, number_type=number_type),
+        )
+        paragraph.header.add_child(control_node)
+        self.replace_section_model(target_section_index, model)
+
+    def append_header(
+        self,
+        text: str,
+        *,
+        section_index: int | None = None,
+    ) -> None:
+        self._upsert_header_footer_control("head", text=text, section_index=section_index)
+
+    def append_footer(
+        self,
+        text: str,
+        *,
+        section_index: int | None = None,
+    ) -> None:
+        self._upsert_header_footer_control("foot", text=text, section_index=section_index)
+
+    def append_bookmark(
+        self,
+        name: str,
+        *,
+        section_index: int | None = None,
+        paragraph_index: int | None = None,
+    ) -> None:
+        target_section_index = self._resolve_append_section_index(None, section_index)
+        model = self.section_model(target_section_index)
+        use_synthetic_line_numbers = _section_uses_synthetic_line_number_layout(model)
+        raw_text = _build_control_marker_text("bokm") + "\r"
+        if paragraph_index is None or paragraph_index < 0:
+            paragraph = model.append_paragraph(raw_text)
+        else:
+            paragraph = model.insert_paragraph(paragraph_index, raw_text)
+        if use_synthetic_line_numbers:
+            _ensure_paragraph_line_seg(paragraph)
+        control_node = RecordNode(tag_id=TAG_CTRL_HEADER, level=1, payload=_build_control_id_payload("bokm"))
+        control_node.add_child(RecordNode(tag_id=TAG_CTRL_DATA, level=2, payload=_build_bookmark_ctrl_data_payload(name)))
+        paragraph.header.add_child(control_node)
+        self.replace_section_model(target_section_index, model)
+
+    def append_note(
+        self,
+        text: str,
+        *,
+        kind: str = "footNote",
+        number: int | str | None = None,
+        section_index: int | None = None,
+        paragraph_index: int | None = None,
+    ) -> None:
+        normalized_kind = kind.strip()
+        if normalized_kind not in {"footNote", "endNote"}:
+            raise ValueError("append_note() kind must be 'footNote' or 'endNote'.")
+
+        target_section_index = self._resolve_append_section_index(None, section_index)
+        model = self.section_model(target_section_index)
+        use_synthetic_line_numbers = _section_uses_synthetic_line_number_layout(model)
+        control_id = "fn  " if normalized_kind == "footNote" else "en  "
+        raw_text = _build_control_marker_text(control_id) + "\r"
+        if paragraph_index is None or paragraph_index < 0:
+            paragraph = model.append_paragraph(raw_text)
+        else:
+            paragraph = model.insert_paragraph(paragraph_index, raw_text)
+        if use_synthetic_line_numbers:
+            _ensure_paragraph_line_seg(paragraph)
+        paragraph.header.add_child(_build_note_control_node(control_id, text))
+        self.replace_section_model(target_section_index, model)
+
+    def append_footnote(
+        self,
+        text: str,
+        *,
+        number: int | str | None = None,
+        section_index: int | None = None,
+        paragraph_index: int | None = None,
+    ) -> None:
+        self.append_note(
+            text,
+            kind="footNote",
+            number=number,
+            section_index=section_index,
+            paragraph_index=paragraph_index,
+        )
+
+    def append_endnote(
+        self,
+        text: str,
+        *,
+        number: int | str | None = None,
+        section_index: int | None = None,
+        paragraph_index: int | None = None,
+    ) -> None:
+        self.append_note(
+            text,
+            kind="endNote",
+            number=number,
+            section_index=section_index,
+            paragraph_index=paragraph_index,
+        )
 
     def append_equation(
         self,
@@ -1634,10 +2731,13 @@ class HwpBinaryDocument:
     ) -> None:
         target_section_index = self._resolve_append_section_index(None, section_index)
         model = self.section_model(target_section_index)
+        use_synthetic_line_numbers = _section_uses_synthetic_line_number_layout(model)
         if paragraph_index is None or paragraph_index < 0:
             paragraph = model.append_paragraph("\r")
         else:
             paragraph = model.insert_paragraph(paragraph_index, "\r")
+        if use_synthetic_line_numbers:
+            _ensure_paragraph_line_seg(paragraph)
         control_node = RecordNode(tag_id=TAG_CTRL_HEADER, level=1, payload=_build_control_id_payload("eqed"))
         control_node.add_child(RecordNode(tag_id=TAG_EQEDIT, level=2, payload=_build_equation_payload(script)))
         paragraph.header.add_child(control_node)
@@ -1669,11 +2769,14 @@ class HwpBinaryDocument:
 
         target_section_index = self._resolve_append_section_index(None, section_index)
         model = self.section_model(target_section_index)
+        use_synthetic_line_numbers = _section_uses_synthetic_line_number_layout(model)
         paragraph_text = f"{text}\r" if text else "\r"
         if paragraph_index is None or paragraph_index < 0:
             paragraph = model.append_paragraph(paragraph_text)
         else:
             paragraph = model.insert_paragraph(paragraph_index, paragraph_text)
+        if use_synthetic_line_numbers:
+            _ensure_paragraph_line_seg(paragraph)
         control_node = RecordNode(tag_id=TAG_CTRL_HEADER, level=1, payload=_build_control_id_payload("gso "))
         shape_component = RecordNode(
             tag_id=TAG_SHAPE_COMPONENT,
@@ -1698,11 +2801,14 @@ class HwpBinaryDocument:
         target_section_index = self._resolve_append_section_index(None, section_index)
         self.add_embedded_bindata(data, extension="ole")
         model = self.section_model(target_section_index)
+        use_synthetic_line_numbers = _section_uses_synthetic_line_number_layout(model)
         paragraph_text = f"{name}\r" if name else "\r"
         if paragraph_index is None or paragraph_index < 0:
             paragraph = model.append_paragraph(paragraph_text)
         else:
             paragraph = model.insert_paragraph(paragraph_index, paragraph_text)
+        if use_synthetic_line_numbers:
+            _ensure_paragraph_line_seg(paragraph)
         control_node = RecordNode(tag_id=TAG_CTRL_HEADER, level=1, payload=_build_control_id_payload("gso "))
         shape_component = RecordNode(
             tag_id=TAG_SHAPE_COMPONENT,
@@ -1977,20 +3083,56 @@ class HwpBinaryDocument:
 
     def _resolve_append_section_index(self, profile_root: str | Path | None, section_index: int | None) -> int:
         if section_index is not None:
+            self.ensure_section_count(section_index + 1)
             return section_index
         if profile_root is None:
             from .hwp_pure_profile import HwpPureProfile
 
-            return HwpPureProfile.load_bundled().target_section_index
+            target_section_index = HwpPureProfile.load_bundled().target_section_index
+            self.ensure_section_count(target_section_index + 1)
+            return target_section_index
         profile_path = Path(profile_root).expanduser().resolve()
         if not profile_path.exists():
+            self.ensure_section_count(1)
             return 0
         metadata_path = profile_path / "profile.json"
         if not metadata_path.exists():
+            self.ensure_section_count(1)
             return 0
         from .hwp_pure_profile import HwpPureProfile
 
-        return HwpPureProfile.load(profile_path).target_section_index
+        target_section_index = HwpPureProfile.load(profile_path).target_section_index
+        self.ensure_section_count(target_section_index + 1)
+        return target_section_index
+
+    def _upsert_header_footer_control(
+        self,
+        control_id: str,
+        *,
+        text: str,
+        section_index: int | None,
+    ) -> None:
+        target_section_index = self._resolve_append_section_index(None, section_index)
+        model = self.section_model(target_section_index)
+        paragraphs = model.paragraphs()
+        if not paragraphs:
+            paragraph = model.append_paragraph("\r")
+            paragraphs = model.paragraphs()
+        target_paragraph = paragraphs[0]
+        control_node = next(
+            (
+                child
+                for child in target_paragraph.header.children
+                if child.tag_id == TAG_CTRL_HEADER and _decode_control_id_payload(child.payload) == control_id
+            ),
+            None,
+        )
+        if control_node is None:
+            control_node = _build_header_footer_control_node(control_id)
+            target_paragraph.header.add_child(control_node)
+            _append_control_marker_to_paragraph(target_paragraph, control_id)
+        _set_header_footer_control_text(control_node, text)
+        self.replace_section_model(target_section_index, model)
 
     def add_embedded_bindata(
         self,
@@ -2076,9 +3218,14 @@ class HwpBinaryDocument:
         section_index: int | None,
     ) -> None:
         target_section_index = self._resolve_append_section_index(profile_root, section_index)
+        use_synthetic_line_numbers = _section_uses_synthetic_line_number_layout(self.section_model(target_section_index))
         section_records = self.section_records(target_section_index)
         section_records.extend(self._build_picture_records(storage_id))
         self.replace_section_records(target_section_index, section_records)
+        if use_synthetic_line_numbers:
+            model = self.section_model(target_section_index)
+            _apply_section_show_line_numbers(model, True)
+            self.replace_section_model(target_section_index, model)
 
     def _append_picture_with_bindata(
         self,
@@ -2107,6 +3254,7 @@ class HwpBinaryDocument:
         section_index: int | None,
     ) -> None:
         target_section_index = self._resolve_append_section_index(profile_root, section_index)
+        use_synthetic_line_numbers = _section_uses_synthetic_line_number_layout(self.section_model(target_section_index))
         matrix = _normalize_table_cell_texts(rows, cols, cell_text, cell_texts)
         normalized_row_heights = _normalize_table_measurements(
             rows,
@@ -2206,6 +3354,10 @@ class HwpBinaryDocument:
         section_records = self.section_records(target_section_index)
         section_records.extend(records_to_append)
         self.replace_section_records(target_section_index, section_records)
+        if use_synthetic_line_numbers:
+            model = self.section_model(target_section_index)
+            _apply_section_show_line_numbers(model, True)
+            self.replace_section_model(target_section_index, model)
 
     def _append_hyperlink_with_text(
         self,
@@ -2217,6 +3369,7 @@ class HwpBinaryDocument:
         section_index: int | None,
     ) -> None:
         target_section_index = self._resolve_append_section_index(profile_root, section_index)
+        use_synthetic_line_numbers = _section_uses_synthetic_line_number_layout(self.section_model(target_section_index))
         display_text = text or url
         raw_payload = _build_hyperlink_para_text_payload(display_text)
         char_count = len(raw_payload) // 2
@@ -2239,3 +3392,166 @@ class HwpBinaryDocument:
         section_records = self.section_records(target_section_index)
         section_records.extend(records_to_append)
         self.replace_section_records(target_section_index, section_records)
+        if use_synthetic_line_numbers:
+            model = self.section_model(target_section_index)
+            _apply_section_show_line_numbers(model, True)
+            self.replace_section_model(target_section_index, model)
+
+
+def _build_header_footer_control_node(control_id: str) -> RecordNode:
+    if control_id == "head":
+        control_payload = _HEADER_CTRL_HEADER
+        list_payload = _HEADER_LIST_HEADER
+        paragraph_payload = _HEADER_PARA_HEADER
+        char_shape_payload = _HEADER_PARA_CHAR_SHAPE
+        line_seg_payload = _HEADER_PARA_LINE_SEG
+    elif control_id == "foot":
+        control_payload = _FOOTER_CTRL_HEADER
+        list_payload = _FOOTER_LIST_HEADER
+        paragraph_payload = _FOOTER_PARA_HEADER
+        char_shape_payload = _FOOTER_PARA_CHAR_SHAPE
+        line_seg_payload = _FOOTER_PARA_LINE_SEG
+    else:
+        raise ValueError(f"Unsupported header/footer control id: {control_id}")
+
+    control_node = RecordNode(tag_id=TAG_CTRL_HEADER, level=1, payload=control_payload)
+    control_node.add_child(RecordNode(tag_id=TAG_LIST_HEADER, level=2, payload=list_payload))
+    paragraph_header = ParagraphHeaderRecord.from_record(
+        HwpRecord(
+            tag_id=TAG_PARA_HEADER,
+            level=2,
+            size=len(paragraph_payload),
+            header_size=4,
+            offset=-1,
+            payload=paragraph_payload,
+        )
+    )
+    paragraph_header.add_child(RecordNode(tag_id=TAG_PARA_CHAR_SHAPE, level=3, payload=char_shape_payload))
+    paragraph_header.add_child(RecordNode(tag_id=TAG_PARA_LINE_SEG, level=3, payload=line_seg_payload))
+    control_node.add_child(paragraph_header)
+    return control_node
+
+
+def _append_control_marker_to_paragraph(paragraph: SectionParagraphModel, control_id: str) -> None:
+    text_record = paragraph.text_record()
+    if text_record is None:
+        raise HwpBinaryEditError("Paragraph does not contain a para text record.")
+    marker = _build_control_marker_text(control_id)
+    if marker in text_record.raw_text:
+        return
+    raw_text = text_record.raw_text or "\r"
+    if not raw_text.endswith("\r"):
+        raw_text += "\r"
+    updated = raw_text[:-1] + marker + "\r"
+    text_record.set_raw_text(updated)
+    paragraph.header.char_count = len(updated)
+    paragraph.header.sync_payload()
+
+
+def _set_header_footer_control_text(control_node: RecordNode, text: str) -> None:
+    paragraph_header = next(
+        (child for child in control_node.children if isinstance(child, ParagraphHeaderRecord)),
+        None,
+    )
+    if paragraph_header is None:
+        raise HwpBinaryEditError("Header/footer control does not contain a paragraph header.")
+    text_record = next((child for child in paragraph_header.children if isinstance(child, ParagraphTextRecord)), None)
+    raw_text = f"{text}\r" if text else ""
+    if text_record is None:
+        if not raw_text:
+            paragraph_header.char_count = 0
+            paragraph_header.sync_payload()
+            return
+        text_record = ParagraphTextRecord(level=paragraph_header.level + 1, raw_text=raw_text)
+        paragraph_header.children.insert(0, text_record)
+    else:
+        text_record.set_raw_text(raw_text)
+    paragraph_header.char_count = len(raw_text)
+    paragraph_header.sync_payload()
+
+
+def _build_note_control_node(control_id: str, text: str) -> RecordNode:
+    control_node = RecordNode(tag_id=TAG_CTRL_HEADER, level=1, payload=_build_note_ctrl_payload(control_id))
+    control_node.add_child(RecordNode(tag_id=TAG_LIST_HEADER, level=2, payload=_NOTE_LIST_HEADER))
+    paragraph_header_payload = bytearray(_NOTE_PARA_HEADER)
+    raw_text = f"{text}\r" if text else ""
+    paragraph_header_payload[0:4] = (0x80000000 | len(raw_text)).to_bytes(4, "little", signed=False)
+    paragraph_header = ParagraphHeaderRecord.from_record(
+        HwpRecord(
+            tag_id=TAG_PARA_HEADER,
+            level=2,
+            size=len(paragraph_header_payload),
+            header_size=4,
+            offset=-1,
+            payload=bytes(paragraph_header_payload),
+        )
+    )
+    if raw_text:
+        paragraph_header.add_child(ParagraphTextRecord(level=3, raw_text=raw_text))
+    paragraph_header.add_child(RecordNode(tag_id=TAG_PARA_CHAR_SHAPE, level=3, payload=_NOTE_CHAR_SHAPE))
+    paragraph_header.add_child(RecordNode(tag_id=TAG_PARA_LINE_SEG, level=3, payload=_NOTE_LINE_SEG))
+    control_node.add_child(paragraph_header)
+    return control_node
+
+
+def _build_default_paragraph_line_seg_payload(paragraph_index: int) -> bytes:
+    payload = bytearray(_NOTE_LINE_SEG)
+    payload[4:8] = max(paragraph_index, 0).to_bytes(4, "little", signed=False)
+    return bytes(payload)
+
+
+def _paragraph_line_seg_node(paragraph: SectionParagraphModel) -> RecordNode | None:
+    return next((child for child in paragraph.header.children if child.tag_id == TAG_PARA_LINE_SEG), None)
+
+
+def _paragraph_uses_synthetic_line_number_layout(paragraph: SectionParagraphModel) -> bool:
+    line_seg = _paragraph_line_seg_node(paragraph)
+    if line_seg is None:
+        return False
+    if line_seg.payload != _build_default_paragraph_line_seg_payload(paragraph.index):
+        return False
+    trailing = paragraph.header.trailing_payload
+    return len(trailing) > 4 and trailing[4] == 1
+
+
+def _top_level_section_paragraphs(model: SectionModel) -> list[SectionParagraphModel]:
+    return [paragraph for paragraph in model.paragraphs() if paragraph.header.level == 0]
+
+
+def _section_uses_synthetic_line_number_layout(model: SectionModel) -> bool:
+    paragraphs = _top_level_section_paragraphs(model)
+    return bool(paragraphs) and all(_paragraph_uses_synthetic_line_number_layout(paragraph) for paragraph in paragraphs)
+
+
+def _set_paragraph_line_number_flag(paragraph: SectionParagraphModel, enabled: bool) -> None:
+    trailing = bytearray(paragraph.header.trailing_payload)
+    while len(trailing) <= 4:
+        trailing.append(0)
+    trailing[4] = 1 if enabled else 0
+    paragraph.header.trailing_payload = bytes(trailing)
+    paragraph.header.sync_payload()
+
+
+def _ensure_paragraph_line_seg(paragraph: SectionParagraphModel) -> None:
+    line_seg = _paragraph_line_seg_node(paragraph)
+    payload = _build_default_paragraph_line_seg_payload(paragraph.index)
+    if line_seg is None:
+        paragraph.header.add_child(RecordNode(tag_id=TAG_PARA_LINE_SEG, level=paragraph.header.level + 1, payload=payload))
+    else:
+        line_seg.payload = payload
+    _set_paragraph_line_number_flag(paragraph, True)
+
+
+def _remove_synthetic_paragraph_line_seg(paragraph: SectionParagraphModel) -> None:
+    line_seg = _paragraph_line_seg_node(paragraph)
+    if line_seg is not None and line_seg.payload == _build_default_paragraph_line_seg_payload(paragraph.index):
+        paragraph.header.children.remove(line_seg)
+    _set_paragraph_line_number_flag(paragraph, False)
+
+
+def _apply_section_show_line_numbers(model: SectionModel, enabled: bool) -> None:
+    for paragraph in _top_level_section_paragraphs(model):
+        if enabled:
+            _ensure_paragraph_line_seg(paragraph)
+        else:
+            _remove_synthetic_paragraph_line_seg(paragraph)

@@ -4,7 +4,6 @@ import tempfile
 from pathlib import Path
 from typing import Callable
 
-from ._hancom import convert_document
 from .document import HwpxDocument
 from .hwp_document import HwpDocument
 
@@ -23,7 +22,7 @@ class HwpHwpxBridge:
             raise ValueError("At least one source document must be provided.")
         self._hwp_document = hwp_document
         self._hwpx_document = hwpx_document
-        self._converter = converter or convert_document
+        self._converter = converter
         self._workspace: Path | None = None
 
     @classmethod
@@ -67,12 +66,7 @@ class HwpHwpxBridge:
             return self._hwp_document
 
         source_document = self.hwpx_document()
-        workspace = self._ensure_workspace()
-        source_hwpx = workspace / "bridge_source.hwpx"
-        output_hwp = workspace / "bridge_output.hwp"
-        source_document.save(source_hwpx)
-        self._converter(source_hwpx, output_hwp, "HWP")
-        self._hwp_document = HwpDocument.open(output_hwp, converter=self._converter)
+        self._hwp_document = source_document.to_hwp_document(converter=self._converter)
         return self._hwp_document
 
     def hwpx_document(self, *, force_refresh: bool = False) -> HwpxDocument:
@@ -80,12 +74,7 @@ class HwpHwpxBridge:
             return self._hwpx_document
 
         source_document = self.hwp_document()
-        workspace = self._ensure_workspace()
-        source_hwp = workspace / "bridge_source.hwp"
-        output_hwpx = workspace / "bridge_output.hwpx"
-        source_document.binary_document().save_copy(source_hwp)
-        self._converter(source_hwp, output_hwpx, "HWPX")
-        self._hwpx_document = HwpxDocument.open(output_hwpx)
+        self._hwpx_document = source_document.to_hwpx_document(force_refresh=True)
         return self._hwpx_document
 
     def refresh_hwp(self) -> HwpDocument:
