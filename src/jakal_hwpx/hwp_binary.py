@@ -126,6 +126,7 @@ DEFAULT_HWP_TABLE_CELL_HEIGHT = 282
 DEFAULT_HWP_TABLE_BORDER_FILL_ID = 1
 DEFAULT_HWP_TABLE_CELL_MARGIN = (510, 510, 141, 141)
 DEFAULT_HWP_EQUATION_SCRIPT = "x+y"
+DEFAULT_HWP_EQUATION_FONT = "HYhwpEQ"
 DEFAULT_HWP_SHAPE_TEXT = ""
 DEFAULT_HWP_SHAPE_WIDTH = 12000
 DEFAULT_HWP_SHAPE_HEIGHT = 3200
@@ -166,6 +167,90 @@ _PICTURE_SHAPE_PICTURE = bytes.fromhex(
     "0000000000000000010000c00000000000000000b8b0000000000000b8b000009c810000000000009c81000000000000000000007cb0000024810000"
     "00000000000000000000000100"
 )
+
+_DEFAULT_EQUATION_CTRL_HEADER = bytes.fromhex(
+    "6465716511222a0c000000000000000045120000ef0800001300000000000000000000006d58f07000000000030031bcb9c2b0c6"
+)
+_DEFAULT_SHAPE_CTRL_HEADER = bytes.fromhex(
+    "206f736700206a048d2a0000fb1400006e2300002e0c00004902000000000000000000009158d143000000000000"
+)
+_DEFAULT_SHAPE_COMPONENT = bytes.fromhex(
+    "636572246365722400000000feffffff000001006c2300002c0c00006e2300002d0c0000000000010000b7110000170600000100000000000000"
+    "f03f000000000000000000000000000000000000000000000000000000000000f03f00000000000000c0a435ff44e700f03f00000000000000000000"
+    "000000000000000000000000001db2e606a102f03f0000000000000040000000000000f03f000000000000000000000000000000000000000000000000"
+    "0000000000f03f00000000000000000000000038000000410000c0000000000000000000000000000000000000000000000000009258d1030000"
+)
+_DEFAULT_NATIVE_SHAPE_COMPONENT = bytes.fromhex(
+    "636572246365722400000000feffffff000001006c2300002c0c00006e2300002d0c0000000000010000b7110000170600000100000000000000"
+    "f03f000000000000000000000000000000000000000000000000000000000000f03f00000000000000c0a435ff44e700f03f00000000000000000000"
+    "00000000000000000000000000001db2e606a102f03f0000000000000040000000000000f03f000000000000000000000000000000000000000000000000"
+    "000000000000f03f00000000000000000000000038000000410000c0000000000000000000000000000000000000000000000000009258d1030000"
+)
+_DEFAULT_SHAPE_LIST_HEADER = bytes.fromhex("010000000000000000000000000000006e230000000000000000000000000000ff1b0201000000004001000000")
+_DEFAULT_SHAPE_TEXT_PARA_CONTROL_MASK = int.from_bytes(bytes.fromhex("00000080"), "little", signed=False)
+_DEFAULT_SHAPE_TEXT_PARA_SHAPE_ID = 0x17
+_DEFAULT_SHAPE_TEXT_STYLE_ID = 0x16
+_DEFAULT_SHAPE_TEXT_SPLIT_FLAGS = 0x00
+_DEFAULT_SHAPE_TEXT_PARA_TRAILING = bytes.fromhex("070000000100000000800000")
+_DEFAULT_SHAPE_TEXT_CHAR_SHAPE = bytes.fromhex(
+    "000000001a000000010000001b000000020000001c000000030000001b000000040000001d000000050000001e000000"
+)
+_DEFAULT_SHAPE_TEXT_LINE_SEG = bytes.fromhex("000000006400000098080000980800004e07000028050000000000006c23000000000600")
+_DEFAULT_SHAPE_RECTANGLE_PAYLOAD = bytes.fromhex("3200000000000000006c230000000000006c2300002c0c0000000000002c0c0000")
+_DEFAULT_SHAPE_LINE_PAYLOAD = bytes.fromhex("0000000000000000640000006400000000000000")
+_DEFAULT_TEXTART_PAYLOAD = bytes.fromhex("00000000")
+_EQUATION_VERSION_MARKER = "Equation Version 60"
+_DEFAULT_SHAPE_LINE_WIDTH = 33
+_DEFAULT_OLE_LINE_WIDTH = 0
+_HWP_FILLED_SHAPE_COMMON_PAYLOAD_SIZE = 32
+_SHAPE_NATIVE_METADATA_PREFIX = "JAKAL_SHAPE_META"
+_HWP_COMPLEX_SHAPE_SIGNATURES = {
+    "ellipse": b"lle$",
+    "arc": b"cra$",
+    "polygon": b"lop$",
+    "textart": b"tat$",
+}
+
+_HWP_LINE_STYLE_CODES = {
+    "SOLID": 0,
+    "NONE": 0,
+}
+_HWP_LINE_END_CAP_CODES = {
+    "ROUND": 0,
+    "FLAT": 1,
+}
+_HWP_LINE_ARROW_CODES = {
+    "NORMAL": 0,
+}
+_HWP_LINE_ARROW_SIZE_CODES = {
+    "SMALL_SMALL": 0,
+    "SMALL_MEDIUM": 1,
+    "SMALL_LARGE": 2,
+    "MEDIUM_SMALL": 3,
+    "MEDIUM_MEDIUM": 4,
+    "MEDIUM_LARGE": 5,
+    "LARGE_SMALL": 6,
+    "LARGE_MEDIUM": 7,
+    "LARGE_LARGE": 8,
+}
+_HWP_LINE_OUTLINE_STYLE_CODES = {
+    "NORMAL": 0,
+    "OUTER": 1,
+    "INNER": 2,
+}
+_HWP_DRAW_ASPECT_CODES = {
+    "CONTENT": 1,
+    "THUMBNAIL": 2,
+    "ICON": 4,
+    "DOCPRINT": 8,
+}
+_HWP_OLE_OBJECT_TYPE_CODES = {
+    "UNKNOWN": 0,
+    "EMBEDDED": 1,
+    "LINK": 2,
+    "STATIC": 3,
+    "EQUATION": 4,
+}
 
 _CONTROL_MARKER_CODES = {
     "head": 0x10,
@@ -231,8 +316,27 @@ def _normalize_field_control_id(field_type: str) -> str:
     return ("%" + alnum[:3]).ljust(4)
 
 
-def _build_equation_payload(script: str) -> bytes:
-    return b"\x00\x00\x00\x00" + f"* {script}".encode("utf-16-le")
+def _build_equation_payload(script: str, *, font: str = DEFAULT_HWP_EQUATION_FONT) -> bytes:
+    body = f"* {script}`{_EQUATION_VERSION_MARKER}\x07{font}"
+    return b"\x00\x00\x00\x00" + body.encode("utf-16-le")
+
+
+def _build_graphic_control_header_payload(
+    template: bytes,
+    control_id: str,
+    *,
+    width: int,
+    height: int,
+    description: str | None = None,
+) -> bytes:
+    payload = bytearray(template)
+    payload[0:4] = _build_control_id_payload(control_id)
+    if len(payload) >= 24:
+        payload[16:20] = int(width).to_bytes(4, "little", signed=False)
+        payload[20:24] = int(height).to_bytes(4, "little", signed=False)
+    encoded_description = str(description or "").encode("utf-16-le")
+    base = bytes(payload[:44]).ljust(44, b"\x00")
+    return base + (len(encoded_description) // 2).to_bytes(2, "little", signed=False) + encoded_description
 
 
 def _build_minimal_shape_component_payload(width: int, height: int) -> bytes:
@@ -240,6 +344,257 @@ def _build_minimal_shape_component_payload(width: int, height: int) -> bytes:
     payload[20:24] = int(width).to_bytes(4, "little", signed=False)
     payload[24:28] = int(height).to_bytes(4, "little", signed=False)
     return bytes(payload)
+
+
+def _build_shape_component_payload(kind: str, width: int, height: int) -> bytes:
+    if kind in _HWP_COMPLEX_SHAPE_SIGNATURES:
+        payload = bytearray(_DEFAULT_NATIVE_SHAPE_COMPONENT)
+        signature = _HWP_COMPLEX_SHAPE_SIGNATURES[kind]
+        payload[0:4] = signature
+        payload[4:8] = signature
+    else:
+        payload = bytearray(_DEFAULT_SHAPE_COMPONENT)
+    payload[20:24] = int(width).to_bytes(4, "little", signed=False)
+    payload[24:28] = int(height).to_bytes(4, "little", signed=False)
+    payload[28:32] = int(width).to_bytes(4, "little", signed=False)
+    payload[32:36] = int(height).to_bytes(4, "little", signed=False)
+    return bytes(payload)
+
+
+def _build_shape_native_metadata_payload(*, fill_color: str, line_color: str) -> bytes:
+    text = f"{_SHAPE_NATIVE_METADATA_PREFIX};fill_color={fill_color};line_color={line_color}"
+    return text.encode("utf-16-le")
+
+
+def _build_line_attribute_flags(
+    *,
+    line_style: str = "SOLID",
+    end_cap: str = "FLAT",
+    head_style: str = "NORMAL",
+    tail_style: str = "NORMAL",
+    head_size: str = "MEDIUM_MEDIUM",
+    tail_size: str = "MEDIUM_MEDIUM",
+    head_fill: bool = True,
+    tail_fill: bool = True,
+) -> int:
+    value = _HWP_LINE_STYLE_CODES.get(str(line_style).upper(), 0) & 0x3F
+    value |= (_HWP_LINE_END_CAP_CODES.get(str(end_cap).upper(), 1) & 0x0F) << 6
+    value |= (_HWP_LINE_ARROW_CODES.get(str(head_style).upper(), 0) & 0x3F) << 10
+    value |= (_HWP_LINE_ARROW_CODES.get(str(tail_style).upper(), 0) & 0x3F) << 16
+    value |= (_HWP_LINE_ARROW_SIZE_CODES.get(str(head_size).upper(), 4) & 0x0F) << 22
+    value |= (_HWP_LINE_ARROW_SIZE_CODES.get(str(tail_size).upper(), 4) & 0x0F) << 26
+    if head_fill:
+        value |= 1 << 30
+    if tail_fill:
+        value |= 1 << 31
+    return value
+
+
+def _build_shape_line_info_payload(
+    *,
+    color: str = "#000000",
+    width: int = _DEFAULT_SHAPE_LINE_WIDTH,
+    line_style: str = "SOLID",
+    end_cap: str = "FLAT",
+    head_style: str = "NORMAL",
+    tail_style: str = "NORMAL",
+    head_size: str = "MEDIUM_MEDIUM",
+    tail_size: str = "MEDIUM_MEDIUM",
+    head_fill: bool = True,
+    tail_fill: bool = True,
+    outline_style: str = "NORMAL",
+) -> bytes:
+    payload = bytearray(11)
+    payload[0:4] = _build_colorref(color)
+    payload[4:6] = max(0, min(int(width), 0xFFFF)).to_bytes(2, "little", signed=False)
+    payload[6:10] = _build_line_attribute_flags(
+        line_style=line_style,
+        end_cap=end_cap,
+        head_style=head_style,
+        tail_style=tail_style,
+        head_size=head_size,
+        tail_size=tail_size,
+        head_fill=head_fill,
+        tail_fill=tail_fill,
+    ).to_bytes(4, "little", signed=False)
+    payload[10] = _HWP_LINE_OUTLINE_STYLE_CODES.get(str(outline_style).upper(), 0) & 0xFF
+    return bytes(payload)
+
+
+def _build_shape_fill_payload(*, face_color: str = "#FFFFFF", hatch_color: str = "#000000") -> bytes:
+    payload = bytearray()
+    payload.extend((0x00000001).to_bytes(4, "little", signed=False))
+    payload.extend(_build_colorref(face_color))
+    payload.extend(_build_colorref(hatch_color))
+    payload.extend((0).to_bytes(4, "little", signed=True))
+    payload.append(0)
+    payload.extend((0).to_bytes(4, "little", signed=False))
+    return bytes(payload)
+
+
+def _build_filled_shape_common_payload(*, fill_color: str = "#FFFFFF", line_color: str = "#000000") -> bytes:
+    return (
+        _build_shape_line_info_payload(color=line_color, width=_DEFAULT_SHAPE_LINE_WIDTH)
+        + _build_shape_fill_payload(face_color=fill_color, hatch_color=line_color)
+    )
+
+
+def _build_ellipse_specific_payload(width: int, height: int, *, arc_flags: int = 0) -> bytes:
+    payload = bytearray()
+    center_x = int(width) // 2
+    center_y = int(height) // 2
+    axis1_x = int(width) // 2
+    axis1_y = 0
+    axis2_x = 0
+    axis2_y = int(height) // 2
+    start_pos_x = int(width)
+    start_pos_y = center_y
+    end_pos_x = center_x
+    end_pos_y = 0
+    for value in (
+        int(arc_flags),
+        center_x,
+        center_y,
+        axis1_x,
+        axis1_y,
+        axis2_x,
+        axis2_y,
+        start_pos_x,
+        start_pos_y,
+        end_pos_x,
+        end_pos_y,
+        start_pos_x,
+        start_pos_y,
+        end_pos_x,
+        end_pos_y,
+    ):
+        payload.extend(int(value).to_bytes(4, "little", signed=True))
+    return bytes(payload)
+
+
+def _build_arc_specific_payload(width: int, height: int) -> bytes:
+    payload = bytearray()
+    center_x = int(width) // 2
+    center_y = int(height) // 2
+    axis1_x = int(width) // 2
+    axis1_y = 0
+    axis2_x = 0
+    axis2_y = int(height) // 2
+    for value in (0x00000002, center_x, center_y, axis1_x, axis1_y, axis2_x, axis2_y):
+        payload.extend(int(value).to_bytes(4, "little", signed=True))
+    return bytes(payload)
+
+
+def _build_polygon_specific_payload(width: int, height: int) -> bytes:
+    x_points = (0, int(width), int(width), 0)
+    y_points = (0, 0, int(height), int(height))
+    payload = bytearray()
+    payload.extend(len(x_points).to_bytes(2, "little", signed=False))
+    for value in x_points:
+        payload.extend(int(value).to_bytes(4, "little", signed=True))
+    for value in y_points:
+        payload.extend(int(value).to_bytes(4, "little", signed=True))
+    return bytes(payload)
+
+
+def _build_ole_attribute_flags(
+    *,
+    object_type: str = "EMBEDDED",
+    draw_aspect: str = "CONTENT",
+    has_moniker: bool = False,
+    eq_baseline: int = 0,
+) -> int:
+    value = _HWP_DRAW_ASPECT_CODES.get(str(draw_aspect).upper(), 1) & 0xFF
+    if has_moniker:
+        value |= 1 << 8
+    baseline = max(0, min(int(eq_baseline), 0x7F))
+    value |= (baseline & 0x7F) << 9
+    value |= (_HWP_OLE_OBJECT_TYPE_CODES.get(str(object_type).upper(), 1) & 0x3F) << 16
+    return value
+
+
+def _build_ole_specific_payload(
+    *,
+    storage_id: int,
+    width: int,
+    height: int,
+    object_type: str = "EMBEDDED",
+    draw_aspect: str = "CONTENT",
+    has_moniker: bool = False,
+    eq_baseline: int = 0,
+    line_color: str = "#000000",
+    line_width: int = _DEFAULT_OLE_LINE_WIDTH,
+) -> bytes:
+    payload = bytearray(24)
+    payload[0:4] = _build_ole_attribute_flags(
+        object_type=object_type,
+        draw_aspect=draw_aspect,
+        has_moniker=has_moniker,
+        eq_baseline=eq_baseline,
+    ).to_bytes(4, "little", signed=False)
+    payload[4:8] = int(width).to_bytes(4, "little", signed=True)
+    payload[8:12] = int(height).to_bytes(4, "little", signed=True)
+    payload[12:14] = max(0, min(int(storage_id), 0xFFFF)).to_bytes(2, "little", signed=False)
+    payload[14:18] = _build_colorref(line_color)
+    payload[18:20] = max(0, min(int(line_width), 0xFFFF)).to_bytes(2, "little", signed=False)
+    payload[20:24] = _build_line_attribute_flags(
+        line_style="NONE" if int(line_width) <= 0 else "SOLID",
+        end_cap="ROUND",
+        head_style="NORMAL",
+        tail_style="NORMAL",
+        head_size="SMALL_SMALL",
+        tail_size="SMALL_SMALL",
+        head_fill=False,
+        tail_fill=False,
+    ).to_bytes(4, "little", signed=False)
+    return bytes(payload)
+
+
+def _build_shape_specific_payload(
+    kind: str,
+    *,
+    width: int,
+    height: int,
+    fill_color: str = "#FFFFFF",
+    line_color: str = "#000000",
+) -> bytes:
+    if kind == "rect":
+        return _build_filled_shape_common_payload(fill_color=fill_color, line_color=line_color) + _DEFAULT_SHAPE_RECTANGLE_PAYLOAD
+    if kind == "ellipse":
+        return _build_ellipse_specific_payload(width, height)
+    if kind == "arc":
+        return _build_arc_specific_payload(width, height)
+    if kind == "polygon":
+        return _build_polygon_specific_payload(width, height)
+    if kind == "line":
+        common = _build_shape_line_info_payload(color=line_color, width=_DEFAULT_SHAPE_LINE_WIDTH)
+        payload = bytearray(_DEFAULT_SHAPE_LINE_PAYLOAD)
+        payload[8:12] = int(width).to_bytes(4, "little", signed=False)
+        payload[12:16] = int(height).to_bytes(4, "little", signed=False)
+        return common + bytes(payload)
+    if kind == "textart":
+        return _DEFAULT_TEXTART_PAYLOAD
+    return b""
+
+
+def _build_shape_text_records(text: str) -> tuple[RecordNode, ParagraphHeaderRecord]:
+    raw_text = f"{text}\r"
+    paragraph_header = ParagraphHeaderRecord(
+        level=3,
+        char_count=0x80000000 | len(raw_text),
+        control_mask=_DEFAULT_SHAPE_TEXT_PARA_CONTROL_MASK,
+        para_shape_id=_DEFAULT_SHAPE_TEXT_PARA_SHAPE_ID,
+        style_id=_DEFAULT_SHAPE_TEXT_STYLE_ID,
+        split_flags=_DEFAULT_SHAPE_TEXT_SPLIT_FLAGS,
+        trailing_payload=_DEFAULT_SHAPE_TEXT_PARA_TRAILING,
+    )
+    paragraph_header.add_child(ParagraphTextRecord(level=4, raw_text=raw_text))
+    paragraph_header.add_child(RecordNode(tag_id=TAG_PARA_CHAR_SHAPE, level=4, payload=_DEFAULT_SHAPE_TEXT_CHAR_SHAPE))
+    paragraph_header.add_child(RecordNode(tag_id=TAG_PARA_LINE_SEG, level=4, payload=_DEFAULT_SHAPE_TEXT_LINE_SEG))
+    return (
+        RecordNode(tag_id=TAG_LIST_HEADER, level=3, payload=_DEFAULT_SHAPE_LIST_HEADER),
+        paragraph_header,
+    )
 
 
 def _decode_control_id_payload(payload: bytes) -> str:
@@ -513,6 +868,7 @@ def _build_section_definition_payload(
     visibility: dict[str, str] | None = None,
     grid: dict[str, int] | None = None,
     start_numbers: dict[str, str] | None = None,
+    numbering_shape_id: int | None = None,
 ) -> bytes:
     updated = bytearray(payload[:30].ljust(30, b"\x00"))
     attributes = int.from_bytes(updated[4:8], "little")
@@ -541,6 +897,8 @@ def _build_section_definition_payload(
                 attributes |= _SECTION_DEF_WONGGOJI_FORMAT_FLAG
             else:
                 attributes &= ~_SECTION_DEF_WONGGOJI_FORMAT_FLAG
+    if numbering_shape_id is not None:
+        updated[18:20] = int(numbering_shape_id).to_bytes(2, "little", signed=False)
     if start_numbers is not None:
         for key, offset in {"page": 20, "pic": 22, "tbl": 24, "equation": 26}.items():
             if key in start_numbers and start_numbers[key] is not None:
@@ -2290,6 +2648,7 @@ class HwpBinaryDocument:
                 "tbl": str(values.get("tbl", 0)),
                 "equation": str(values.get("equation", 0)),
             },
+            "numbering_shape_id": str(values.get("numbering_shape_id", 0)),
         }
 
     def set_section_definition_settings(
@@ -2299,6 +2658,7 @@ class HwpBinaryDocument:
         visibility: dict[str, str] | None = None,
         grid: dict[str, int] | None = None,
         start_numbers: dict[str, str] | None = None,
+        numbering_shape_id: int | None = None,
     ) -> None:
         self.ensure_section_count(section_index + 1)
         model = self.section_model(section_index)
@@ -2310,6 +2670,7 @@ class HwpBinaryDocument:
             visibility=visibility,
             grid=grid,
             start_numbers=start_numbers,
+            numbering_shape_id=numbering_shape_id,
         )
         if visibility is not None:
             current = self.section_definition_settings(section_index)["visibility"]
@@ -2507,17 +2868,28 @@ class HwpBinaryDocument:
         image_bytes: bytes | None = None,
         extension: str | None = None,
         *,
+        width: int = DEFAULT_HWP_SHAPE_WIDTH,
+        height: int = DEFAULT_HWP_SHAPE_HEIGHT,
         profile_root: str | Path | None = None,
         section_index: int | None = None,
     ) -> None:
         if image_bytes is None:
             self._append_picture_with_storage_id(
                 self._resolve_default_picture_storage_id(),
+                width=width,
+                height=height,
                 profile_root=profile_root,
                 section_index=section_index,
             )
             return
-        self._append_picture_with_bindata(image_bytes, extension=extension or "png", profile_root=profile_root, section_index=section_index)
+        self._append_picture_with_bindata(
+            image_bytes,
+            extension=extension or "png",
+            width=width,
+            height=height,
+            profile_root=profile_root,
+            section_index=section_index,
+        )
 
     def append_hyperlink(
         self,
@@ -2726,6 +3098,8 @@ class HwpBinaryDocument:
         *,
         width: int = 4800,
         height: int = 2300,
+        font: str = DEFAULT_HWP_EQUATION_FONT,
+        shape_comment: str | None = None,
         section_index: int | None = None,
         paragraph_index: int | None = None,
     ) -> None:
@@ -2738,8 +3112,18 @@ class HwpBinaryDocument:
             paragraph = model.insert_paragraph(paragraph_index, "\r")
         if use_synthetic_line_numbers:
             _ensure_paragraph_line_seg(paragraph)
-        control_node = RecordNode(tag_id=TAG_CTRL_HEADER, level=1, payload=_build_control_id_payload("eqed"))
-        control_node.add_child(RecordNode(tag_id=TAG_EQEDIT, level=2, payload=_build_equation_payload(script)))
+        control_node = RecordNode(
+            tag_id=TAG_CTRL_HEADER,
+            level=1,
+            payload=_build_graphic_control_header_payload(
+                _DEFAULT_EQUATION_CTRL_HEADER,
+                "eqed",
+                width=width,
+                height=height,
+                description=shape_comment,
+            ),
+        )
+        control_node.add_child(RecordNode(tag_id=TAG_EQEDIT, level=2, payload=_build_equation_payload(script, font=font)))
         paragraph.header.add_child(control_node)
         self.replace_section_model(target_section_index, model)
 
@@ -2750,6 +3134,9 @@ class HwpBinaryDocument:
         text: str = DEFAULT_HWP_SHAPE_TEXT,
         width: int = DEFAULT_HWP_SHAPE_WIDTH,
         height: int = DEFAULT_HWP_SHAPE_HEIGHT,
+        fill_color: str = "#FFFFFF",
+        line_color: str = "#000000",
+        shape_comment: str | None = None,
         section_index: int | None = None,
         paragraph_index: int | None = None,
     ) -> None:
@@ -2777,13 +3164,47 @@ class HwpBinaryDocument:
             paragraph = model.insert_paragraph(paragraph_index, paragraph_text)
         if use_synthetic_line_numbers:
             _ensure_paragraph_line_seg(paragraph)
-        control_node = RecordNode(tag_id=TAG_CTRL_HEADER, level=1, payload=_build_control_id_payload("gso "))
+        control_node = RecordNode(
+            tag_id=TAG_CTRL_HEADER,
+            level=1,
+            payload=_build_graphic_control_header_payload(
+                _DEFAULT_SHAPE_CTRL_HEADER,
+                "gso ",
+                width=width,
+                height=height,
+                description=shape_comment,
+            ),
+        )
+        if kind in _HWP_COMPLEX_SHAPE_SIGNATURES:
+            control_node.add_child(
+                RecordNode(
+                    tag_id=TAG_CTRL_DATA,
+                    level=2,
+                    payload=_build_shape_native_metadata_payload(fill_color=fill_color, line_color=line_color),
+                )
+            )
         shape_component = RecordNode(
             tag_id=TAG_SHAPE_COMPONENT,
             level=2,
-            payload=_build_minimal_shape_component_payload(width, height),
+            payload=_build_shape_component_payload(kind, width, height),
         )
-        shape_component.add_child(RecordNode(tag_id=kind_to_tag[kind], level=3, payload=b""))
+        if text and kind != "line":
+            list_header, paragraph_header = _build_shape_text_records(text)
+            shape_component.add_child(list_header)
+            shape_component.add_child(paragraph_header)
+        shape_component.add_child(
+            RecordNode(
+                tag_id=kind_to_tag[kind],
+                level=3,
+                payload=_build_shape_specific_payload(
+                    kind,
+                    width=width,
+                    height=height,
+                    fill_color=fill_color,
+                    line_color=line_color,
+                ),
+            )
+        )
         control_node.add_child(shape_component)
         paragraph.header.add_child(control_node)
         self.replace_section_model(target_section_index, model)
@@ -2795,11 +3216,18 @@ class HwpBinaryDocument:
         *,
         width: int = DEFAULT_HWP_SHAPE_WIDTH,
         height: int = DEFAULT_HWP_SHAPE_HEIGHT,
+        shape_comment: str | None = None,
+        object_type: str = "EMBEDDED",
+        draw_aspect: str = "CONTENT",
+        has_moniker: bool = False,
+        eq_baseline: int = 0,
+        line_color: str = "#000000",
+        line_width: int = _DEFAULT_OLE_LINE_WIDTH,
         section_index: int | None = None,
         paragraph_index: int | None = None,
     ) -> None:
         target_section_index = self._resolve_append_section_index(None, section_index)
-        self.add_embedded_bindata(data, extension="ole")
+        storage_id, _ = self.add_embedded_bindata(data, extension="ole")
         model = self.section_model(target_section_index)
         use_synthetic_line_numbers = _section_uses_synthetic_line_number_layout(model)
         paragraph_text = f"{name}\r" if name else "\r"
@@ -2809,13 +3237,43 @@ class HwpBinaryDocument:
             paragraph = model.insert_paragraph(paragraph_index, paragraph_text)
         if use_synthetic_line_numbers:
             _ensure_paragraph_line_seg(paragraph)
-        control_node = RecordNode(tag_id=TAG_CTRL_HEADER, level=1, payload=_build_control_id_payload("gso "))
+        control_node = RecordNode(
+            tag_id=TAG_CTRL_HEADER,
+            level=1,
+            payload=_build_graphic_control_header_payload(
+                _DEFAULT_SHAPE_CTRL_HEADER,
+                "gso ",
+                width=width,
+                height=height,
+                description=shape_comment,
+            ),
+        )
         shape_component = RecordNode(
             tag_id=TAG_SHAPE_COMPONENT,
             level=2,
-            payload=_build_minimal_shape_component_payload(width, height),
+            payload=_build_shape_component_payload("ole", width, height),
         )
-        shape_component.add_child(RecordNode(tag_id=TAG_SHAPE_COMPONENT_OLE, level=3, payload=b""))
+        if name:
+            list_header, paragraph_header = _build_shape_text_records(name)
+            shape_component.add_child(list_header)
+            shape_component.add_child(paragraph_header)
+        shape_component.add_child(
+            RecordNode(
+                tag_id=TAG_SHAPE_COMPONENT_OLE,
+                level=3,
+                payload=_build_ole_specific_payload(
+                    storage_id=storage_id,
+                    width=width,
+                    height=height,
+                    object_type=object_type,
+                    draw_aspect=draw_aspect,
+                    has_moniker=has_moniker,
+                    eq_baseline=eq_baseline,
+                    line_color=line_color,
+                    line_width=line_width,
+                ),
+            )
+        )
         control_node.add_child(shape_component)
         paragraph.header.add_child(control_node)
         self.replace_section_model(target_section_index, model)
@@ -3173,12 +3631,15 @@ class HwpBinaryDocument:
             "append_picture() without image_bytes requires at least one existing BinData stream in the document."
         )
 
-    def _build_picture_records(self, storage_id: int) -> list[HwpRecord]:
+    def _build_picture_records(self, storage_id: int, *, width: int, height: int) -> list[HwpRecord]:
         top_char_count = len(_PICTURE_TOP_PARA_TEXT) // 2
         picture_payload = bytearray(_PICTURE_SHAPE_PICTURE)
         if len(picture_payload) <= 72:
             raise HwpBinaryEditError("Built picture payload is shorter than expected.")
         picture_payload[71:73] = int(storage_id).to_bytes(2, "little", signed=False)
+        shape_component_payload = bytearray(_PICTURE_SHAPE_COMPONENT)
+        shape_component_payload[20:24] = int(width).to_bytes(4, "little", signed=False)
+        shape_component_payload[24:28] = int(height).to_bytes(4, "little", signed=False)
         return [
             HwpRecord(
                 tag_id=TAG_PARA_HEADER,
@@ -3198,7 +3659,7 @@ class HwpBinaryDocument:
                 size=len(_PICTURE_SHAPE_COMPONENT),
                 header_size=4,
                 offset=-1,
-                payload=_PICTURE_SHAPE_COMPONENT,
+                payload=bytes(shape_component_payload),
             ),
             HwpRecord(
                 tag_id=TAG_SHAPE_COMPONENT_PICTURE,
@@ -3214,13 +3675,15 @@ class HwpBinaryDocument:
         self,
         storage_id: int,
         *,
+        width: int,
+        height: int,
         profile_root: str | Path | None,
         section_index: int | None,
     ) -> None:
         target_section_index = self._resolve_append_section_index(profile_root, section_index)
         use_synthetic_line_numbers = _section_uses_synthetic_line_number_layout(self.section_model(target_section_index))
         section_records = self.section_records(target_section_index)
-        section_records.extend(self._build_picture_records(storage_id))
+        section_records.extend(self._build_picture_records(storage_id, width=width, height=height))
         self.replace_section_records(target_section_index, section_records)
         if use_synthetic_line_numbers:
             model = self.section_model(target_section_index)
@@ -3232,11 +3695,19 @@ class HwpBinaryDocument:
         image_bytes: bytes,
         *,
         extension: str,
+        width: int,
+        height: int,
         profile_root: str | Path | None,
         section_index: int | None,
     ) -> None:
         storage_id, _stream_path = self.add_embedded_bindata(image_bytes, extension=extension)
-        self._append_picture_with_storage_id(storage_id, profile_root=profile_root, section_index=section_index)
+        self._append_picture_with_storage_id(
+            storage_id,
+            width=width,
+            height=height,
+            profile_root=profile_root,
+            section_index=section_index,
+        )
 
     def _append_table_with_text(
         self,

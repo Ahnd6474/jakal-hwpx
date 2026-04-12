@@ -10,6 +10,7 @@ import zipfile
 from collections import Counter
 from dataclasses import replace
 from pathlib import Path, PurePosixPath
+from uuid import uuid4
 
 from lxml import etree
 
@@ -388,6 +389,24 @@ def _build_blank_document_state() -> tuple[dict[str, HwpxPart], list[str], dict[
         "META-INF/container.xml",
     ]
     return parts, part_order, {}, []
+
+
+def _new_temp_dir(prefix: str) -> Path:
+    root = Path(
+        os.environ.get("JAKAL_HWPX_TEMP_ROOT")
+        or os.environ.get("TMPDIR")
+        or os.environ.get("TEMP")
+        or tempfile.gettempdir()
+    )
+    root.mkdir(parents=True, exist_ok=True)
+    for _ in range(32):
+        candidate = root / f"{prefix}{uuid4().hex}"
+        try:
+            candidate.mkdir(parents=True, exist_ok=False)
+            return candidate
+        except FileExistsError:
+            continue
+    return Path(tempfile.mkdtemp(prefix=prefix, dir=str(root)))
 
 
 class HwpxDocument:
@@ -2227,6 +2246,11 @@ class HwpxDocument:
 
         return HancomDocument.from_hwpx_document(self, converter=converter).to_hwp_document(converter=converter)
 
+    def to_hancom_document(self, *, converter=None):
+        from .hancom_document import HancomDocument
+
+        return HancomDocument.from_hwpx_document(self, converter=converter)
+
     def save_as_hwp(self, path: str | os.PathLike[str], *, converter=None, force_refresh: bool = True) -> Path:
         return self.to_hwp_document(converter=converter).save(path)
 
@@ -2372,7 +2396,7 @@ class HwpxDocument:
             raise HwpxValidationError(errors)
 
     def roundtrip_validate(self) -> None:
-        temp_dir = Path(tempfile.mkdtemp(prefix="jakal_hwpx_"))
+        temp_dir = _new_temp_dir("jakal_hwpx_")
         try:
             temp_path = temp_dir / "roundtrip.hwpx"
             self.save(temp_path)
@@ -2623,7 +2647,7 @@ class HwpxDocument:
         return errors
 
     def save_reopen_validation_errors(self) -> list[ValidationIssue]:
-        temp_dir = Path(tempfile.mkdtemp(prefix="jakal_hwpx_reopen_"))
+        temp_dir = _new_temp_dir("jakal_hwpx_reopen_")
         try:
             temp_path = temp_dir / "validation.hwpx"
             self.save(temp_path)
@@ -2818,5 +2842,7 @@ class HwpxDocument:
             except Exception as exc:  # noqa: BLE001
                 last_error = exc
                 time.sleep(delay_seconds)
+        if temp_dir.exists() and isinstance(last_error, PermissionError):
+            return
         if temp_dir.exists() and last_error is not None:
             raise last_error

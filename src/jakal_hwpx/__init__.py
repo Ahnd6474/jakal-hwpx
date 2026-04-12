@@ -2,6 +2,7 @@ from .bridge import HwpHwpxBridge
 from .document import DocumentMetadata, HwpxDocument
 from .hancom_document import (
     AutoNumber,
+    BulletDefinition,
     Bookmark,
     CharacterStyle,
     Equation,
@@ -12,6 +13,7 @@ from .hancom_document import (
     HancomSection,
     Hyperlink,
     Note,
+    NumberingDefinition,
     Ole,
     Paragraph,
     ParagraphStyle,
@@ -134,6 +136,7 @@ __all__ = [
     "BinDataRecord",
     "Bookmark",
     "BookmarkXml",
+    "BulletDefinition",
     "ContainerPart",
     "ContainerRdfPart",
     "ContentHpfPart",
@@ -201,6 +204,7 @@ __all__ = [
     "MimetypePart",
     "Note",
     "NoteXml",
+    "NumberingDefinition",
     "Ole",
     "OleXml",
     "PreviewImagePart",

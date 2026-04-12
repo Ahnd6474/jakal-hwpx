@@ -3,4 +3,6 @@ include THIRD_PARTY_NOTICES.md
 include README.md
 include HWPX_MODULE.md
 include RELEASING.md
+include STABILITY_CONTRACT.md
+include stability_contract.json
 recursive-include src/jakal_hwpx py.typed

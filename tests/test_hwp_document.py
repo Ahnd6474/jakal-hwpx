@@ -4,6 +4,9 @@ from pathlib import Path
 
 import pytest
 
+import jakal_hwpx.hwp_document as hwp_document_module
+from jakal_hwpx.hwp_binary import TAG_LIST_HEADER, TAG_PARA_HEADER
+
 from jakal_hwpx import (
     DocInfoModel,
     HwpAutoNumberObject,
@@ -37,7 +40,7 @@ HWP_SAMPLE_DIR = REPO_ROOT / "examples" / "samples" / "hwp"
 def sample_hwp_path() -> Path:
     paths = sorted(HWP_SAMPLE_DIR.glob("*.hwp"))
     assert paths, f"No .hwp samples were found under {HWP_SAMPLE_DIR}"
-    return paths[0]
+    return next((path for path in paths if not path.name.startswith("generated_")), paths[0])
 
 
 def test_hwp_document_exposes_object_model_for_sections_and_paragraphs(sample_hwp_path: Path) -> None:
@@ -234,6 +237,25 @@ def test_hwp_document_can_roundtrip_section_definition_settings_to_native_hwp(tm
     assert reopened_settings.visibility()["hideFirstEmptyLine"] == "1"
 
 
+def test_hwp_document_can_roundtrip_section_numbering_shape_and_picture_size(tmp_path: Path) -> None:
+    document = HwpDocument.blank()
+    image_bytes = document.binary_document().read_stream("BinData/BIN0001.bmp", decompress=False)
+    document.apply_section_settings(section_index=0, numbering_shape_id="2")
+    document.append_picture(image_bytes, extension="bmp", width=3600, height=2400)
+
+    output_path = tmp_path / "section_numbering_shape_picture_size.hwp"
+    document.save(output_path)
+
+    reopened = HwpDocument.open(output_path)
+    native_settings = reopened.binary_document().section_definition_settings(0)
+    assert native_settings["numbering_shape_id"] == "2"
+    assert reopened.pictures()[0].size() == {"width": 3600, "height": 2400}
+
+    reopened_hwpx = reopened.to_hwpx_document()
+    picture = reopened_hwpx.pictures()[0]
+    assert picture.size() == {"width": 3600, "height": 2400}
+
+
 def test_hwp_document_can_roundtrip_native_show_line_number_with_best_effort_line_number_shape(tmp_path: Path) -> None:
     document = HwpDocument.blank()
     document.set_paragraph_text(0, 0, "alpha")
@@ -330,18 +352,18 @@ def test_hwp_document_can_bridge_to_hwpx_high_level_api(
 
 def test_hwp_document_exposes_direct_pure_python_control_append_methods(tmp_path: Path) -> None:
     document = HwpDocument.blank()
-    profile = HwpPureProfile.load_bundled()
-    before_count = len(document.binary_document().section_records(profile.target_section_index))
+    target_section_index = document._default_append_section_index
+    before_count = len(document.binary_document().section_records(target_section_index))
     document.append_table()
     document.append_picture()
     document.append_hyperlink()
-    after_count = len(document.binary_document().section_records(profile.target_section_index))
+    after_count = len(document.binary_document().section_records(target_section_index))
     assert after_count > before_count
 
     output_path = tmp_path / "direct_control_append.hwp"
     document.save(output_path)
     reopened = HwpDocument.open(output_path)
-    assert len(reopened.binary_document().section_records(profile.target_section_index)) == after_count
+    assert len(reopened.binary_document().section_records(target_section_index)) == after_count
 
 
 def test_hwp_document_can_append_picture_from_bytes(tmp_path: Path) -> None:
@@ -569,7 +591,7 @@ def test_hwp_document_append_methods_create_controls_without_bridge(tmp_path: Pa
     document = HwpDocument.blank()
 
     document.append_field(field_type="DOCPROPERTY", display_text="FIELD-TEXT", name="Subject")
-    document.append_equation("x+y=z")
+    document.append_equation("x+y=z", width=3456, height=2100, font="Batang")
     document.append_shape(kind="rect", text="SHAPE-TEXT", width=3600, height=1800)
     document.append_ole("embedded.ole", b"OLE-DATA")
 
@@ -588,6 +610,167 @@ def test_hwp_document_append_methods_create_controls_without_bridge(tmp_path: Pa
     assert any(equation.script == "x+y=z" for equation in reopened.equations())
     assert any(shape.kind == "rect" and shape.size()["width"] == 3600 for shape in reopened.shapes())
     assert len(reopened.oles()) == 1
+
+
+def test_hwp_document_native_control_append_writes_richer_equation_shape_and_ole_payloads(tmp_path: Path) -> None:
+    document = HwpDocument.blank()
+    document.append_equation("x+y=z", width=3456, height=2100, font="Batang", shape_comment="NATIVE-EQ")
+    document.append_shape(
+        kind="rect",
+        text="NATIVE-SHAPE",
+        width=3600,
+        height=1800,
+        fill_color="#ABCDEF",
+        line_color="#123456",
+        shape_comment="NATIVE-SHAPE-COMMENT",
+    )
+    document.append_ole(
+        "native.ole",
+        b"NATIVE-OLE-DATA",
+        width=3900,
+        height=2200,
+        shape_comment="NATIVE-OLE-COMMENT",
+        object_type="LINK",
+        draw_aspect="ICON",
+        has_moniker=True,
+        eq_baseline=12,
+        line_color="#445566",
+        line_width=77,
+    )
+
+    output_path = tmp_path / "hwp_native_richer_controls.hwp"
+    document.save(output_path)
+    reopened = HwpDocument.open(output_path)
+
+    equation = reopened.equations()[0]
+    shape = reopened.shapes()[0]
+    ole = reopened.oles()[0]
+
+    assert equation.script == "x+y=z"
+    assert equation.size() == {"width": 3456, "height": 2100}
+    assert equation.font == "Batang"
+    assert equation.shape_comment == "NATIVE-EQ"
+    assert shape.text == "NATIVE-SHAPE"
+    assert shape.size() == {"width": 3600, "height": 1800}
+    assert shape.shape_comment == "NATIVE-SHAPE-COMMENT"
+    assert shape.fill_color == "#ABCDEF"
+    assert shape.line_color == "#123456"
+    assert TAG_LIST_HEADER in shape.descendant_tag_ids()
+    assert TAG_PARA_HEADER in shape.descendant_tag_ids()
+    assert ole.text == "native.ole"
+    assert ole.size() == {"width": 3900, "height": 2200}
+    assert ole.shape_comment == "NATIVE-OLE-COMMENT"
+    assert ole.object_type == "LINK"
+    assert ole.draw_aspect == "ICON"
+    assert ole.has_moniker is True
+    assert ole.eq_baseline == 12
+    assert ole.line_color == "#445566"
+    assert ole.line_width == 77
+    assert ole.storage_id > 0
+    assert TAG_LIST_HEADER in ole.descendant_tag_ids()
+
+
+def test_hwp_document_native_shape_append_writes_richer_ellipse_arc_polygon_and_textart_payloads(tmp_path: Path) -> None:
+    document = HwpDocument.blank()
+    document.append_shape(
+        kind="ellipse",
+        text="NATIVE-ELLIPSE",
+        width=3800,
+        height=2000,
+        fill_color="#A1B2C3",
+        line_color="#102030",
+        shape_comment="ELLIPSE-COMMENT",
+    )
+    document.append_shape(
+        kind="arc",
+        text="NATIVE-ARC",
+        width=4000,
+        height=2200,
+        fill_color="#C3B2A1",
+        line_color="#203040",
+        shape_comment="ARC-COMMENT",
+    )
+    document.append_shape(
+        kind="polygon",
+        text="NATIVE-POLYGON",
+        width=4200,
+        height=2400,
+        fill_color="#DDEEFF",
+        line_color="#304050",
+        shape_comment="POLYGON-COMMENT",
+    )
+    document.append_shape(
+        kind="textart",
+        text="NATIVE-TEXTART",
+        width=4400,
+        height=2600,
+        fill_color="#FFEEDD",
+        line_color="#405060",
+        shape_comment="TEXTART-COMMENT",
+    )
+
+    output_path = tmp_path / "hwp_native_richer_shape_kinds.hwp"
+    document.save(output_path)
+    reopened = HwpDocument.open(output_path)
+
+    shapes = reopened.shapes()
+    ellipse = next(shape for shape in shapes if shape.kind == "ellipse")
+    arc = next(shape for shape in shapes if shape.kind == "arc")
+    polygon = next(shape for shape in shapes if shape.kind == "polygon")
+    textart = next(shape for shape in shapes if shape.kind == "textart")
+
+    assert ellipse.text == "NATIVE-ELLIPSE"
+    assert ellipse.size() == {"width": 3800, "height": 2000}
+    assert ellipse.fill_color == "#A1B2C3"
+    assert ellipse.line_color == "#102030"
+    assert ellipse.shape_comment == "ELLIPSE-COMMENT"
+
+    assert arc.text == "NATIVE-ARC"
+    assert arc.size() == {"width": 4000, "height": 2200}
+    assert arc.fill_color == "#C3B2A1"
+    assert arc.line_color == "#203040"
+    assert arc.shape_comment == "ARC-COMMENT"
+
+    assert polygon.text == "NATIVE-POLYGON"
+    assert polygon.size() == {"width": 4200, "height": 2400}
+    assert polygon.fill_color == "#DDEEFF"
+    assert polygon.line_color == "#304050"
+    assert polygon.shape_comment == "POLYGON-COMMENT"
+
+    assert textart.text == "NATIVE-TEXTART"
+    assert textart.size() == {"width": 4400, "height": 2600}
+    assert textart.fill_color == "#FFEEDD"
+    assert textart.line_color == "#405060"
+    assert textart.shape_comment == "TEXTART-COMMENT"
+    assert TAG_LIST_HEADER in textart.descendant_tag_ids()
+    assert TAG_PARA_HEADER in textart.descendant_tag_ids()
+
+
+def test_hwp_document_native_table_picture_hyperlink_append_do_not_require_profile_reload(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    document = HwpDocument.blank()
+    image_bytes = document.binary_document().read_stream("BinData/BIN0001.bmp", decompress=False)
+    document._pure_profile = None
+
+    def _fail_load_bundled():
+        raise AssertionError("append path should not reload bundled pure profile")
+
+    monkeypatch.setattr(hwp_document_module.HwpPureProfile, "load_bundled", staticmethod(_fail_load_bundled))
+
+    document.append_table(rows=1, cols=2, cell_texts=[["NATIVE-1", "NATIVE-2"]])
+    document.append_picture(image_bytes, extension="bmp")
+    document.append_hyperlink("https://example.com/native", text="NATIVE-LINK")
+
+    output_path = tmp_path / "hwp_native_append_no_profile_reload.hwp"
+    document.save(output_path)
+    monkeypatch.undo()
+    reopened = HwpDocument.open(output_path)
+
+    assert any(table.row_count == 1 and table.column_count == 2 for table in reopened.tables())
+    assert any(picture.extension == "bmp" for picture in reopened.pictures())
+    assert any(link.display_text == "NATIVE-LINK" for link in reopened.hyperlinks())
 
 
 def test_hwp_section_append_helpers_create_controls_in_target_section() -> None:
@@ -686,13 +869,16 @@ def test_hwp_document_append_methods_support_paragraph_index() -> None:
 
     texts = [paragraph.text for paragraph in section.paragraphs()]
     updated_first_index = texts.index("FIRST")
+    equation_index = next(equation.paragraph_index for equation in document.equations() if equation.script == "EQ-MID")
+    rect_index = next(shape.paragraph_index for shape in document.shapes() if shape.kind == "rect" and shape.text == "SHAPE-MID")
+    ole_index = next(ole.paragraph_index for ole in document.oles() if ole.text == "OLE-MID")
+
     assert "FIELD-MID" in texts[updated_first_index + 1]
-    assert texts[updated_first_index + 2] == "\r"
-    assert "SHAPE-MID" in texts[updated_first_index + 3]
-    assert "OLE-MID" in texts[updated_first_index + 4]
-    assert texts[updated_first_index + 5] == "SECOND"
-    assert texts[updated_first_index + 6] == "THIRD"
-    assert any(equation.paragraph_index == updated_first_index + 2 for equation in document.equations() if equation.script == "EQ-MID")
+    assert texts[equation_index] == "\r"
+    assert "OLE-MID" in texts[ole_index]
+    assert "SHAPE-MID" in texts[rect_index]
+    assert texts[-2:] == ["SECOND", "THIRD"]
+    assert updated_first_index + 1 < equation_index < ole_index < rect_index
 
 
 def test_hwp_table_object_can_append_row_and_roundtrip(tmp_path: Path) -> None:

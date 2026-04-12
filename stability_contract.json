@@ -1,0 +1,268 @@
+{
+  "schema_version": 1,
+  "python_versions": [
+    "3.11",
+    "3.12",
+    "3.13"
+  ],
+  "required_corpus_categories": [
+    "simple_document",
+    "multi_section_form",
+    "control_rich",
+    "complex_layout",
+    "hard_case",
+    "legacy_binary"
+  ],
+  "minimum_case_counts": {
+    "hwpx_stability": 72,
+    "hwp_stability": 76,
+    "bridge_stability": 25
+  },
+  "thresholds": {
+    "pytest_failures_max": 0,
+    "corpus_failures_max": 0,
+    "hwpx_stability_failures_max": 0,
+    "hwp_stability_failures_max": 0,
+    "bridge_stability_failures_max": 0,
+    "hancom_corpus_failures_max": 0,
+    "hancom_dialogs_max": 0,
+    "pdf_visual_diff_max_changed_ratio": 0.005
+  },
+  "supported_scopes": [
+    {
+      "format": "HWPX",
+      "tier": "strong_roundtrip",
+      "operations": [
+        "open existing documents",
+        "blank document authoring",
+        "text replacement and paragraph editing",
+        "table, picture, equation, shape insertion",
+        "header and footer editing",
+        "bookmark and field editing",
+        "multi-section editing"
+      ],
+      "gates": [
+        "pytest",
+        "corpus_validation",
+        "hwpx_stability_lab",
+        "hancom_corpus_smoke"
+      ]
+    },
+    {
+      "format": "HWP",
+      "tier": "constrained_binary_editing",
+      "operations": [
+        "open existing binary documents",
+        "preview and body text extraction",
+        "same-length text replacement",
+        "profile-backed paragraph, table, picture, hyperlink, bookmark, note, and section editing",
+        "reopen after save"
+      ],
+      "gates": [
+        "pytest",
+        "hwp_stability_lab"
+      ]
+    },
+    {
+      "format": "HWP<->HWPX",
+      "tier": "semantic_bridge_roundtrip",
+      "operations": [
+        "hwp to hwpx conversion",
+        "hwpx to hwp conversion",
+        "bridge-backed paragraph, table, hyperlink, equation, shape, ole, section, and note edits",
+        "reopen after bridge save"
+      ],
+      "gates": [
+        "pytest",
+        "bridge_stability_lab"
+      ]
+    }
+  ],
+  "unsupported_scopes": [
+    "Byte-identical HWP to HWPX or HWPX to HWP conversion is not guaranteed.",
+    "Pure-Python HWP writing is not a promise of full-fidelity preservation for every legacy HWP control or every arbitrary third-party document.",
+    "Unsupported or unknown HWP binary controls are not guaranteed to round-trip unless a profile or donor-backed path explicitly covers them.",
+    "Pixel-identical layout parity with Hancom is not guaranteed; the hard release blocker is zero structural layout-signature regressions and zero Hancom warning or recovery dialogs on the release corpus.",
+    "PDF visual diff remains advisory until a renderer-backed baseline is wired into the repository gate."
+  ],
+  "gate_profiles": {
+    "ci": {
+      "description": "Portable release gate that runs on CI without Hancom.",
+      "run_pytest": true,
+      "run_packaging": true,
+      "run_corpus_validation": true,
+      "run_hwpx_stability_lab": true,
+      "run_hwp_stability_lab": true,
+      "run_bridge_stability_lab": true,
+      "require_windows": false,
+      "require_hancom": false,
+      "run_hancom_corpus_smoke": false
+    },
+    "release": {
+      "description": "Full release gate for a Windows machine with Hancom installed.",
+      "run_pytest": true,
+      "run_packaging": true,
+      "run_corpus_validation": true,
+      "run_hwpx_stability_lab": true,
+      "run_hwp_stability_lab": true,
+      "run_bridge_stability_lab": true,
+      "require_windows": true,
+      "require_hancom": true,
+      "run_hancom_corpus_smoke": true
+    }
+  },
+  "corpus_samples": [
+    {
+      "category": "simple_document",
+      "path": "examples/samples/hwpx/2026_오르비_보고서_타치바나미카리_완성.hwpx",
+      "format": "hwpx",
+      "difficulty": "simple",
+      "expected_title": "2026 공개 커뮤니티 반응 요약: 타치바나 미카리",
+      "expected_texts": [
+        "타치바나미카리"
+      ],
+      "required_features": [
+        "table",
+        "picture"
+      ],
+      "min_sections": 1
+    },
+    {
+      "category": "multi_section_form",
+      "path": "examples/samples/hwpx/social_security_application_example.hwpx",
+      "format": "hwpx",
+      "difficulty": "form_with_sections",
+      "expected_title": "사회보장급여 신청(변경)서 예시",
+      "expected_texts": [
+        "김하늘",
+        "사회보장급여 신청(변경)서"
+      ],
+      "required_features": [
+        "table"
+      ],
+      "min_sections": 2
+    },
+    {
+      "category": "control_rich",
+      "path": "examples/samples/hwpx/generated_feature_matrix.hwpx",
+      "format": "hwpx",
+      "difficulty": "synthetic_feature_matrix",
+      "expected_title": "Generated Feature Matrix",
+      "expected_texts": [
+        "Generated header block",
+        "Generated footer block",
+        "Generated footnote",
+        "Generated Link",
+        "42"
+      ],
+      "required_features": [
+        "header",
+        "footer",
+        "footnote",
+        "endnote",
+        "bookmark",
+        "hyperlink",
+        "field",
+        "table",
+        "picture",
+        "equation",
+        "shape"
+      ],
+      "min_sections": 1
+    },
+    {
+      "category": "complex_layout",
+      "path": "examples/samples/hwpx/math_template_2_formula_fixed.hwpx",
+      "format": "hwpx",
+      "difficulty": "complex_layout",
+      "expected_title": "1",
+      "expected_texts": [
+        "2025학년도 대학수학능력시험 문제지",
+        "수학 영역"
+      ],
+      "required_features": [
+        "header",
+        "table",
+        "picture",
+        "equation",
+        "shape"
+      ],
+      "min_sections": 2
+    },
+    {
+      "category": "hard_case",
+      "path": "hard_case/hard example.hwpx",
+      "format": "hwpx",
+      "difficulty": "near_corruption_real_world",
+      "expected_texts": [
+        "안성민",
+        "너 안성민"
+      ],
+      "required_features": [
+        "footnote",
+        "field",
+        "picture",
+        "equation",
+        "shape"
+      ],
+      "min_sections": 1
+    },
+    {
+      "category": "legacy_binary",
+      "path": "examples/samples/hwp/기출킬러양식.hwp",
+      "format": "hwp",
+      "difficulty": "legacy_binary",
+      "expected_preview_texts": [
+        "2027학년도",
+        "수학 영역"
+      ],
+      "expected_texts": [
+        "2027학년도",
+        "수학 영역"
+      ],
+      "required_control_ids": [
+        "tbl ",
+        "eqed",
+        "head"
+      ],
+      "min_sections": 1
+    },
+    {
+      "category": "legacy_binary",
+      "path": "examples/samples/hwp/generated_native_control_authoring.hwp",
+      "format": "hwp",
+      "difficulty": "synthetic_native_control_authoring",
+      "expected_preview_texts": [
+        "Generated native control authoring sample"
+      ],
+      "expected_texts": [
+        "Generated native control authoring sample",
+        "Native rect",
+        "native-control.ole"
+      ],
+      "required_control_ids": [
+        "eqed",
+        "gso "
+      ],
+      "min_sections": 1
+    },
+    {
+      "category": "control_rich",
+      "path": "examples/samples/hwpx/generated_native_control_authoring_bridge.hwpx",
+      "format": "hwpx",
+      "difficulty": "native_control_bridge_fixture",
+      "expected_title": "Generated Native Control Authoring Bridge",
+      "expected_texts": [
+        "Generated native control authoring sample",
+        "Native rect",
+        "native-control.ole"
+      ],
+      "required_features": [
+        "equation",
+        "shape",
+        "ole"
+      ],
+      "min_sections": 1
+    }
+  ]
+}

@@ -2,12 +2,14 @@ from __future__ import annotations
 
 import tempfile
 from pathlib import Path
-from typing import Callable
+from typing import Callable, Literal
 
 from .document import HwpxDocument
+from .hancom_document import HancomDocument
 from .hwp_document import HwpDocument
 
 HancomConverter = Callable[[str | Path, str | Path, str], Path]
+BridgeAuthority = Literal["hwp", "hwpx", "hancom"]
 
 
 class HwpHwpxBridge:
@@ -16,14 +18,22 @@ class HwpHwpxBridge:
         *,
         hwp_document: HwpDocument | None = None,
         hwpx_document: HwpxDocument | None = None,
+        hancom_document: HancomDocument | None = None,
         converter: HancomConverter | None = None,
     ) -> None:
-        if hwp_document is None and hwpx_document is None:
+        if hwp_document is None and hwpx_document is None and hancom_document is None:
             raise ValueError("At least one source document must be provided.")
         self._hwp_document = hwp_document
         self._hwpx_document = hwpx_document
+        self._hancom_document = hancom_document
         self._converter = converter
         self._workspace: Path | None = None
+        if hancom_document is not None:
+            self._authority: BridgeAuthority = "hancom"
+        elif hwpx_document is not None:
+            self._authority = "hwpx"
+        else:
+            self._authority = "hwp"
 
     @classmethod
     def open(cls, path: str | Path, *, converter: HancomConverter | None = None) -> "HwpHwpxBridge":
@@ -61,21 +71,32 @@ class HwpHwpxBridge:
             document = HwpxDocument.open(source)
         return cls(hwpx_document=document, converter=converter)
 
-    def hwp_document(self, *, force_refresh: bool = False) -> HwpDocument:
-        if self._hwp_document is not None and not force_refresh:
-            return self._hwp_document
+    @classmethod
+    def from_hancom(
+        cls,
+        source: HancomDocument,
+        *,
+        converter: HancomConverter | None = None,
+    ) -> "HwpHwpxBridge":
+        return cls(hancom_document=source, converter=converter)
 
-        source_document = self.hwpx_document()
-        self._hwp_document = source_document.to_hwp_document(converter=self._converter)
-        return self._hwp_document
+    def hancom_document(self, *, force_refresh: bool = False) -> HancomDocument:
+        document = self._materialize_hancom_document(force_refresh=force_refresh)
+        self._authority = "hancom"
+        return document
+
+    def hwp_document(self, *, force_refresh: bool = False) -> HwpDocument:
+        document = self._materialize_hwp_document(force_refresh=force_refresh)
+        self._authority = "hwp"
+        return document
 
     def hwpx_document(self, *, force_refresh: bool = False) -> HwpxDocument:
-        if self._hwpx_document is not None and not force_refresh:
-            return self._hwpx_document
+        document = self._materialize_hwpx_document(force_refresh=force_refresh)
+        self._authority = "hwpx"
+        return document
 
-        source_document = self.hwp_document()
-        self._hwpx_document = source_document.to_hwpx_document(force_refresh=True)
-        return self._hwpx_document
+    def refresh_hancom(self) -> HancomDocument:
+        return self.hancom_document(force_refresh=True)
 
     def refresh_hwp(self) -> HwpDocument:
         return self.hwp_document(force_refresh=True)
@@ -84,11 +105,11 @@ class HwpHwpxBridge:
         return self.hwpx_document(force_refresh=True)
 
     def save_hwp(self, path: str | Path, *, force_refresh: bool = False) -> Path:
-        document = self.hwp_document(force_refresh=force_refresh)
+        document = self._materialize_hwp_document(force_refresh=force_refresh or self._authority != "hwp")
         return document.save(path)
 
     def save_hwpx(self, path: str | Path, *, force_refresh: bool = False) -> Path:
-        document = self.hwpx_document(force_refresh=force_refresh)
+        document = self._materialize_hwpx_document(force_refresh=force_refresh or self._authority != "hwpx")
         return document.save(path)
 
     def save(self, path: str | Path, *, force_refresh: bool = False) -> Path:
@@ -99,6 +120,66 @@ class HwpHwpxBridge:
         if suffix == ".hwpx":
             return self.save_hwpx(target_path, force_refresh=force_refresh)
         raise ValueError(f"Unsupported bridge target: {target_path}")
+
+    def _materialize_hancom_document(self, *, force_refresh: bool = False) -> HancomDocument:
+        if self._hancom_document is not None and not force_refresh:
+            return self._hancom_document
+
+        if self._authority == "hwpx" and self._hwpx_document is not None:
+            self._hancom_document = self._hwpx_document.to_hancom_document(converter=self._converter)
+            return self._hancom_document
+        if self._authority == "hwp" and self._hwp_document is not None:
+            self._hancom_document = self._hwp_document.to_hancom_document(force_refresh=force_refresh)
+            return self._hancom_document
+        if self._hwpx_document is not None:
+            self._hancom_document = self._hwpx_document.to_hancom_document(converter=self._converter)
+            return self._hancom_document
+        if self._hwp_document is not None:
+            self._hancom_document = self._hwp_document.to_hancom_document(force_refresh=force_refresh)
+            return self._hancom_document
+        raise ValueError("No source document is available to build a HancomDocument.")
+
+    def _materialize_hwp_document(self, *, force_refresh: bool = False) -> HwpDocument:
+        if self._hwp_document is not None and not force_refresh and self._authority == "hwp":
+            return self._hwp_document
+        if self._authority == "hancom" and self._hancom_document is not None:
+            self._hwp_document = self._hancom_document.to_hwp_document(converter=self._converter)
+            return self._hwp_document
+        if self._authority == "hwpx" and self._hwpx_document is not None:
+            self._hwp_document = self._hwpx_document.to_hancom_document(converter=self._converter).to_hwp_document(
+                converter=self._converter
+            )
+            return self._hwp_document
+        if self._hancom_document is not None:
+            self._hwp_document = self._hancom_document.to_hwp_document(converter=self._converter)
+            return self._hwp_document
+        if self._hwpx_document is not None:
+            self._hwp_document = self._hwpx_document.to_hancom_document(converter=self._converter).to_hwp_document(
+                converter=self._converter
+            )
+            return self._hwp_document
+        if self._hwp_document is not None:
+            return self._hwp_document
+        raise ValueError("No source document is available to build an HWP document.")
+
+    def _materialize_hwpx_document(self, *, force_refresh: bool = False) -> HwpxDocument:
+        if self._hwpx_document is not None and not force_refresh and self._authority == "hwpx":
+            return self._hwpx_document
+        if self._authority == "hancom" and self._hancom_document is not None:
+            self._hwpx_document = self._hancom_document.to_hwpx_document()
+            return self._hwpx_document
+        if self._authority == "hwp" and self._hwp_document is not None:
+            self._hwpx_document = self._hwp_document.to_hancom_document(force_refresh=force_refresh).to_hwpx_document()
+            return self._hwpx_document
+        if self._hancom_document is not None:
+            self._hwpx_document = self._hancom_document.to_hwpx_document()
+            return self._hwpx_document
+        if self._hwp_document is not None:
+            self._hwpx_document = self._hwp_document.to_hancom_document(force_refresh=force_refresh).to_hwpx_document()
+            return self._hwpx_document
+        if self._hwpx_document is not None:
+            return self._hwpx_document
+        raise ValueError("No source document is available to build an HWPX document.")
 
     def _ensure_workspace(self) -> Path:
         if self._workspace is None:

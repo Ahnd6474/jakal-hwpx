@@ -10,12 +10,17 @@ from jakal_hwpx import (
     Equation,
     Field,
     HancomDocument,
+    Hyperlink,
     HwpDocument,
     HwpxDocument,
     Note,
     Ole,
+    Paragraph,
+    Picture,
     Shape,
 )
+from jakal_hwpx.hwp_binary import TAG_BULLET, TAG_NUMBERING
+from jakal_hwpx.namespaces import NS
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -26,7 +31,7 @@ HWP_SAMPLE_DIR = REPO_ROOT / "examples" / "samples" / "hwp"
 def sample_hwp_path() -> Path:
     paths = sorted(HWP_SAMPLE_DIR.glob("*.hwp"))
     assert paths, f"No .hwp samples were found under {HWP_SAMPLE_DIR}"
-    return paths[0]
+    return next((path for path in paths if not path.name.startswith("generated_")), paths[0])
 
 
 def test_hancom_document_authoring_can_write_hwpx(tmp_path: Path) -> None:
@@ -146,6 +151,575 @@ def test_hancom_document_can_read_new_control_blocks_from_hwpx(tmp_path: Path) -
     assert any(style.style_id == "22" for style in document.character_styles)
     assert document.sections[0].settings.page_width == 120000
     assert document.sections[0].settings.page_height == 88000
+
+
+def test_hancom_document_preserves_paragraph_style_refs_for_hwpx_roundtrip(tmp_path: Path) -> None:
+    source = HwpxDocument.blank()
+    source.append_paragraph_style(style_id="31", alignment_horizontal="CENTER", line_spacing=180)
+    source.append_character_style(style_id="32", text_color="#334455", height=1200)
+    source.append_style("PARA-STYLE", style_id="33", para_pr_id="31", char_pr_id="32")
+    source.append_paragraph("Styled paragraph", style_id="33", para_pr_id="31", char_pr_id="32")
+
+    document = HancomDocument.from_hwpx_document(source)
+    paragraph_blocks = [block for block in document.sections[0].blocks if isinstance(block, Paragraph)]
+    styled = next(block for block in paragraph_blocks if block.text == "Styled paragraph")
+
+    assert styled.style_id == "33"
+    assert styled.para_pr_id == "31"
+    assert styled.char_pr_id == "32"
+
+    output_path = tmp_path / "styled_roundtrip.hwpx"
+    document.write_to_hwpx(output_path)
+
+    reopened = HwpxDocument.open(output_path)
+    paragraphs = reopened.sections[0].root_element.xpath("./hp:p", namespaces=NS)
+    target = next(
+        paragraph
+        for paragraph in paragraphs
+        if "".join(paragraph.xpath("./hp:run/hp:t/text()", namespaces=NS)).strip() == "Styled paragraph"
+    )
+    assert target.get("styleIDRef") == "33"
+    assert target.get("paraPrIDRef") == "31"
+    run_ids = target.xpath("./hp:run/@charPrIDRef", namespaces=NS)
+    assert run_ids and all(value == "32" for value in run_ids)
+
+
+def test_hancom_document_preserves_extended_style_fields_for_hwpx_roundtrip() -> None:
+    source = HwpxDocument.blank()
+    para_style = source.append_paragraph_style(style_id="41", alignment_horizontal="JUSTIFY")
+    para_style.set_alignment(vertical="CENTER")
+    para_style.set_line_spacing(175, spacing_type="PERCENT")
+    heading = para_style.element.xpath("./hh:heading", namespaces=NS)[0]
+    heading.set("type", "NUMBER")
+    heading.set("idRef", "5")
+    heading.set("level", "2")
+    para_style.set_margin(intent=100, left=200, right=300, prev=400, next=500, unit="HWPUNIT")
+    para_style.set_break_setting(
+        break_latin_word="KEEP_WORD",
+        break_non_latin_word="BREAK_WORD",
+        widow_orphan=True,
+        keep_with_next=True,
+        keep_lines=False,
+        page_break_before=True,
+        line_wrap="SQUEEZE",
+    )
+    para_style.set_auto_spacing(e_asian_eng=True, e_asian_num=False)
+
+    char_style = source.append_character_style(style_id="42", text_color="#123456", height=1300)
+    char_style.set_font_refs(hangul="1", latin="2", hanja="3", japanese="4", other="5", symbol="6", user="7")
+
+    document = HancomDocument.from_hwpx_document(source)
+    extracted_para = next(style for style in document.paragraph_styles if style.style_id == "41")
+    extracted_char = next(style for style in document.character_styles if style.style_id == "42")
+
+    assert extracted_para.line_spacing == "175"
+    assert extracted_para.line_spacing_type == "PERCENT"
+    assert extracted_para.heading == {"type": "NUMBER", "idRef": "5", "level": "2"}
+    assert extracted_para.margins == {
+        "intent": "100",
+        "left": "200",
+        "right": "300",
+        "prev": "400",
+        "next": "500",
+        "unit": "HWPUNIT",
+    }
+    assert extracted_para.break_setting == {
+        "breakLatinWord": "KEEP_WORD",
+        "breakNonLatinWord": "BREAK_WORD",
+        "widowOrphan": "1",
+        "keepWithNext": "1",
+        "keepLines": "0",
+        "pageBreakBefore": "1",
+        "lineWrap": "SQUEEZE",
+    }
+    assert extracted_para.auto_spacing == {"eAsianEng": "1", "eAsianNum": "0"}
+    assert extracted_char.font_refs == {
+        "hangul": "1",
+        "latin": "2",
+        "hanja": "3",
+        "japanese": "4",
+        "other": "5",
+        "symbol": "6",
+        "user": "7",
+    }
+
+    reopened = document.to_hwpx_document()
+    reopened_para = next(style for style in reopened.paragraph_styles() if style.style_id == "41")
+    reopened_char = next(style for style in reopened.character_styles() if style.style_id == "42")
+
+    assert reopened_para.element.xpath(".//hh:lineSpacing/@type", namespaces=NS) == ["PERCENT"]
+    assert reopened_para.element.xpath("./hh:heading/@type", namespaces=NS) == ["NUMBER"]
+    assert reopened_para.element.xpath("./hh:heading/@idRef", namespaces=NS) == ["5"]
+    assert reopened_para.element.xpath("./hh:heading/@level", namespaces=NS) == ["2"]
+    assert reopened_para.element.xpath("./hh:margin/hc:left/@value", namespaces=NS) == ["200"]
+    assert reopened_para.element.xpath("./hh:breakSetting/@keepWithNext", namespaces=NS) == ["1"]
+    assert reopened_para.element.xpath("./hh:autoSpacing/@eAsianNum", namespaces=NS) == ["0"]
+    assert reopened_char.element.xpath("./hh:fontRef/@latin", namespaces=NS) == ["2"]
+    assert reopened_char.element.xpath("./hh:fontRef/@user", namespaces=NS) == ["7"]
+
+
+def test_hancom_document_preserves_extended_control_fields_for_hwpx_roundtrip(tmp_path: Path) -> None:
+    source = HwpxDocument.blank()
+    source.append_equation(
+        "a^2+b^2",
+        width=2800,
+        height=1700,
+        shape_comment="EQ-COMMENT",
+        text_color="#13579B",
+        base_unit=1250,
+        font="Cambria Math",
+    )
+    source.append_shape(
+        kind="rect",
+        text="CTRL-SHAPE",
+        width=4400,
+        height=2100,
+        fill_color="#ABCDEF",
+        line_color="#123456",
+        shape_comment="SHAPE-COMMENT",
+    )
+    source.append_ole("ctrl.ole", b"CTRL-OLE", width=3900, height=2200, shape_comment="OLE-COMMENT")
+
+    source_path = tmp_path / "extended_controls.hwpx"
+    source.save(source_path)
+
+    document = HancomDocument.read_hwpx(source_path)
+    equation = next(block for block in document.sections[0].blocks if isinstance(block, Equation))
+    shape = next(block for block in document.sections[0].blocks if isinstance(block, Shape))
+    ole = next(block for block in document.sections[0].blocks if isinstance(block, Ole))
+
+    assert equation.shape_comment == "EQ-COMMENT"
+    assert equation.text_color == "#13579B"
+    assert equation.base_unit == 1250
+    assert equation.font == "Cambria Math"
+    assert shape.shape_comment == "SHAPE-COMMENT"
+    assert ole.shape_comment == "OLE-COMMENT"
+
+    reopened = document.to_hwpx_document()
+    reopened_equation = reopened.equations()[0]
+    reopened_shape = reopened.shapes()[0]
+    reopened_ole = reopened.oles()[0]
+
+    assert reopened_equation.shape_comment == "EQ-COMMENT"
+    assert reopened_equation.element.get("textColor") == "#13579B"
+    assert reopened_equation.element.get("baseUnit") == "1250"
+    assert reopened_equation.element.get("font") == "Cambria Math"
+    assert reopened_shape.shape_comment == "SHAPE-COMMENT"
+    assert reopened_ole.shape_comment == "OLE-COMMENT"
+
+
+def test_hancom_document_pure_hwp_roundtrip_preserves_style_definitions_and_docinfo_refs(tmp_path: Path) -> None:
+    document = HancomDocument.blank()
+    document.append_paragraph_style(style_id="430", alignment_horizontal="CENTER", line_spacing=180)
+    document.append_character_style(style_id="425", text_color="#112233", height=1100)
+    document.append_style(
+        "HWP-IR-STYLE",
+        style_id="33",
+        english_name="HWP-IR-STYLE",
+        para_pr_id="430",
+        char_pr_id="425",
+        next_style_id="33",
+    )
+    paragraph = document.append_paragraph("HWP-STYLED")
+    paragraph.style_id = "33"
+    paragraph.para_pr_id = "430"
+    paragraph.char_pr_id = "425"
+
+    output_path = tmp_path / "hancom_ir_style_docinfo.hwp"
+    document.write_to_hwp(output_path)
+
+    reopened_hwp = HwpDocument.open(output_path)
+    styled_paragraph = next(paragraph for paragraph in reopened_hwp.paragraphs() if paragraph.text == "HWP-STYLED")
+    assert styled_paragraph.style_id == 33
+    assert styled_paragraph.para_shape_id == 430
+    docinfo = reopened_hwp.docinfo_model()
+    assert len(docinfo.style_records()) >= 34
+    assert len(docinfo.char_shape_records()) >= 426
+    assert len(docinfo.para_shape_records()) >= 431
+
+    reopened_ir = HancomDocument.read_hwp(output_path)
+    assert any(style.style_id == "33" and style.name == "HWP-IR-STYLE" for style in reopened_ir.style_definitions)
+    assert any(style.style_id == "430" for style in reopened_ir.paragraph_styles)
+    assert any(style.style_id == "425" for style in reopened_ir.character_styles)
+    ir_paragraph = next(block for block in reopened_ir.sections[0].blocks if isinstance(block, Paragraph) and block.text == "HWP-STYLED")
+    assert ir_paragraph.style_id == "33"
+    assert ir_paragraph.para_pr_id == "430"
+    assert ir_paragraph.char_pr_id == "425"
+
+    reopened_hwpx = reopened_hwp.to_hwpx_document()
+    assert any(style.style_id == "33" and style.name == "HWP-IR-STYLE" for style in reopened_hwpx.styles())
+    assert any(style.style_id == "430" for style in reopened_hwpx.paragraph_styles())
+    assert any(style.style_id == "425" for style in reopened_hwpx.character_styles())
+    paragraphs = reopened_hwpx.sections[0].root_element.xpath("./hp:p", namespaces=NS)
+    target = next(
+        paragraph_node
+        for paragraph_node in paragraphs
+        if "".join(paragraph_node.xpath("./hp:run/hp:t/text()", namespaces=NS)).strip() == "HWP-STYLED"
+    )
+    assert target.get("styleIDRef") == "33"
+    assert target.get("paraPrIDRef") == "430"
+    run_ids = target.xpath("./hp:run/@charPrIDRef", namespaces=NS)
+    assert run_ids and all(value == "425" for value in run_ids)
+
+
+def test_hancom_document_pure_hwp_roundtrip_preserves_numbering_bullet_picture_size_and_hyperlink_metadata(
+    tmp_path: Path,
+) -> None:
+    document = HancomDocument.blank()
+    image_bytes = HwpDocument.blank().binary_document().read_stream("BinData/BIN0001.bmp", decompress=False)
+    document.append_numbering_definition(style_id="2")
+    document.append_bullet_definition(style_id="0")
+    document.sections[0].settings.numbering_shape_id = "2"
+    document.append_picture("native.bmp", image_bytes, extension="bmp", width=3600, height=2400)
+    document.append_hyperlink(
+        "https://example.com/native",
+        display_text="NATIVE-LINK",
+        metadata_fields=[9, 2, "anchor"],
+    )
+
+    output_path = tmp_path / "hancom_ir_numbering_picture_link.hwp"
+    document.write_to_hwp(output_path)
+
+    reopened_hwp = HwpDocument.open(output_path)
+    native_settings = reopened_hwp.binary_document().section_definition_settings(0)
+    docinfo = reopened_hwp.docinfo_model()
+    picture = reopened_hwp.pictures()[0]
+    hyperlink = next(link for link in reopened_hwp.hyperlinks() if link.display_text == "NATIVE-LINK")
+
+    assert native_settings["numbering_shape_id"] == "2"
+    assert len(docinfo.records_by_tag_id(TAG_NUMBERING)) >= 3
+    assert len(docinfo.records_by_tag_id(TAG_BULLET)) >= 1
+    assert picture.size() == {"width": 3600, "height": 2400}
+    assert hyperlink.metadata_fields == ["9", "2", "anchor"]
+
+    reopened_ir = HancomDocument.read_hwp(output_path)
+    assert reopened_ir.sections[0].settings.numbering_shape_id == "2"
+    assert any(definition.style_id == "2" for definition in reopened_ir.numbering_definitions)
+    assert any(definition.style_id == "0" for definition in reopened_ir.bullet_definitions)
+    picture_block = next(block for block in reopened_ir.sections[0].blocks if isinstance(block, Picture))
+    hyperlink_block = next(block for block in reopened_ir.sections[0].blocks if isinstance(block, Hyperlink))
+    assert picture_block.width == 3600
+    assert picture_block.height == 2400
+    assert hyperlink_block.metadata_fields == ["9", "2", "anchor"]
+
+
+def test_hancom_document_pure_hwp_roundtrip_generates_numbering_and_bullet_payloads_from_ir(tmp_path: Path) -> None:
+    document = HancomDocument.blank()
+    document.append_character_style(style_id="12", text_color="#224466", height=1100)
+    document.append_numbering_definition(
+        style_id="5",
+        formats=["^1.", "(^2)", "Part ^3"],
+        para_heads=[12, 268, 44],
+        width_adjusts=[0, 8, 16],
+        text_offsets=[60, 70, 80],
+        char_pr_ids=[12, None, 12],
+        start_numbers=[1, 2, 3, 4, 5, 6, 7],
+    )
+    document.append_bullet_definition(
+        style_id="1",
+        bullet_char="*",
+        width_adjust=14,
+        text_offset=64,
+        char_pr_id=12,
+    )
+    document.sections[0].settings.numbering_shape_id = "5"
+    document.append_paragraph("NUMBERING-PAYLOAD")
+
+    output_path = tmp_path / "hancom_ir_numbering_payloads.hwp"
+    document.write_to_hwp(output_path)
+
+    reopened_hwp = HwpDocument.open(output_path)
+    docinfo = reopened_hwp.docinfo_model()
+    assert len(docinfo.records_by_tag_id(TAG_NUMBERING)) >= 6
+    assert len(docinfo.records_by_tag_id(TAG_BULLET)) >= 2
+
+    reopened_ir = HancomDocument.read_hwp(output_path)
+    numbering = next(definition for definition in reopened_ir.numbering_definitions if definition.style_id == "5")
+    bullet = next(definition for definition in reopened_ir.bullet_definitions if definition.style_id == "1")
+
+    assert reopened_ir.sections[0].settings.numbering_shape_id == "5"
+    assert numbering.formats[:3] == ["^1.", "(^2)", "Part ^3"]
+    assert numbering.para_heads[:3] == [12, 268, 44]
+    assert numbering.width_adjusts[:3] == [0, 8, 16]
+    assert numbering.text_offsets[:3] == [60, 70, 80]
+    assert numbering.char_pr_ids[:3] == [12, None, 12]
+    assert numbering.start_numbers[:7] == [1, 2, 3, 4, 5, 6, 7]
+    assert bullet.bullet_char == "*"
+    assert bullet.width_adjust == 14
+    assert bullet.text_offset == 64
+    assert bullet.char_pr_id == 12
+
+
+def test_hancom_document_pure_hwp_roundtrip_generates_para_and_char_payloads_from_ir(tmp_path: Path) -> None:
+    document = HancomDocument.blank()
+    document.append_paragraph_style(
+        style_id="430",
+        alignment_horizontal="RIGHT",
+        line_spacing=175,
+        margins={
+            "intent": "120",
+            "left": "240",
+            "right": "360",
+            "prev": "480",
+            "next": "600",
+            "unit": "HWPUNIT",
+        },
+    )
+    document.append_character_style(
+        style_id="425",
+        text_color="#123456",
+        height=1300,
+        font_refs={
+            "hangul": "2",
+            "latin": "1",
+            "hanja": "1",
+            "japanese": "1",
+            "other": "0",
+            "symbol": "2",
+            "user": "0",
+        },
+    )
+    document.append_style("DIRECT-PAYLOAD-STYLE", style_id="33", para_pr_id="430", char_pr_id="425")
+    paragraph = document.append_paragraph("DIRECT-PAYLOAD")
+    paragraph.style_id = "33"
+    paragraph.para_pr_id = "430"
+    paragraph.char_pr_id = "425"
+
+    output_path = tmp_path / "hancom_ir_direct_style_payloads.hwp"
+    document.write_to_hwp(output_path)
+
+    reopened_ir = HancomDocument.read_hwp(output_path)
+    para_style = next(style for style in reopened_ir.paragraph_styles if style.style_id == "430")
+    char_style = next(style for style in reopened_ir.character_styles if style.style_id == "425")
+
+    assert para_style.alignment_horizontal == "RIGHT"
+    assert para_style.line_spacing == "175"
+    assert para_style.margins == {
+        "intent": "120",
+        "left": "240",
+        "right": "360",
+        "prev": "480",
+        "next": "600",
+        "unit": "HWPUNIT",
+    }
+    assert char_style.text_color == "#123456"
+    assert char_style.height == "1300"
+    assert char_style.font_refs == {
+        "hangul": "2",
+        "latin": "1",
+        "hanja": "1",
+        "japanese": "1",
+        "other": "0",
+        "symbol": "2",
+        "user": "0",
+    }
+
+
+def test_hancom_document_reads_richer_native_hwp_equation_shape_and_ole_controls(tmp_path: Path) -> None:
+    source = HwpDocument.blank()
+    source.append_equation("x+y=z", width=3456, height=2100, font="Batang", shape_comment="NATIVE-EQ")
+    source.append_shape(
+        kind="rect",
+        text="NATIVE-SHAPE",
+        width=3600,
+        height=1800,
+        fill_color="#ABCDEF",
+        line_color="#123456",
+        shape_comment="NATIVE-SHAPE-COMMENT",
+    )
+    source.append_ole(
+        "native.ole",
+        b"NATIVE-OLE-DATA",
+        width=3900,
+        height=2200,
+        shape_comment="NATIVE-OLE-COMMENT",
+        object_type="LINK",
+        draw_aspect="ICON",
+        has_moniker=True,
+        eq_baseline=12,
+        line_color="#445566",
+        line_width=77,
+    )
+
+    output_path = tmp_path / "hancom_native_control_rich.hwp"
+    source.save(output_path)
+
+    document = HancomDocument.read_hwp(output_path)
+    equation = next(block for block in document.sections[0].blocks if isinstance(block, Equation))
+    shape = next(block for block in document.sections[0].blocks if isinstance(block, Shape))
+    ole = next(block for block in document.sections[0].blocks if isinstance(block, Ole))
+
+    assert equation.script == "x+y=z"
+    assert equation.width == 3456
+    assert equation.height == 2100
+    assert equation.font == "Batang"
+    assert equation.shape_comment == "NATIVE-EQ"
+    assert shape.text == "NATIVE-SHAPE"
+    assert shape.width == 3600
+    assert shape.height == 1800
+    assert shape.shape_comment == "NATIVE-SHAPE-COMMENT"
+    assert shape.fill_color == "#ABCDEF"
+    assert shape.line_color == "#123456"
+    assert ole.name == "native.ole"
+    assert ole.width == 3900
+    assert ole.height == 2200
+    assert ole.shape_comment == "NATIVE-OLE-COMMENT"
+    assert ole.object_type == "LINK"
+    assert ole.draw_aspect == "ICON"
+    assert ole.has_moniker is True
+    assert ole.eq_baseline == 12
+    assert ole.line_color == "#445566"
+    assert ole.line_width == 77
+
+    reopened_hwpx = document.to_hwpx_document()
+    assert reopened_hwpx.equations()[0].script == "x+y=z"
+    assert reopened_hwpx.equations()[0].size() == {"width": 3456, "height": 2100}
+    assert reopened_hwpx.equations()[0].element.get("font") == "Batang"
+    assert reopened_hwpx.equations()[0].shape_comment == "NATIVE-EQ"
+    assert reopened_hwpx.shapes()[0].text == "NATIVE-SHAPE"
+    assert reopened_hwpx.shapes()[0].shape_comment == "NATIVE-SHAPE-COMMENT"
+    assert reopened_hwpx.shapes()[0].fill_style()["faceColor"] == "#ABCDEF"
+    assert reopened_hwpx.shapes()[0].line_style()["color"] == "#123456"
+    assert reopened_hwpx.oles()[0].binary_data() == b"NATIVE-OLE-DATA"
+    assert reopened_hwpx.oles()[0].shape_comment == "NATIVE-OLE-COMMENT"
+    assert reopened_hwpx.oles()[0].object_type == "LINK"
+    assert reopened_hwpx.oles()[0].draw_aspect == "ICON"
+    assert reopened_hwpx.oles()[0].has_moniker is True
+    assert reopened_hwpx.oles()[0].line_style()["color"] == "#445566"
+    assert reopened_hwpx.oles()[0].line_style()["width"] == "77"
+
+
+def test_hancom_document_pure_hwp_roundtrip_preserves_native_shape_and_ole_metadata(tmp_path: Path) -> None:
+    document = HancomDocument.blank()
+    document.append_equation("a+b", width=3200, height=1800, font="Batang", shape_comment="IR-EQ")
+    document.append_shape(
+        kind="rect",
+        text="IR-SHAPE",
+        width=4100,
+        height=1900,
+        fill_color="#FEDCBA",
+        line_color="#234567",
+        shape_comment="IR-SHAPE-COMMENT",
+    )
+    document.append_ole(
+        "ir.ole",
+        b"IR-OLE-DATA",
+        width=4200,
+        height=2300,
+        shape_comment="IR-OLE-COMMENT",
+        object_type="LINK",
+        draw_aspect="ICON",
+        has_moniker=True,
+        eq_baseline=9,
+        line_color="#556677",
+        line_width=55,
+    )
+
+    output_path = tmp_path / "hancom_native_full_parity.hwp"
+    document.write_to_hwp(output_path)
+
+    reopened = HancomDocument.read_hwp(output_path)
+    equation = next(block for block in reopened.sections[0].blocks if isinstance(block, Equation))
+    shape = next(block for block in reopened.sections[0].blocks if isinstance(block, Shape))
+    ole = next(block for block in reopened.sections[0].blocks if isinstance(block, Ole))
+
+    assert equation.shape_comment == "IR-EQ"
+    assert shape.shape_comment == "IR-SHAPE-COMMENT"
+    assert shape.fill_color == "#FEDCBA"
+    assert shape.line_color == "#234567"
+    assert ole.shape_comment == "IR-OLE-COMMENT"
+    assert ole.object_type == "LINK"
+    assert ole.draw_aspect == "ICON"
+    assert ole.has_moniker is True
+    assert ole.eq_baseline == 9
+    assert ole.line_color == "#556677"
+    assert ole.line_width == 55
+
+
+def test_hancom_document_native_hwp_roundtrip_preserves_richer_shape_kinds(tmp_path: Path) -> None:
+    source = HwpDocument.blank()
+    source.append_shape(
+        kind="ellipse",
+        text="NATIVE-ELLIPSE",
+        width=3800,
+        height=2000,
+        fill_color="#A1B2C3",
+        line_color="#102030",
+        shape_comment="ELLIPSE-COMMENT",
+    )
+    source.append_shape(
+        kind="arc",
+        text="NATIVE-ARC",
+        width=4000,
+        height=2200,
+        fill_color="#C3B2A1",
+        line_color="#203040",
+        shape_comment="ARC-COMMENT",
+    )
+    source.append_shape(
+        kind="polygon",
+        text="NATIVE-POLYGON",
+        width=4200,
+        height=2400,
+        fill_color="#DDEEFF",
+        line_color="#304050",
+        shape_comment="POLYGON-COMMENT",
+    )
+    source.append_shape(
+        kind="textart",
+        text="NATIVE-TEXTART",
+        width=4400,
+        height=2600,
+        fill_color="#FFEEDD",
+        line_color="#405060",
+        shape_comment="TEXTART-COMMENT",
+    )
+
+    output_path = tmp_path / "hancom_native_shape_kinds.hwp"
+    source.save(output_path)
+
+    document = HancomDocument.read_hwp(output_path)
+    shapes = [block for block in document.sections[0].blocks if isinstance(block, Shape)]
+
+    ellipse = next(shape for shape in shapes if shape.kind == "ellipse")
+    arc = next(shape for shape in shapes if shape.kind == "arc")
+    polygon = next(shape for shape in shapes if shape.kind == "polygon")
+    textart = next(shape for shape in shapes if shape.kind == "textart")
+
+    assert ellipse.fill_color == "#A1B2C3"
+    assert ellipse.line_color == "#102030"
+    assert ellipse.shape_comment == "ELLIPSE-COMMENT"
+    assert arc.fill_color == "#C3B2A1"
+    assert arc.line_color == "#203040"
+    assert arc.shape_comment == "ARC-COMMENT"
+    assert polygon.fill_color == "#DDEEFF"
+    assert polygon.line_color == "#304050"
+    assert polygon.shape_comment == "POLYGON-COMMENT"
+    assert textart.text == "NATIVE-TEXTART"
+    assert textart.fill_color == "#FFEEDD"
+    assert textart.line_color == "#405060"
+    assert textart.shape_comment == "TEXTART-COMMENT"
+
+    reopened_hwpx = document.to_hwpx_document()
+    reopened_shapes = reopened_hwpx.shapes()
+    reopened_ellipse = next(shape for shape in reopened_shapes if shape.kind == "ellipse")
+    reopened_arc = next(shape for shape in reopened_shapes if shape.kind == "arc")
+    reopened_polygon = next(shape for shape in reopened_shapes if shape.kind == "polygon")
+    reopened_textart = next(shape for shape in reopened_shapes if shape.kind == "textart")
+
+    assert reopened_ellipse.fill_style()["faceColor"] == "#A1B2C3"
+    assert reopened_ellipse.line_style()["color"] == "#102030"
+    assert reopened_ellipse.shape_comment == "ELLIPSE-COMMENT"
+    assert reopened_arc.fill_style()["faceColor"] == "#C3B2A1"
+    assert reopened_arc.line_style()["color"] == "#203040"
+    assert reopened_arc.shape_comment == "ARC-COMMENT"
+    assert reopened_polygon.fill_style()["faceColor"] == "#DDEEFF"
+    assert reopened_polygon.line_style()["color"] == "#304050"
+    assert reopened_polygon.shape_comment == "POLYGON-COMMENT"
+    assert reopened_textart.text == "NATIVE-TEXTART"
+    assert reopened_textart.fill_style()["faceColor"] == "#FFEEDD"
+    assert reopened_textart.line_style()["color"] == "#405060"
+    assert reopened_textart.shape_comment == "TEXTART-COMMENT"
 
 
 def test_hancom_document_can_read_hwp_without_hancom_and_export_hwpx(sample_hwp_path: Path, tmp_path: Path) -> None:

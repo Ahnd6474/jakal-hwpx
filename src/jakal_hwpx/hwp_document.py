@@ -10,12 +10,14 @@ from .document import HwpxDocument
 from .hwp_binary import (
     _build_table_cell_list_header_payload,
     _build_table_record_payload,
+    _parse_colorref,
     _build_hyperlink_ctrl_payload,
     _build_hyperlink_para_text_payload,
     _TableCellSpec,
     _TABLE_CELL_CHAR_SHAPE,
     _TABLE_CELL_LINE_SEG,
     _TABLE_CELL_PARA_HEADER_TAIL,
+    DEFAULT_HWP_EQUATION_FONT,
     DEFAULT_HWP_TABLE_CELL_HEIGHT,
     DEFAULT_HWP_TABLE_CELL_WIDTH,
     DocInfoModel,
@@ -53,12 +55,103 @@ from .hwp_pure_profile import HwpPureProfile, append_feature_from_profile
 
 HancomConverter = Callable[[str | Path, str | Path, str], Path]
 
+_HWP_SHAPE_LINE_SPECIFIC_SIZE = 20
+_HWP_SHAPE_RECTANGLE_SPECIFIC_SIZE = 33
+_HWP_SHAPE_ELLIPSE_SPECIFIC_SIZE = 60
+_HWP_SHAPE_ARC_SPECIFIC_SIZE = 28
+_HWP_OLE_DRAW_ASPECT_NAMES = {
+    1: "CONTENT",
+    2: "THUMBNAIL",
+    4: "ICON",
+    8: "DOCPRINT",
+}
+_HWP_OLE_OBJECT_TYPE_NAMES = {
+    0: "UNKNOWN",
+    1: "EMBEDDED",
+    2: "LINK",
+    3: "STATIC",
+    4: "EQUATION",
+}
+_SHAPE_NATIVE_METADATA_PREFIX = "JAKAL_SHAPE_META"
+
+
+def _parse_object_description(payload: bytes) -> str:
+    if len(payload) < 46:
+        return ""
+    char_count = int.from_bytes(payload[44:46], "little", signed=False)
+    encoded = payload[46 : 46 + char_count * 2]
+    return encoded.decode("utf-16-le", errors="ignore")
+
+
+def _parse_shape_fill_payload(payload: bytes) -> dict[str, str]:
+    if len(payload) < 16:
+        return {}
+    fill_type = int.from_bytes(payload[0:4], "little", signed=False)
+    result: dict[str, str] = {}
+    if fill_type & 0x00000001:
+        result["faceColor"] = _parse_colorref(payload[4:8])
+        result["hatchColor"] = _parse_colorref(payload[8:12])
+    return result
+
+
+def _parse_shape_native_metadata(payload: bytes) -> dict[str, str]:
+    if not payload:
+        return {}
+    text = payload.decode("utf-16-le", errors="ignore")
+    if not text.startswith(_SHAPE_NATIVE_METADATA_PREFIX):
+        return {}
+    metadata: dict[str, str] = {}
+    for field in text.split(";")[1:]:
+        key, separator, value = field.partition("=")
+        if separator and key:
+            metadata[key] = value
+    return metadata
+
+
+def _shape_specific_payload_size(tag_id: int) -> int:
+    if tag_id == TAG_SHAPE_COMPONENT_LINE:
+        return _HWP_SHAPE_LINE_SPECIFIC_SIZE
+    if tag_id == TAG_SHAPE_COMPONENT_RECTANGLE:
+        return _HWP_SHAPE_RECTANGLE_SPECIFIC_SIZE
+    if tag_id == TAG_SHAPE_COMPONENT_ELLIPSE:
+        return _HWP_SHAPE_ELLIPSE_SPECIFIC_SIZE
+    if tag_id == TAG_SHAPE_COMPONENT_ARC:
+        return _HWP_SHAPE_ARC_SPECIFIC_SIZE
+    return 0
+
+
+def _shape_common_payload_size(tag_id: int) -> int:
+    if tag_id == TAG_SHAPE_COMPONENT_LINE:
+        return 11
+    if tag_id in {
+        TAG_SHAPE_COMPONENT_ELLIPSE,
+        TAG_SHAPE_COMPONENT_ARC,
+        TAG_SHAPE_COMPONENT_POLYGON,
+        TAG_SHAPE_COMPONENT_TEXTART,
+    }:
+        return 0
+    if tag_id in {
+        TAG_SHAPE_COMPONENT_RECTANGLE,
+        TAG_SHAPE_COMPONENT_CURVE,
+        TAG_SHAPE_COMPONENT_CONTAINER,
+    }:
+        return 32
+    return 0
+
 
 class HwpDocument:
-    def __init__(self, binary_document: HwpBinaryDocument, *, converter: HancomConverter | None = None):
+    def __init__(
+        self,
+        binary_document: HwpBinaryDocument,
+        *,
+        converter: HancomConverter | None = None,
+        default_append_section_index: int = 0,
+    ):
         self._binary_document = binary_document
         self._converter = converter
+        self._default_append_section_index = default_append_section_index
         self._bridge_document: HwpxDocument | None = None
+        self._hancom_document = None
         self._bridge_temp_dir: Path | None = None
         self._pure_profile: HwpPureProfile | None = None
 
@@ -69,7 +162,11 @@ class HwpDocument:
 
     @classmethod
     def open(cls, path: str | Path, *, converter: HancomConverter | None = None) -> "HwpDocument":
-        return cls(HwpBinaryDocument.open(path), converter=converter)
+        return cls(
+            HwpBinaryDocument.open(path),
+            converter=converter,
+            default_append_section_index=HwpPureProfile.load_bundled().target_section_index,
+        )
 
     @classmethod
     def blank_from_profile(
@@ -79,7 +176,11 @@ class HwpDocument:
         converter: HancomConverter | None = None,
     ) -> "HwpDocument":
         profile = HwpPureProfile.load(profile_root)
-        instance = cls(HwpBinaryDocument.open(profile.base_path), converter=converter)
+        instance = cls(
+            HwpBinaryDocument.open(profile.base_path),
+            converter=converter,
+            default_append_section_index=profile.target_section_index,
+        )
         instance._pure_profile = profile
         instance._binary_document.reset_body_sections_to_blank()
         return instance
@@ -145,6 +246,7 @@ class HwpDocument:
         visibility: dict[str, str] | None = None,
         grid: dict[str, int] | None = None,
         start_numbers: dict[str, str] | None = None,
+        numbering_shape_id: str | None = None,
     ) -> None:
         self._invalidate_bridge()
         self._binary_document.set_section_page_settings(
@@ -159,6 +261,7 @@ class HwpDocument:
             visibility=visibility,
             grid=grid,
             start_numbers=start_numbers,
+            numbering_shape_id=int(numbering_shape_id) if numbering_shape_id is not None else None,
         )
 
     def apply_section_page_border_fills(
@@ -286,10 +389,17 @@ class HwpDocument:
         if self._bridge_document is not None and not force_refresh:
             return self._bridge_document
 
+        self._bridge_document = self.to_hancom_document(force_refresh=force_refresh).to_hwpx_document()
+        return self._bridge_document
+
+    def to_hancom_document(self, *, force_refresh: bool = False):
+        if self._hancom_document is not None and not force_refresh:
+            return self._hancom_document
+
         from .hancom_document import HancomDocument
 
-        self._bridge_document = HancomDocument.from_hwp_document(self, converter=self._converter).to_hwpx_document()
-        return self._bridge_document
+        self._hancom_document = HancomDocument.from_hwp_document(self, converter=self._converter)
+        return self._hancom_document
 
     def save_as_hwpx(self, path: str | Path) -> Path:
         target_path = Path(path).expanduser().resolve()
@@ -315,6 +425,7 @@ class HwpDocument:
 
     def load_pure_profile(self, profile_root: str | Path) -> HwpPureProfile:
         self._pure_profile = HwpPureProfile.load(profile_root)
+        self._default_append_section_index = self._pure_profile.target_section_index
         return self._pure_profile
 
     def append_table(
@@ -332,8 +443,7 @@ class HwpDocument:
         section_index: int | None = None,
     ) -> None:
         self._invalidate_bridge()
-        if self._pure_profile is None:
-            self._pure_profile = HwpPureProfile.load_bundled()
+        target_section_index = self._default_append_section_index if section_index is None else section_index
         self._binary_document.append_table(
             cell_text,
             rows=rows,
@@ -344,8 +454,8 @@ class HwpDocument:
             cell_spans=cell_spans,
             cell_border_fill_ids=cell_border_fill_ids,
             table_border_fill_id=table_border_fill_id,
-            profile_root=self._pure_profile.root,
-            section_index=section_index,
+            profile_root=None,
+            section_index=target_section_index,
         )
 
     def append_picture(
@@ -353,16 +463,19 @@ class HwpDocument:
         image_bytes: bytes | None = None,
         *,
         extension: str | None = None,
+        width: int = 12000,
+        height: int = 3200,
         section_index: int | None = None,
     ) -> None:
         self._invalidate_bridge()
-        if self._pure_profile is None:
-            self._pure_profile = HwpPureProfile.load_bundled()
+        target_section_index = self._default_append_section_index if section_index is None else section_index
         self._binary_document.append_picture(
             image_bytes,
             extension=extension,
-            profile_root=self._pure_profile.root,
-            section_index=section_index,
+            width=width,
+            height=height,
+            profile_root=None,
+            section_index=target_section_index,
         )
 
     def append_hyperlink(
@@ -374,14 +487,13 @@ class HwpDocument:
         section_index: int | None = None,
     ) -> None:
         self._invalidate_bridge()
-        if self._pure_profile is None:
-            self._pure_profile = HwpPureProfile.load_bundled()
+        target_section_index = self._default_append_section_index if section_index is None else section_index
         self._binary_document.append_hyperlink(
             url,
             text=text,
             metadata_fields=metadata_fields,
-            profile_root=self._pure_profile.root,
-            section_index=section_index,
+            profile_root=None,
+            section_index=target_section_index,
         )
 
     def append_field(
@@ -510,6 +622,8 @@ class HwpDocument:
         *,
         width: int = 4800,
         height: int = 2300,
+        font: str = DEFAULT_HWP_EQUATION_FONT,
+        shape_comment: str | None = None,
         section_index: int = 0,
         paragraph_index: int | None = None,
     ) -> None:
@@ -518,6 +632,8 @@ class HwpDocument:
             script,
             width=width,
             height=height,
+            font=font,
+            shape_comment=shape_comment,
             section_index=section_index,
             paragraph_index=paragraph_index,
         )
@@ -531,6 +647,7 @@ class HwpDocument:
         height: int = 3200,
         fill_color: str = "#FFFFFF",
         line_color: str = "#000000",
+        shape_comment: str | None = None,
         section_index: int = 0,
         paragraph_index: int | None = None,
     ) -> None:
@@ -540,6 +657,9 @@ class HwpDocument:
             text=text,
             width=width,
             height=height,
+            fill_color=fill_color,
+            line_color=line_color,
+            shape_comment=shape_comment,
             section_index=section_index,
             paragraph_index=paragraph_index,
         )
@@ -551,6 +671,13 @@ class HwpDocument:
         *,
         width: int = 42001,
         height: int = 13501,
+        shape_comment: str | None = None,
+        object_type: str = "EMBEDDED",
+        draw_aspect: str = "CONTENT",
+        has_moniker: bool = False,
+        eq_baseline: int = 0,
+        line_color: str = "#000000",
+        line_width: int = 0,
         section_index: int = 0,
         paragraph_index: int | None = None,
     ) -> None:
@@ -560,6 +687,13 @@ class HwpDocument:
             data,
             width=width,
             height=height,
+            shape_comment=shape_comment,
+            object_type=object_type,
+            draw_aspect=draw_aspect,
+            has_moniker=has_moniker,
+            eq_baseline=eq_baseline,
+            line_color=line_color,
+            line_width=line_width,
             section_index=section_index,
             paragraph_index=paragraph_index,
         )
@@ -619,9 +753,11 @@ class HwpDocument:
             converter=self._converter
         )
         self._binary_document = rebuilt.binary_document()
+        self._hancom_document = None
 
     def _invalidate_bridge(self) -> None:
         self._bridge_document = None
+        self._hancom_document = None
 
 
 @dataclass(frozen=True)
@@ -793,12 +929,16 @@ class HwpSection:
         *,
         width: int = 4800,
         height: int = 2300,
+        font: str = DEFAULT_HWP_EQUATION_FONT,
+        shape_comment: str | None = None,
         paragraph_index: int | None = None,
     ) -> None:
         self.document.append_equation(
             script,
             width=width,
             height=height,
+            font=font,
+            shape_comment=shape_comment,
             section_index=self.index,
             paragraph_index=paragraph_index,
         )
@@ -812,6 +952,7 @@ class HwpSection:
         height: int = 3200,
         fill_color: str = "#FFFFFF",
         line_color: str = "#000000",
+        shape_comment: str | None = None,
         paragraph_index: int | None = None,
     ) -> None:
         self.document.append_shape(
@@ -821,6 +962,7 @@ class HwpSection:
             height=height,
             fill_color=fill_color,
             line_color=line_color,
+            shape_comment=shape_comment,
             section_index=self.index,
             paragraph_index=paragraph_index,
         )
@@ -832,6 +974,13 @@ class HwpSection:
         *,
         width: int = 42001,
         height: int = 13501,
+        shape_comment: str | None = None,
+        object_type: str = "EMBEDDED",
+        draw_aspect: str = "CONTENT",
+        has_moniker: bool = False,
+        eq_baseline: int = 0,
+        line_color: str = "#000000",
+        line_width: int = 0,
         paragraph_index: int | None = None,
     ) -> None:
         self.document.append_ole(
@@ -839,6 +988,13 @@ class HwpSection:
             data,
             width=width,
             height=height,
+            shape_comment=shape_comment,
+            object_type=object_type,
+            draw_aspect=draw_aspect,
+            has_moniker=has_moniker,
+            eq_baseline=eq_baseline,
+            line_color=line_color,
+            line_width=line_width,
             section_index=self.index,
             paragraph_index=paragraph_index,
         )
@@ -1605,6 +1761,34 @@ class HwpEquationObject(HwpControlObject):
             script = script[2:]
         return script.rstrip("`").strip()
 
+    @property
+    def shape_comment(self) -> str:
+        return _parse_object_description(self.control_node.payload)
+
+    def size(self) -> dict[str, int]:
+        payload = self.control_node.payload
+        if len(payload) < 24:
+            return {"width": 0, "height": 0}
+        return {
+            "width": int.from_bytes(payload[16:20], "little", signed=False),
+            "height": int.from_bytes(payload[20:24], "little", signed=False),
+        }
+
+    @property
+    def font(self) -> str:
+        eqedit_record = self._eqedit_record()
+        if eqedit_record is None:
+            return DEFAULT_HWP_EQUATION_FONT
+        decoded = eqedit_record.payload[4:].decode("utf-16-le", errors="ignore")
+        marker_index = decoded.find("Equation Version")
+        if marker_index < 0:
+            return DEFAULT_HWP_EQUATION_FONT
+        suffix = decoded[marker_index:]
+        if "\x07" not in suffix:
+            return DEFAULT_HWP_EQUATION_FONT
+        font = suffix.split("\x07", 1)[1].replace("\x00", "").strip()
+        return font or DEFAULT_HWP_EQUATION_FONT
+
     def _eqedit_record(self, control_node: RecordNode | None = None) -> RecordNode | None:
         target = self.control_node if control_node is None else control_node
         for node in target.iter_descendants():
@@ -1624,6 +1808,18 @@ class HwpEquationObject(HwpControlObject):
         eqedit_record.payload = eqedit_record.payload[:4] + (prefix + script + suffix).encode("utf-16-le")
         self._commit(section_model)
 
+    def set_size(self, *, width: int | None = None, height: int | None = None) -> None:
+        section_model, _paragraph, control_node = self._live_context()
+        payload = bytearray(control_node.payload)
+        if len(payload) < 24:
+            raise ValueError("HWP equation control payload is shorter than expected.")
+        if width is not None:
+            payload[16:20] = int(width).to_bytes(4, "little", signed=False)
+        if height is not None:
+            payload[20:24] = int(height).to_bytes(4, "little", signed=False)
+        control_node.payload = bytes(payload)
+        self._commit(section_model)
+
 
 class HwpShapeObject(HwpControlObject):
     @property
@@ -1631,8 +1827,36 @@ class HwpShapeObject(HwpControlObject):
         return _shape_kind_from_control_node(self.control_node)
 
     @property
+    def shape_comment(self) -> str:
+        return _parse_object_description(self.control_node.payload)
+
+    @property
     def text(self) -> str:
+        control_text = _collect_text_from_node(self.control_node).replace("\r", "").strip()
+        if control_text:
+            return control_text
         return self._paragraph.text.replace("\r", "")
+
+    @property
+    def line_color(self) -> str:
+        metadata = self._shape_native_metadata()
+        if "line_color" in metadata:
+            return metadata["line_color"]
+        common_payload, _specific_payload = self._shape_specific_payload_parts()
+        if len(common_payload) < 4:
+            return "#000000"
+        return _parse_colorref(common_payload[0:4])
+
+    @property
+    def fill_color(self) -> str:
+        metadata = self._shape_native_metadata()
+        if "fill_color" in metadata:
+            return metadata["fill_color"]
+        common_payload, _specific_payload = self._shape_specific_payload_parts()
+        if len(common_payload) <= 11:
+            return "#FFFFFF"
+        fill_payload = common_payload[11:]
+        return _parse_shape_fill_payload(fill_payload).get("faceColor", "#FFFFFF")
 
     def descendant_tag_ids(self) -> list[int]:
         return [node.tag_id for node in self.control_node.iter_descendants()]
@@ -1653,6 +1877,43 @@ class HwpShapeObject(HwpControlObject):
                 return node
         return None
 
+    def _shape_native_metadata(self, control_node: RecordNode | None = None) -> dict[str, str]:
+        target = self.control_node if control_node is None else control_node
+        data_node = next((child for child in target.children if child.tag_id == TAG_CTRL_DATA), None)
+        if data_node is None:
+            return {}
+        return _parse_shape_native_metadata(data_node.payload)
+
+    def _shape_specific_record(self, control_node: RecordNode | None = None) -> RecordNode | None:
+        target = self.control_node if control_node is None else control_node
+        shape_tags = {
+            TAG_SHAPE_COMPONENT_LINE,
+            TAG_SHAPE_COMPONENT_RECTANGLE,
+            TAG_SHAPE_COMPONENT_ELLIPSE,
+            TAG_SHAPE_COMPONENT_ARC,
+            TAG_SHAPE_COMPONENT_POLYGON,
+            TAG_SHAPE_COMPONENT_CURVE,
+            TAG_SHAPE_COMPONENT_CONTAINER,
+            TAG_SHAPE_COMPONENT_TEXTART,
+            TAG_SHAPE_COMPONENT_OLE,
+            TAG_SHAPE_COMPONENT_PICTURE,
+        }
+        for node in target.iter_descendants():
+            if node.tag_id in shape_tags:
+                return node
+        return None
+
+    def _shape_specific_payload_parts(self, control_node: RecordNode | None = None) -> tuple[bytes, bytes]:
+        record = self._shape_specific_record(control_node)
+        if record is None:
+            return b"", b""
+        common_size = _shape_common_payload_size(record.tag_id)
+        if common_size <= 0:
+            return b"", record.payload
+        if len(record.payload) <= common_size:
+            return record.payload, b""
+        return record.payload[:common_size], record.payload[common_size:]
+
     def set_size(self, *, width: int | None = None, height: int | None = None) -> None:
         section_model, _paragraph, control_node = self._live_context()
         record = self._shape_component_record(control_node)
@@ -1672,11 +1933,53 @@ class HwpOleObject(HwpShapeObject):
     def kind(self) -> str:
         return "ole"
 
+    @property
+    def storage_id(self) -> int:
+        payload = self._ole_record().payload
+        if len(payload) >= 14:
+            return int.from_bytes(payload[12:14], "little", signed=False)
+        return 0
+
+    @property
+    def object_type(self) -> str:
+        flags = self._ole_flags()
+        return _HWP_OLE_OBJECT_TYPE_NAMES.get((flags >> 16) & 0x3F, "UNKNOWN")
+
+    @property
+    def draw_aspect(self) -> str:
+        flags = self._ole_flags()
+        return _HWP_OLE_DRAW_ASPECT_NAMES.get(flags & 0xFF, "CONTENT")
+
+    @property
+    def has_moniker(self) -> bool:
+        return bool(self._ole_flags() & (1 << 8))
+
+    @property
+    def eq_baseline(self) -> int:
+        return (self._ole_flags() >> 9) & 0x7F
+
+    @property
+    def line_color(self) -> str:
+        payload = self._ole_record().payload
+        if len(payload) < 18:
+            return "#000000"
+        return _parse_colorref(payload[14:18])
+
+    @property
+    def line_width(self) -> int:
+        payload = self._ole_record().payload
+        if len(payload) < 20:
+            return 0
+        return int.from_bytes(payload[18:20], "little", signed=False)
+
     def bindata_path(self) -> str:
-        bindata_path = next(
-            (stream_path for stream_path in self.document.bindata_stream_paths() if stream_path.endswith(".ole")),
-            None,
-        )
+        storage_id = self.storage_id
+        if storage_id > 0:
+            prefix = f"BinData/BIN{storage_id:04d}."
+            for stream_path in self.document.bindata_stream_paths():
+                if stream_path.startswith(prefix):
+                    return stream_path
+        bindata_path = next((stream_path for stream_path in self.document.bindata_stream_paths() if stream_path.endswith(".ole")), None)
         if bindata_path is None:
             raise ValueError("No OLE BinData stream is available.")
         return bindata_path
@@ -1687,6 +1990,19 @@ class HwpOleObject(HwpShapeObject):
     def replace_binary(self, data: bytes, *, extension: str | None = None) -> None:
         self.document.binary_document().add_stream(self.bindata_path(), data)
         self.document._invalidate_bridge()
+
+    def _ole_record(self, control_node: RecordNode | None = None) -> RecordNode:
+        target = self.control_node if control_node is None else control_node
+        for node in target.iter_descendants():
+            if node.tag_id == TAG_SHAPE_COMPONENT_OLE:
+                return node
+        raise ValueError("HWP OLE control does not contain an OLE component record.")
+
+    def _ole_flags(self) -> int:
+        payload = self._ole_record().payload
+        if len(payload) < 4:
+            return 0
+        return int.from_bytes(payload[0:4], "little", signed=False)
 
 
 def _build_control_wrapper(

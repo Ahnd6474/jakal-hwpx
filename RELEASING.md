@@ -2,6 +2,8 @@
 
 This project already includes GitHub Actions workflows for building and publishing packages. This guide captures the last manual checks so a PyPI release is repeatable and low-risk.
 
+The release gate is now defined by [`STABILITY_CONTRACT.md`](./STABILITY_CONTRACT.md) and enforced by [`scripts/check_release.py`](./scripts/check_release.py).
+
 ## Before the first public release
 
 1. Choose the project's license and add a top-level `LICENSE` file.
@@ -20,7 +22,7 @@ Install the release tools:
 python -m pip install --upgrade build twine tox
 ```
 
-Run the full release check:
+Run the CI-compatible release gate:
 
 ```bash
 tox -e release
@@ -28,11 +30,26 @@ tox -e release
 
 That command:
 
+- validates the stability contract and sample corpus
+- runs the full pytest suite
+- runs the HWPX, HWP, and bridge stability matrices
 - rebuilds `dist/`
 - runs `python -m twine check dist/*`
 - verifies the package version is consistent
 - checks the wheel and source distribution for required package files
 - warns if a top-level `LICENSE` file is still missing
+
+For the full Windows release gate with Hancom validation, run:
+
+```powershell
+python scripts/check_release.py --profile release
+```
+
+That profile adds:
+
+- Hancom corpus smoke validation
+- zero-dialog enforcement for warning/recovery popups
+- rejection of Hancom-related skips
 
 If you only want the lightweight packaging check used by CI:
 
@@ -65,7 +82,7 @@ There are two supported release paths:
 For a manual upload outside GitHub Actions:
 
 ```bash
-python scripts/check_release.py
+python scripts/check_release.py --profile ci
 python -m twine upload dist/*
 ```
 
@@ -74,6 +91,7 @@ python -m twine upload dist/*
 1. Update the version in `pyproject.toml` and `src/jakal_hwpx/__init__.py`.
 2. Run `tox -e py312` or the full test matrix you want before release.
 3. Run `tox -e release`.
-4. Publish to TestPyPI.
-5. Smoke-test installation from TestPyPI.
-6. Create the GitHub Release or run the PyPI publish workflow manually.
+4. On the Windows release machine, run `python scripts/check_release.py --profile release`.
+5. Publish to TestPyPI.
+6. Smoke-test installation from TestPyPI.
+7. Create the GitHub Release or run the PyPI publish workflow manually.

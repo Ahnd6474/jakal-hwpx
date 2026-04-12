@@ -29,7 +29,7 @@ HWP_SAMPLE_DIR = REPO_ROOT / "examples" / "samples" / "hwp"
 def sample_hwp_path() -> Path:
     paths = sorted(HWP_SAMPLE_DIR.glob("*.hwp"))
     assert paths, f"No .hwp samples were found under {HWP_SAMPLE_DIR}"
-    return paths[0]
+    return next((path for path in paths if not path.name.startswith("generated_")), paths[0])
 
 
 def test_open_hwp_binary_document_exposes_file_header_and_streams(sample_hwp_path: Path) -> None:

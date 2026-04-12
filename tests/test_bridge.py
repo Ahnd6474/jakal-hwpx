@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from jakal_hwpx import HwpDocument, HwpHwpxBridge, HwpxDocument
+from jakal_hwpx import HancomDocument, HwpDocument, HwpHwpxBridge, HwpxDocument
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -15,7 +15,7 @@ HWP_SAMPLE_DIR = REPO_ROOT / "examples" / "samples" / "hwp"
 def sample_hwp_path() -> Path:
     paths = sorted(HWP_SAMPLE_DIR.glob("*.hwp"))
     assert paths, f"No .hwp samples were found under {HWP_SAMPLE_DIR}"
-    return paths[0]
+    return next((path for path in paths if not path.name.startswith("generated_")), paths[0])
 
 
 def test_explicit_bridge_can_open_hwp_and_save_both_formats(
@@ -108,3 +108,31 @@ def test_hwpx_document_exposes_reverse_bridge_helpers(
     document.save_as_hwp(output_hwp, converter=fake_converter)
     assert output_hwp.exists()
     assert conversions == []
+
+
+def test_bridge_can_use_hancom_ir_as_authoritative_edit_surface(tmp_path: Path) -> None:
+    source = HwpxDocument.blank()
+    source.append_paragraph("SOURCE-LINE")
+
+    bridge = HwpHwpxBridge.from_hwpx(source)
+    ir = bridge.hancom_document()
+
+    assert isinstance(ir, HancomDocument)
+    ir.metadata.title = "IR-BRIDGE-TITLE"
+    ir.append_paragraph("IR-BRIDGE-LINE")
+    ir.append_field(field_type="DOCPROPERTY", display_text="IR-BRIDGE-FIELD")
+
+    output_hwpx = tmp_path / "bridge_ir.hwpx"
+    output_hwp = tmp_path / "bridge_ir.hwp"
+    bridge.save_hwpx(output_hwpx)
+    bridge.save_hwp(output_hwp)
+
+    reopened_hwpx = HwpxDocument.open(output_hwpx)
+    reopened_hwp = HwpDocument.open(output_hwp)
+
+    assert reopened_hwpx.metadata().title == "IR-BRIDGE-TITLE"
+    assert "IR-BRIDGE-LINE" in reopened_hwpx.get_document_text()
+    assert "IR-BRIDGE-FIELD" in reopened_hwpx.get_document_text()
+    assert reopened_hwp.preview_text() == "IR-BRIDGE-TITLE"
+    assert "IR-BRIDGE-LINE" in reopened_hwp.get_document_text()
+    assert "IR-BRIDGE-FIELD" in reopened_hwp.get_document_text()

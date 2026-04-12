@@ -1,6 +1,4 @@
 from __future__ import annotations
-
-import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
@@ -205,8 +203,9 @@ def _paragraph_index_for_record(record_index: int, paragraph_ranges: list[tuple[
 
 
 def _validate_candidate(path: Path, validator: Validator) -> tuple[bool, str | None]:
-    temp_dir = Path(tempfile.mkdtemp(prefix="jakal_hwp_template_lab_"))
-    output_path = temp_dir / f"{path.stem}.validated.hwpx"
+    validation_dir = path.parent / "_validation"
+    validation_dir.mkdir(parents=True, exist_ok=True)
+    output_path = validation_dir / f"{path.stem}.validated.hwpx"
     try:
         validator(path, output_path, "HWPX")
     except Exception as exc:

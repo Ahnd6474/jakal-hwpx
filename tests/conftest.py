@@ -1,6 +1,11 @@
 from __future__ import annotations
 
+import itertools
+import os
+import re
+import shutil
 import sys
+import tempfile
 import zipfile
 from pathlib import Path
 
@@ -14,6 +19,9 @@ SAMPLE_CORPUS_DIR = REPO_ROOT / "examples" / "samples" / "hwpx"
 
 if str(SRC_ROOT) not in sys.path:
     sys.path.insert(0, str(SRC_ROOT))
+
+_TMP_PATH_COUNTER = itertools.count()
+collect_ignore_glob = ["pytest-cache-files-*", "_pytest_cache*", "_pytest_basetemp*", "_tmp_pytest*", "_release_tmp*"]
 
 
 def _valid_hwpx_files(root: Path) -> list[Path]:
@@ -52,3 +60,45 @@ def valid_hwpx_files(sample_corpus_dir: Path) -> list[Path]:
 @pytest.fixture(scope="session")
 def sample_hwpx_path(valid_hwpx_files: list[Path]) -> Path:
     return valid_hwpx_files[0]
+
+
+def _tmp_dir_name(nodeid: str) -> str:
+    sanitized = re.sub(r"[^A-Za-z0-9_.-]+", "-", nodeid).strip("-")
+    return sanitized[:80] or "tmp"
+
+
+@pytest.fixture(scope="session")
+def _workspace_tmp_root() -> Path:
+    root = REPO_ROOT / "tests" / "_tmp_pytest"
+    shutil.rmtree(root, ignore_errors=True)
+    root.mkdir(parents=True, exist_ok=True)
+    return root
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _workspace_temp_env(_workspace_tmp_root: Path) -> None:
+    temp_root = _workspace_tmp_root / "session-temp"
+    temp_root.mkdir(parents=True, exist_ok=True)
+    original_env = {key: os.environ.get(key) for key in ("TMP", "TEMP", "TMPDIR", "JAKAL_HWPX_TEMP_ROOT")}
+    original_tempdir = tempfile.tempdir
+    os.environ["TMP"] = str(temp_root)
+    os.environ["TEMP"] = str(temp_root)
+    os.environ["TMPDIR"] = str(temp_root)
+    os.environ["JAKAL_HWPX_TEMP_ROOT"] = str(temp_root)
+    tempfile.tempdir = str(temp_root)
+    try:
+        yield
+    finally:
+        for key, value in original_env.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
+        tempfile.tempdir = original_tempdir
+
+
+@pytest.fixture
+def tmp_path(_workspace_tmp_root: Path, request: pytest.FixtureRequest) -> Path:
+    path = _workspace_tmp_root / f"{next(_TMP_PATH_COUNTER):04d}-{_tmp_dir_name(request.node.nodeid)}"
+    path.mkdir(parents=True, exist_ok=False)
+    return path

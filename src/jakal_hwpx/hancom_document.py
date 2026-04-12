@@ -9,11 +9,49 @@ from typing import Callable
 from lxml import etree
 
 from .document import DocumentMetadata, HwpxDocument
-from .hwp_binary import TAG_CTRL_DATA
+from .hwp_binary import TAG_BULLET, TAG_CHAR_SHAPE, TAG_CTRL_DATA, TAG_NUMBERING, TAG_PARA_SHAPE, TAG_STYLE, TypedRecord
 from .hwp_document import HwpDocument
-from .namespaces import NS
+from .namespaces import NS, qname
 
 HancomConverter = Callable[[str | Path, str | Path, str], Path]
+
+_HWP_STYLE_TYPE_CODES = {
+    "PARA": 0,
+    "CHAR": 1,
+}
+_HWP_STYLE_TYPE_NAMES = {value: key for key, value in _HWP_STYLE_TYPE_CODES.items()}
+_HWP_DOCINFO_COUNT_INDEX_BY_TAG = {
+    TAG_CHAR_SHAPE: 9,
+    TAG_NUMBERING: 11,
+    TAG_BULLET: 12,
+    TAG_PARA_SHAPE: 13,
+    TAG_STYLE: 14,
+}
+_DEFAULT_HWP_NUMBERING_PAYLOAD = bytes.fromhex(
+    "0c00000000003200ffffffff03005e0031002e000c01000000003200ffffffff03005e0032002e000c00000000003200ffffffff"
+    "03005e00330029000c01000000003200ffffffff03005e00340029000c00000000003200ffffffff040028005e00350029000c01"
+    "000000003200ffffffff040028005e00360029002c00000000003200ffffffff02005e0037000000010000000100000001000000"
+    "01000000010000000100000001000000"
+)
+_DEFAULT_HWP_BULLET_PAYLOAD = bytes.fromhex("0800000000003200ffffffffa1f0000000000000000000")
+_DEFAULT_HWP_PARA_SHAPE_PAYLOAD = bytes.fromhex(
+    "800100000000000000000000000000000000000000000000a000000000000000050000000000000000000000000000000000a0000000"
+)
+_DEFAULT_HWP_CHAR_SHAPE_PAYLOAD = bytes.fromhex(
+    "0100010001000100000002000000646464646464640000000000000064646464646464000000000000004c040000020000000a0a0000000000000000ffffffffc0c0c000040000000000"
+)
+
+_HWP_PARA_ALIGN_CODES = {
+    "JUSTIFY": 0,
+    "LEFT": 1,
+    "RIGHT": 2,
+    "CENTER": 3,
+    "DISTRIBUTE": 4,
+    "DISTRIBUTE_SPACE": 5,
+}
+_HWP_PARA_ALIGN_NAMES = {value: key for key, value in _HWP_PARA_ALIGN_CODES.items()}
+_HWP_NUMBERING_LEVEL_COUNT = 7
+_HWP_CHAR_FONT_ORDER = ("hangul", "latin", "hanja", "japanese", "other", "symbol", "user")
 
 
 @dataclass
@@ -64,6 +102,13 @@ class HancomMetadata:
 @dataclass
 class Paragraph:
     text: str
+    style_id: str | None = None
+    para_pr_id: str | None = None
+    char_pr_id: str | None = None
+    hwp_para_shape_id: int | None = None
+    hwp_style_id: int | None = None
+    hwp_split_flags: int | None = None
+    hwp_control_mask: int | None = None
 
 
 @dataclass
@@ -91,6 +136,7 @@ class Picture:
 class Hyperlink:
     target: str
     display_text: str | None = None
+    metadata_fields: list[str | int] = field(default_factory=list)
 
 
 @dataclass
@@ -127,6 +173,10 @@ class Equation:
     script: str
     width: int = 4800
     height: int = 2300
+    shape_comment: str | None = None
+    text_color: str = "#000000"
+    base_unit: int = 1100
+    font: str = "HYhwpEQ"
 
 
 @dataclass
@@ -137,6 +187,7 @@ class Shape:
     height: int = 3200
     fill_color: str = "#FFFFFF"
     line_color: str = "#000000"
+    shape_comment: str | None = None
 
 
 @dataclass
@@ -145,6 +196,13 @@ class Ole:
     data: bytes
     width: int = 42001
     height: int = 13501
+    shape_comment: str | None = None
+    object_type: str = "EMBEDDED"
+    draw_aspect: str = "CONTENT"
+    has_moniker: bool = False
+    eq_baseline: int = 0
+    line_color: str = "#000000"
+    line_width: int = 0
 
 
 HancomBlock = (
@@ -180,6 +238,7 @@ class StyleDefinition:
     next_style_id: str | None = None
     lang_id: str = "1042"
     lock_form: bool = False
+    native_hwp_payload: bytes | None = None
 
 
 @dataclass
@@ -188,6 +247,12 @@ class ParagraphStyle:
     alignment_horizontal: str | None = None
     alignment_vertical: str | None = None
     line_spacing: int | str | None = None
+    line_spacing_type: str | None = None
+    margins: dict[str, str] = field(default_factory=dict)
+    heading: dict[str, str] = field(default_factory=dict)
+    break_setting: dict[str, str] = field(default_factory=dict)
+    auto_spacing: dict[str, str] = field(default_factory=dict)
+    native_hwp_payload: bytes | None = None
 
 
 @dataclass
@@ -195,6 +260,32 @@ class CharacterStyle:
     style_id: str | None = None
     text_color: str | None = None
     height: int | str | None = None
+    font_refs: dict[str, str] = field(default_factory=dict)
+    native_hwp_payload: bytes | None = None
+
+
+@dataclass
+class NumberingDefinition:
+    style_id: str | None = None
+    formats: list[str] = field(default_factory=list)
+    para_heads: list[int] = field(default_factory=list)
+    width_adjusts: list[int] = field(default_factory=list)
+    text_offsets: list[int] = field(default_factory=list)
+    char_pr_ids: list[int | None] = field(default_factory=list)
+    start_numbers: list[int] = field(default_factory=list)
+    unknown_short: int = 0
+    native_hwp_payload: bytes | None = None
+
+
+@dataclass
+class BulletDefinition:
+    style_id: str | None = None
+    bullet_char: str = "\uf0a1"
+    width_adjust: int = 0
+    text_offset: int = 50
+    char_pr_id: int | None = None
+    unknown_tail: bytes | None = None
+    native_hwp_payload: bytes | None = None
 
 
 @dataclass
@@ -211,6 +302,7 @@ class SectionSettings:
     footnote_pr: dict[str, object] = field(default_factory=dict)
     endnote_pr: dict[str, object] = field(default_factory=dict)
     line_number_shape: dict[str, str] = field(default_factory=dict)
+    numbering_shape_id: str | None = None
 
 
 ParagraphNode = Paragraph
@@ -228,6 +320,8 @@ HeaderFooterNode = HeaderFooter
 StyleDefinitionNode = StyleDefinition
 ParagraphStyleNode = ParagraphStyle
 CharacterStyleNode = CharacterStyle
+NumberingDefinitionNode = NumberingDefinition
+BulletDefinitionNode = BulletDefinition
 SectionSettingsNode = SectionSettings
 
 
@@ -255,10 +349,17 @@ class HancomDocument:
         self.style_definitions: list[StyleDefinition] = []
         self.paragraph_styles: list[ParagraphStyle] = []
         self.character_styles: list[CharacterStyle] = []
+        self.numbering_definitions: list[NumberingDefinition] = []
+        self.bullet_definitions: list[BulletDefinition] = []
 
     @classmethod
     def blank(cls, *, converter: HancomConverter | None = None) -> "HancomDocument":
         return cls(converter=converter)
+
+    def bridge(self, *, converter: HancomConverter | None = None):
+        from .bridge import HwpHwpxBridge
+
+        return HwpHwpxBridge.from_hancom(self, converter=converter or self._converter)
 
     @classmethod
     def read_hwpx(cls, path: str | Path, *, converter: HancomConverter | None = None) -> "HancomDocument":
@@ -298,11 +399,22 @@ class HancomDocument:
         converter: HancomConverter | None = None,
     ) -> "HancomDocument":
         effective_converter = converter or getattr(document, "_converter", None)
+        docinfo_model = document.docinfo_model()
+        style_definitions = _extract_hwp_style_definitions(docinfo_model)
         sections = [_extract_hwp_section(section) for section in document.sections()]
         if not sections:
             sections = [HancomSection()]
-        metadata = HancomMetadata(title=document.source_path.stem if document.source_path else None)
-        return cls(metadata=metadata, sections=sections, source_format="hwp", converter=effective_converter)
+        preview_text = document.preview_text().strip()
+        title = preview_text or (document.source_path.stem if document.source_path else None)
+        metadata = HancomMetadata(title=title)
+        instance = cls(metadata=metadata, sections=sections, source_format="hwp", converter=effective_converter)
+        instance.style_definitions = style_definitions
+        instance.paragraph_styles = _build_hwp_placeholder_paragraph_styles(docinfo_model, sections, style_definitions)
+        instance.character_styles = _build_hwp_placeholder_character_styles(docinfo_model, style_definitions)
+        instance.numbering_definitions = _extract_hwp_numbering_definitions(docinfo_model)
+        instance.bullet_definitions = _extract_hwp_bullet_definitions(docinfo_model)
+        _merge_hwp_style_defaults_into_paragraphs(instance)
+        return instance
 
     def append_section(self) -> HancomSection:
         section = HancomSection()
@@ -362,10 +474,11 @@ class HancomDocument:
         target: str,
         *,
         display_text: str | None = None,
+        metadata_fields: list[str | int] | None = None,
         section_index: int = 0,
     ) -> Hyperlink:
         section = self._ensure_section(section_index)
-        block = Hyperlink(target=target, display_text=display_text)
+        block = Hyperlink(target=target, display_text=display_text, metadata_fields=list(metadata_fields or []))
         section.blocks.append(block)
         return block
 
@@ -448,10 +561,22 @@ class HancomDocument:
         *,
         width: int = 4800,
         height: int = 2300,
+        shape_comment: str | None = None,
+        text_color: str = "#000000",
+        base_unit: int = 1100,
+        font: str = "HYhwpEQ",
         section_index: int = 0,
     ) -> Equation:
         section = self._ensure_section(section_index)
-        block = Equation(script=script, width=width, height=height)
+        block = Equation(
+            script=script,
+            width=width,
+            height=height,
+            shape_comment=shape_comment,
+            text_color=text_color,
+            base_unit=base_unit,
+            font=font,
+        )
         section.blocks.append(block)
         return block
 
@@ -464,6 +589,7 @@ class HancomDocument:
         height: int = 3200,
         fill_color: str = "#FFFFFF",
         line_color: str = "#000000",
+        shape_comment: str | None = None,
         section_index: int = 0,
     ) -> Shape:
         section = self._ensure_section(section_index)
@@ -474,6 +600,7 @@ class HancomDocument:
             height=height,
             fill_color=fill_color,
             line_color=line_color,
+            shape_comment=shape_comment,
         )
         section.blocks.append(block)
         return block
@@ -485,10 +612,29 @@ class HancomDocument:
         *,
         width: int = 42001,
         height: int = 13501,
+        shape_comment: str | None = None,
+        object_type: str = "EMBEDDED",
+        draw_aspect: str = "CONTENT",
+        has_moniker: bool = False,
+        eq_baseline: int = 0,
+        line_color: str = "#000000",
+        line_width: int = 0,
         section_index: int = 0,
     ) -> Ole:
         section = self._ensure_section(section_index)
-        block = Ole(name=name, data=data, width=width, height=height)
+        block = Ole(
+            name=name,
+            data=data,
+            width=width,
+            height=height,
+            shape_comment=shape_comment,
+            object_type=object_type,
+            draw_aspect=draw_aspect,
+            has_moniker=has_moniker,
+            eq_baseline=eq_baseline,
+            line_color=line_color,
+            line_width=line_width,
+        )
         section.blocks.append(block)
         return block
 
@@ -550,12 +696,22 @@ class HancomDocument:
         alignment_horizontal: str | None = None,
         alignment_vertical: str | None = None,
         line_spacing: int | str | None = None,
+        line_spacing_type: str | None = None,
+        margins: dict[str, str] | None = None,
+        heading: dict[str, str] | None = None,
+        break_setting: dict[str, str] | None = None,
+        auto_spacing: dict[str, str] | None = None,
     ) -> ParagraphStyle:
         node = ParagraphStyle(
             style_id=style_id,
             alignment_horizontal=alignment_horizontal,
             alignment_vertical=alignment_vertical,
             line_spacing=line_spacing,
+            line_spacing_type=line_spacing_type,
+            margins=dict(margins or {}),
+            heading=dict(heading or {}),
+            break_setting=dict(break_setting or {}),
+            auto_spacing=dict(auto_spacing or {}),
         )
         self.paragraph_styles.append(node)
         return node
@@ -566,9 +722,65 @@ class HancomDocument:
         style_id: str | None = None,
         text_color: str | None = None,
         height: int | str | None = None,
+        font_refs: dict[str, str] | None = None,
     ) -> CharacterStyle:
-        node = CharacterStyle(style_id=style_id, text_color=text_color, height=height)
+        node = CharacterStyle(
+            style_id=style_id,
+            text_color=text_color,
+            height=height,
+            font_refs=dict(font_refs or {}),
+        )
         self.character_styles.append(node)
+        return node
+
+    def append_numbering_definition(
+        self,
+        *,
+        style_id: str | None = None,
+        formats: list[str] | None = None,
+        para_heads: list[int] | None = None,
+        width_adjusts: list[int] | None = None,
+        text_offsets: list[int] | None = None,
+        char_pr_ids: list[int | None] | None = None,
+        start_numbers: list[int] | None = None,
+        unknown_short: int = 0,
+        native_hwp_payload: bytes | None = None,
+    ) -> NumberingDefinition:
+        node = NumberingDefinition(
+            style_id=style_id,
+            formats=list(formats or []),
+            para_heads=list(para_heads or []),
+            width_adjusts=list(width_adjusts or []),
+            text_offsets=list(text_offsets or []),
+            char_pr_ids=list(char_pr_ids or []),
+            start_numbers=list(start_numbers or []),
+            unknown_short=unknown_short,
+            native_hwp_payload=native_hwp_payload,
+        )
+        self.numbering_definitions.append(node)
+        return node
+
+    def append_bullet_definition(
+        self,
+        *,
+        style_id: str | None = None,
+        bullet_char: str = "\uf0a1",
+        width_adjust: int = 0,
+        text_offset: int = 50,
+        char_pr_id: int | None = None,
+        unknown_tail: bytes | None = None,
+        native_hwp_payload: bytes | None = None,
+    ) -> BulletDefinition:
+        node = BulletDefinition(
+            style_id=style_id,
+            bullet_char=bullet_char,
+            width_adjust=width_adjust,
+            text_offset=text_offset,
+            char_pr_id=char_pr_id,
+            unknown_tail=unknown_tail,
+            native_hwp_payload=native_hwp_payload,
+        )
+        self.bullet_definitions.append(node)
         return node
 
     def to_hwpx_document(self) -> HwpxDocument:
@@ -595,6 +807,7 @@ class HancomDocument:
         preview_text = self.metadata.title or self.metadata.subject or self.metadata.description
         if preview_text:
             document.set_preview_text(preview_text)
+        _sync_hwp_docinfo_styles(document, self)
         for section_index, section in enumerate(self.sections):
             document.apply_section_settings(
                 section_index=section_index,
@@ -605,6 +818,7 @@ class HancomDocument:
                 visibility=section.settings.visibility or None,
                 grid=section.settings.grid or None,
                 start_numbers=section.settings.start_numbers or None,
+                numbering_shape_id=section.settings.numbering_shape_id,
             )
             if section.settings.page_border_fills:
                 document.apply_section_page_border_fills(
@@ -682,7 +896,7 @@ def _extract_hwp_section(section) -> HancomSection:
 def _extract_hwp_paragraph_blocks(paragraph, controls: list[object]) -> list[HancomBlock]:
     if not controls:
         text = _normalize_hwp_text(paragraph.text)
-        return [Paragraph(text)] if text else []
+        return [_build_hwp_paragraph_block(paragraph, text)] if text else []
 
     blocks: list[HancomBlock] = []
     pending_text_parts: list[str] = []
@@ -705,13 +919,13 @@ def _extract_hwp_paragraph_blocks(paragraph, controls: list[object]) -> list[Han
         normalized_pending = _normalize_hwp_text(pending_text)
         owned_text = _block_owned_text(block)
         if normalized_pending and (owned_text is None or normalized_pending != _normalize_hwp_text(owned_text)):
-            blocks.append(Paragraph(normalized_pending))
+            blocks.append(_build_hwp_paragraph_block(paragraph, normalized_pending))
         if block is not None:
             blocks.append(block)
 
     trailing_text = _normalize_hwp_text("".join(pending_text_parts))
     if trailing_text:
-        blocks.append(Paragraph(trailing_text))
+        blocks.append(_build_hwp_paragraph_block(paragraph, trailing_text))
 
     for control in controls[control_index:]:
         block = _extract_hwp_control(control)
@@ -754,11 +968,27 @@ def _extract_hwp_section_settings(section) -> SectionSettings:
         page_numbers=page_numbers,
         footnote_pr=dict(note_settings.get("footNotePr", {})),
         endnote_pr=dict(note_settings.get("endNotePr", {})),
+        numbering_shape_id=_normalize_hwp_setting_scalar(section_definition.get("numbering_shape_id")),
     )
 
 
 def _normalize_hwp_text(value: str) -> str:
     return value.replace("\r", "").strip()
+
+
+def _build_hwp_paragraph_block(paragraph, text: str) -> Paragraph:
+    header = getattr(paragraph, "header", None)
+    style_id = getattr(header, "style_id", None) if header is not None else None
+    para_shape_id = getattr(header, "para_shape_id", None) if header is not None else None
+    return Paragraph(
+        text=text,
+        style_id=str(style_id) if style_id is not None else None,
+        para_pr_id=str(para_shape_id) if para_shape_id is not None else None,
+        hwp_para_shape_id=para_shape_id,
+        hwp_style_id=style_id,
+        hwp_split_flags=getattr(header, "split_flags", None),
+        hwp_control_mask=getattr(header, "control_mask", None),
+    )
 
 
 def _tokenize_hwp_paragraph_raw_text(raw_text: str) -> list[tuple[str, str]]:
@@ -855,7 +1085,11 @@ def _extract_hwp_control(control) -> HancomBlock | None:
             height=size.get("height", 7200),
         )
     if isinstance(control, HwpHyperlinkObject):
-        return Hyperlink(target=control.url, display_text=control.display_text or None)
+        return Hyperlink(
+            target=control.url,
+            display_text=control.display_text or None,
+            metadata_fields=list(control.metadata_fields),
+        )
     if isinstance(control, HwpBookmarkObject):
         return Bookmark(name=control.name or "")
     if isinstance(control, HwpAutoNumberObject):
@@ -873,6 +1107,13 @@ def _extract_hwp_control(control) -> HancomBlock | None:
             data=control.binary_data(),
             width=size.get("width", 42001),
             height=size.get("height", 13501),
+            shape_comment=getattr(control, "shape_comment", "") or None,
+            object_type=getattr(control, "object_type", "EMBEDDED"),
+            draw_aspect=getattr(control, "draw_aspect", "CONTENT"),
+            has_moniker=bool(getattr(control, "has_moniker", False)),
+            eq_baseline=int(getattr(control, "eq_baseline", 0)),
+            line_color=getattr(control, "line_color", "#000000"),
+            line_width=int(getattr(control, "line_width", 0)),
         )
     if isinstance(control, HwpShapeObject):
         size = control.size()
@@ -881,9 +1122,19 @@ def _extract_hwp_control(control) -> HancomBlock | None:
             text=control.text,
             width=size.get("width", 12000),
             height=size.get("height", 3200),
+            fill_color=getattr(control, "fill_color", "#FFFFFF"),
+            line_color=getattr(control, "line_color", "#000000"),
+            shape_comment=getattr(control, "shape_comment", "") or None,
         )
     if isinstance(control, HwpEquationObject):
-        return Equation(script=control.script)
+        size = control.size() if hasattr(control, "size") else {"width": 4800, "height": 2300}
+        return Equation(
+            script=control.script,
+            width=size.get("width", 4800),
+            height=size.get("height", 2300),
+            shape_comment=getattr(control, "shape_comment", "") or None,
+            font=getattr(control, "font", "HYhwpEQ"),
+        )
     if isinstance(control, HwpFieldObject):
         return Field(
             field_type=control.field_type,
@@ -948,7 +1199,15 @@ def _block_owned_text(block: HancomBlock | None) -> str | None:
 def _append_hancom_block_to_hwp(document: HwpDocument, block: HancomBlock, *, section_index: int) -> None:
     if isinstance(block, Paragraph):
         if block.text:
-            document.append_paragraph(block.text, section_index=section_index)
+            para_shape_id, style_id, split_flags, control_mask = _resolve_hwp_paragraph_attributes(document, block)
+            document.append_paragraph(
+                block.text,
+                section_index=section_index,
+                para_shape_id=para_shape_id,
+                style_id=style_id,
+                split_flags=split_flags,
+                control_mask=control_mask,
+            )
         return
     if isinstance(block, Table):
         document.append_table(
@@ -964,10 +1223,21 @@ def _append_hancom_block_to_hwp(document: HwpDocument, block: HancomBlock, *, se
         )
         return
     if isinstance(block, Picture):
-        document.append_picture(block.data, extension=block.extension, section_index=section_index)
+        document.append_picture(
+            block.data,
+            extension=block.extension,
+            width=block.width,
+            height=block.height,
+            section_index=section_index,
+        )
         return
     if isinstance(block, Hyperlink):
-        document.append_hyperlink(block.target, text=block.display_text or None, section_index=section_index)
+        document.append_hyperlink(
+            block.target,
+            text=block.display_text or None,
+            metadata_fields=block.metadata_fields or None,
+            section_index=section_index,
+        )
         return
     if isinstance(block, Bookmark):
         if block.name:
@@ -991,15 +1261,85 @@ def _append_hancom_block_to_hwp(document: HwpDocument, block: HancomBlock, *, se
         document.append_note(block.text, kind=block.kind, number=block.number, section_index=section_index)
         return
     if isinstance(block, Equation):
-        document.append_equation(block.script, width=block.width, height=block.height, section_index=section_index)
+        document.append_equation(
+            block.script,
+            width=block.width,
+            height=block.height,
+            font=block.font,
+            shape_comment=block.shape_comment,
+            section_index=section_index,
+        )
         return
     if isinstance(block, Shape):
         kind = block.kind if block.kind in {"line", "rect", "ellipse", "arc", "polygon", "curve", "container", "textart"} else "rect"
-        document.append_shape(kind=kind, text=block.text, width=block.width, height=block.height, section_index=section_index)
+        document.append_shape(
+            kind=kind,
+            text=block.text,
+            width=block.width,
+            height=block.height,
+            fill_color=block.fill_color,
+            line_color=block.line_color,
+            shape_comment=block.shape_comment,
+            section_index=section_index,
+        )
         return
     if isinstance(block, Ole):
-        document.append_ole(block.name, block.data, width=block.width, height=block.height, section_index=section_index)
+        document.append_ole(
+            block.name,
+            block.data,
+            width=block.width,
+            height=block.height,
+            shape_comment=block.shape_comment,
+            object_type=block.object_type,
+            draw_aspect=block.draw_aspect,
+            has_moniker=block.has_moniker,
+            eq_baseline=block.eq_baseline,
+            line_color=block.line_color,
+            line_width=block.line_width,
+            section_index=section_index,
+        )
         return
+
+
+def _resolve_hwp_paragraph_attributes(document: HwpDocument, block: Paragraph) -> tuple[int, int, int, int]:
+    docinfo = document.docinfo_model()
+    para_shape_count = len(docinfo.para_shape_records())
+    style_count = len(docinfo.style_records())
+    para_shape_id = block.hwp_para_shape_id
+    style_id = block.hwp_style_id
+    if para_shape_id is None:
+        para_shape_id = _parse_optional_int(block.para_pr_id)
+    if style_id is None:
+        style_id = _parse_optional_int(block.style_id)
+    resolved_para_shape_id = (
+        para_shape_id
+        if para_shape_id is not None and 0 <= para_shape_id < para_shape_count and para_shape_id <= 0xFFFF
+        else 0
+    )
+    resolved_style_id = (
+        style_id
+        if style_id is not None and 0 <= style_id < style_count and style_id <= 0xFF
+        else 0
+    )
+    return (
+        resolved_para_shape_id,
+        resolved_style_id,
+        block.hwp_split_flags or 0,
+        block.hwp_control_mask or 0,
+    )
+
+
+def _parse_optional_int(value: str | None) -> int | None:
+    if value is None:
+        return None
+    stripped = value.strip()
+    return int(stripped) if stripped.isdigit() else None
+
+
+def _normalize_hwp_setting_scalar(value: object | None) -> str | None:
+    if value is None:
+        return None
+    return str(value)
 
 
 def _extract_hwp_header_footer(control) -> HeaderFooter | None:
@@ -1033,7 +1373,7 @@ def _extract_hwpx_section(section) -> HancomSection:
 
         text = "".join(paragraph.xpath("./hp:run/hp:t/text()", namespaces=NS)).replace("\r", "").strip()
         if text:
-            blocks.append(Paragraph(text))
+            blocks.append(_build_hwpx_paragraph_block(paragraph, text))
         for node in bookmarks:
             blocks.append(_extract_bookmark(_build_bookmark_wrapper(section, node)))
         for node in hyperlinks:
@@ -1056,6 +1396,27 @@ def _extract_hwpx_section(section) -> HancomSection:
         for node in oles:
             blocks.append(_extract_hwpx_ole(_build_ole_wrapper(section, node)))
     return HancomSection(settings=section_settings, header_footer_blocks=header_footer_blocks, blocks=blocks)
+
+
+def _build_hwpx_paragraph_block(paragraph, text: str) -> Paragraph:
+    return Paragraph(
+        text=text,
+        style_id=paragraph.get("styleIDRef"),
+        para_pr_id=paragraph.get("paraPrIDRef"),
+        char_pr_id=_extract_hwpx_paragraph_char_pr_id(paragraph),
+    )
+
+
+def _extract_hwpx_paragraph_char_pr_id(paragraph) -> str | None:
+    run_ids = [
+        value
+        for value in paragraph.xpath("./hp:run/@charPrIDRef", namespaces=NS)
+        if isinstance(value, str) and value
+    ]
+    if not run_ids:
+        return None
+    first = run_ids[0]
+    return first if all(value == first for value in run_ids) else None
 
 
 def _extract_hwpx_table(table) -> Table:
@@ -1098,6 +1459,10 @@ def _extract_hwpx_equation(equation) -> Equation:
         script=equation.script,
         width=size.get("width", 4800),
         height=size.get("height", 2300),
+        shape_comment=equation.shape_comment or None,
+        text_color=equation.element.get("textColor", "#000000"),
+        base_unit=int(equation.element.get("baseUnit", "1100")),
+        font=equation.element.get("font", "HYhwpEQ"),
     )
 
 
@@ -1112,16 +1477,25 @@ def _extract_hwpx_shape(shape) -> Shape:
         height=size.get("height", 3200),
         fill_color=fill_style.get("faceColor", "#FFFFFF"),
         line_color=line_style.get("color", "#000000"),
+        shape_comment=shape.shape_comment or None,
     )
 
 
 def _extract_hwpx_ole(ole) -> Ole:
     size = ole.size()
+    line_style = ole.line_style()
     return Ole(
         name=Path(ole.binary_part_path()).name,
         data=ole.binary_data(),
         width=size.get("width", 42001),
         height=size.get("height", 13501),
+        shape_comment=ole.shape_comment or None,
+        object_type=ole.object_type or "EMBEDDED",
+        draw_aspect=ole.draw_aspect or "CONTENT",
+        has_moniker=ole.has_moniker,
+        eq_baseline=int(ole.element.get("eqBaseLine", "0")),
+        line_color=line_style.get("color", "#000000"),
+        line_width=int(line_style.get("width", "0")),
     )
 
 
@@ -1286,6 +1660,7 @@ def _extract_style_definition(style) -> StyleDefinition:
 
 
 def _extract_paragraph_style(style) -> ParagraphStyle:
+    line_spacing_types = style.element.xpath(".//hh:lineSpacing/@type", namespaces=NS)
     return ParagraphStyle(
         style_id=style.style_id,
         alignment_horizontal=style.alignment_horizontal,
@@ -1293,6 +1668,32 @@ def _extract_paragraph_style(style) -> ParagraphStyle:
         if style.element.xpath("./hh:align/@vertical", namespaces=NS)
         else None,
         line_spacing=style.line_spacing,
+        line_spacing_type=line_spacing_types[0] if line_spacing_types else None,
+        margins=_extract_hwpx_margin_map(style.element),
+        heading=_extract_hwpx_attribute_map(
+            style.element,
+            "./hh:heading",
+            "type",
+            "idRef",
+            "level",
+        ),
+        break_setting=_extract_hwpx_attribute_map(
+            style.element,
+            "./hh:breakSetting",
+            "breakLatinWord",
+            "breakNonLatinWord",
+            "widowOrphan",
+            "keepWithNext",
+            "keepLines",
+            "pageBreakBefore",
+            "lineWrap",
+        ),
+        auto_spacing=_extract_hwpx_attribute_map(
+            style.element,
+            "./hh:autoSpacing",
+            "eAsianEng",
+            "eAsianNum",
+        ),
     )
 
 
@@ -1301,7 +1702,708 @@ def _extract_character_style(style) -> CharacterStyle:
         style_id=style.style_id,
         text_color=style.text_color,
         height=style.height,
+        font_refs=_extract_hwpx_attribute_map(
+            style.element,
+            "./hh:fontRef",
+            "hangul",
+            "latin",
+            "hanja",
+            "japanese",
+            "other",
+            "symbol",
+            "user",
+        ),
     )
+
+
+def _extract_hwpx_margin_map(element: etree._Element) -> dict[str, str]:
+    values: dict[str, str] = {}
+    for key in ("intent", "left", "right", "prev", "next"):
+        nodes = element.xpath(f"./hh:margin/hc:{key}", namespaces=NS)
+        if not nodes:
+            continue
+        value = nodes[0].get("value")
+        if value is not None:
+            values[key] = value
+        unit = nodes[0].get("unit")
+        if unit is not None and "unit" not in values:
+            values["unit"] = unit
+    return values
+
+
+def _extract_hwpx_attribute_map(element: etree._Element, xpath: str, *attributes: str) -> dict[str, str]:
+    nodes = element.xpath(xpath, namespaces=NS)
+    if not nodes:
+        return {}
+    return {
+        attribute: value
+        for attribute in attributes
+        if (value := nodes[0].get(attribute)) is not None
+    }
+
+
+def _extract_hwp_style_definitions(docinfo_model) -> list[StyleDefinition]:
+    definitions: list[StyleDefinition] = []
+    for style_id, record in enumerate(docinfo_model.style_records()):
+        definition = _parse_hwp_style_definition_payload(record.payload, style_id=style_id)
+        if definition is not None:
+            definitions.append(definition)
+    return definitions
+
+
+def _parse_hwp_style_definition_payload(payload: bytes, *, style_id: int | None = None) -> StyleDefinition | None:
+    if len(payload) < 4:
+        return None
+    cursor = 0
+    name_length = int.from_bytes(payload[cursor : cursor + 2], "little", signed=False)
+    cursor += 2
+    name_end = cursor + (name_length * 2)
+    if name_end > len(payload):
+        return None
+    name = payload[cursor:name_end].decode("utf-16-le", errors="ignore")
+    cursor = name_end
+    if cursor + 2 > len(payload):
+        return None
+    english_name_length = int.from_bytes(payload[cursor : cursor + 2], "little", signed=False)
+    cursor += 2
+    english_name_end = cursor + (english_name_length * 2)
+    if english_name_end > len(payload):
+        return None
+    english_name = payload[cursor:english_name_end].decode("utf-16-le", errors="ignore")
+    cursor = english_name_end
+    if cursor + 10 > len(payload):
+        return None
+    style_word = int.from_bytes(payload[cursor : cursor + 2], "little", signed=False)
+    cursor += 2
+    lang_id = int.from_bytes(payload[cursor : cursor + 2], "little", signed=False)
+    cursor += 2
+    next_style_id = int.from_bytes(payload[cursor : cursor + 2], "little", signed=False)
+    cursor += 2
+    para_pr_id = int.from_bytes(payload[cursor : cursor + 2], "little", signed=False)
+    cursor += 2
+    char_pr_id = int.from_bytes(payload[cursor : cursor + 2], "little", signed=False)
+    style_type_code = style_word & 0x00FF
+    resolved_style_id = style_word >> 8 if style_id is None else style_id
+    return StyleDefinition(
+        name=name or f"Style {resolved_style_id}",
+        style_id=str(resolved_style_id),
+        english_name=english_name or None,
+        style_type=_HWP_STYLE_TYPE_NAMES.get(style_type_code, "PARA"),
+        para_pr_id=str(para_pr_id),
+        char_pr_id=str(char_pr_id),
+        next_style_id=str(next_style_id),
+        lang_id=str(lang_id),
+        lock_form=False,
+        native_hwp_payload=bytes(payload),
+    )
+
+
+def _build_hwp_placeholder_paragraph_styles(
+    docinfo_model,
+    sections: list[HancomSection],
+    style_definitions: list[StyleDefinition],
+) -> list[ParagraphStyle]:
+    style_ids = {
+        value
+        for value in (_parse_optional_int(style.para_pr_id) for style in style_definitions)
+        if value is not None
+    }
+    for section in sections:
+        for block in section.blocks:
+            if not isinstance(block, Paragraph):
+                continue
+            candidate = block.hwp_para_shape_id
+            if candidate is None:
+                candidate = _parse_optional_int(block.para_pr_id)
+            if candidate is not None:
+                style_ids.add(candidate)
+    payloads = docinfo_model.para_shape_records()
+    styles: list[ParagraphStyle] = []
+    for style_id in sorted(style_ids):
+        payload = bytes(payloads[style_id].payload) if 0 <= style_id < len(payloads) else None
+        style = ParagraphStyle(style_id=str(style_id), native_hwp_payload=payload)
+        if payload is not None:
+            _apply_hwp_paragraph_style_payload(style, payload)
+        styles.append(style)
+    return styles
+
+
+def _build_hwp_placeholder_character_styles(docinfo_model, style_definitions: list[StyleDefinition]) -> list[CharacterStyle]:
+    style_ids = {
+        value
+        for value in (_parse_optional_int(style.char_pr_id) for style in style_definitions)
+        if value is not None
+    }
+    payloads = docinfo_model.char_shape_records()
+    styles: list[CharacterStyle] = []
+    for style_id in sorted(style_ids):
+        payload = bytes(payloads[style_id].payload) if 0 <= style_id < len(payloads) else None
+        style = CharacterStyle(style_id=str(style_id), native_hwp_payload=payload)
+        if payload is not None:
+            _apply_hwp_character_style_payload(style, payload)
+        styles.append(style)
+    return styles
+
+
+def _extract_hwp_numbering_definitions(docinfo_model) -> list[NumberingDefinition]:
+    definitions: list[NumberingDefinition] = []
+    for index, record in enumerate(docinfo_model.records_by_tag_id(TAG_NUMBERING)):
+        definition = NumberingDefinition(style_id=str(index), native_hwp_payload=bytes(record.payload))
+        _apply_hwp_numbering_payload(definition, record.payload)
+        definitions.append(definition)
+    return definitions
+
+
+def _extract_hwp_bullet_definitions(docinfo_model) -> list[BulletDefinition]:
+    definitions: list[BulletDefinition] = []
+    for index, record in enumerate(docinfo_model.records_by_tag_id(TAG_BULLET)):
+        definition = BulletDefinition(style_id=str(index), native_hwp_payload=bytes(record.payload))
+        _apply_hwp_bullet_payload(definition, record.payload)
+        definitions.append(definition)
+    return definitions
+
+
+def _coerce_int(value: object | None, *, default: int | None = None) -> int | None:
+    if value is None:
+        return default
+    if isinstance(value, int):
+        return value
+    try:
+        return int(str(value).strip())
+    except (TypeError, ValueError):
+        return default
+
+
+def _seed_hwp_payload(
+    native_payload: bytes | None,
+    fallback_payload: bytes | None,
+    default_payload: bytes,
+    *,
+    min_len: int | None = None,
+) -> bytearray:
+    resolved = bytes(native_payload or fallback_payload or default_payload)
+    target_length = max(len(default_payload), min_len or 0)
+    if len(resolved) < target_length:
+        resolved += b"\x00" * (target_length - len(resolved))
+    return bytearray(resolved)
+
+
+def _parse_hwp_colorref(payload: bytes) -> str:
+    values = payload[:4].ljust(4, b"\x00")
+    return f"#{values[2]:02X}{values[1]:02X}{values[0]:02X}"
+
+
+def _build_hwp_colorref(value: object | None, *, default: str = "#000000") -> bytes:
+    normalized = str(value or default).strip().lstrip("#")
+    if len(normalized) != 6:
+        normalized = default.lstrip("#")
+    try:
+        red = int(normalized[0:2], 16)
+        green = int(normalized[2:4], 16)
+        blue = int(normalized[4:6], 16)
+    except ValueError:
+        red = green = blue = 0
+    return bytes((blue, green, red, 0))
+
+
+def _apply_hwp_paragraph_style_payload(style: ParagraphStyle, payload: bytes) -> None:
+    values = bytes(payload)
+    style.native_hwp_payload = values
+    if len(values) >= 4:
+        attributes = int.from_bytes(values[0:4], "little", signed=False)
+        style.alignment_horizontal = _HWP_PARA_ALIGN_NAMES.get(attributes & 0x07)
+    if len(values) >= 24:
+        margins = {
+            "intent": str(int.from_bytes(values[4:8], "little", signed=True)),
+            "left": str(int.from_bytes(values[8:12], "little", signed=True)),
+            "right": str(int.from_bytes(values[12:16], "little", signed=True)),
+            "prev": str(int.from_bytes(values[16:20], "little", signed=True)),
+            "next": str(int.from_bytes(values[20:24], "little", signed=True)),
+            "unit": "HWPUNIT",
+        }
+        style.margins = margins
+    if len(values) >= 54:
+        style.line_spacing = str(int.from_bytes(values[50:54], "little", signed=True))
+
+
+def _build_hwp_paragraph_style_payload(style: ParagraphStyle, fallback_payload: bytes | None = None) -> bytes:
+    payload = _seed_hwp_payload(style.native_hwp_payload, fallback_payload, _DEFAULT_HWP_PARA_SHAPE_PAYLOAD)
+    attributes = int.from_bytes(payload[0:4], "little", signed=False)
+    alignment_code = _HWP_PARA_ALIGN_CODES.get(str(style.alignment_horizontal or "").upper())
+    if alignment_code is not None:
+        attributes = (attributes & ~0x07) | alignment_code
+        payload[0:4] = attributes.to_bytes(4, "little", signed=False)
+    for key, offset in {
+        "intent": 4,
+        "left": 8,
+        "right": 12,
+        "prev": 16,
+        "next": 20,
+    }.items():
+        if key not in style.margins:
+            continue
+        value = _coerce_int(style.margins.get(key))
+        if value is None:
+            continue
+        payload[offset : offset + 4] = int(value).to_bytes(4, "little", signed=True)
+    line_spacing = _coerce_int(style.line_spacing)
+    if line_spacing is not None:
+        payload[50:54] = int(line_spacing).to_bytes(4, "little", signed=True)
+    return bytes(payload)
+
+
+def _apply_hwp_character_style_payload(style: CharacterStyle, payload: bytes) -> None:
+    values = bytes(payload)
+    style.native_hwp_payload = values
+    if len(values) >= 14:
+        style.font_refs = {
+            key: str(int.from_bytes(values[index * 2 : (index + 1) * 2], "little", signed=False))
+            for index, key in enumerate(_HWP_CHAR_FONT_ORDER)
+        }
+    if len(values) >= 46:
+        style.height = str(int.from_bytes(values[42:46], "little", signed=False))
+    if len(values) >= 58:
+        style.text_color = _parse_hwp_colorref(values[54:58])
+
+
+def _build_hwp_character_style_payload(style: CharacterStyle, fallback_payload: bytes | None = None) -> bytes:
+    payload = _seed_hwp_payload(style.native_hwp_payload, fallback_payload, _DEFAULT_HWP_CHAR_SHAPE_PAYLOAD)
+    for index, key in enumerate(_HWP_CHAR_FONT_ORDER):
+        if key not in style.font_refs:
+            continue
+        value = _coerce_int(style.font_refs.get(key))
+        if value is None:
+            continue
+        payload[index * 2 : (index + 1) * 2] = int(value).to_bytes(2, "little", signed=False)
+    height = _coerce_int(style.height)
+    if height is not None:
+        payload[42:46] = int(height).to_bytes(4, "little", signed=False)
+    if style.text_color is not None:
+        payload[54:58] = _build_hwp_colorref(style.text_color)
+    return bytes(payload)
+
+
+def _apply_hwp_numbering_payload(definition: NumberingDefinition, payload: bytes) -> None:
+    values = bytes(payload)
+    definition.native_hwp_payload = values
+    definition.formats = []
+    definition.para_heads = []
+    definition.width_adjusts = []
+    definition.text_offsets = []
+    definition.char_pr_ids = []
+    definition.start_numbers = []
+    definition.unknown_short = 0
+    cursor = 0
+    for _ in range(_HWP_NUMBERING_LEVEL_COUNT):
+        if cursor + 14 > len(values):
+            break
+        definition.para_heads.append(int.from_bytes(values[cursor : cursor + 4], "little", signed=False))
+        cursor += 4
+        definition.width_adjusts.append(int.from_bytes(values[cursor : cursor + 2], "little", signed=True))
+        cursor += 2
+        definition.text_offsets.append(int.from_bytes(values[cursor : cursor + 2], "little", signed=True))
+        cursor += 2
+        char_pr_id = int.from_bytes(values[cursor : cursor + 4], "little", signed=True)
+        definition.char_pr_ids.append(None if char_pr_id < 0 else char_pr_id)
+        cursor += 4
+        format_length = int.from_bytes(values[cursor : cursor + 2], "little", signed=False)
+        cursor += 2
+        format_byte_length = min(format_length * 2, max(len(values) - cursor, 0))
+        format_bytes = values[cursor : cursor + format_byte_length]
+        if len(format_bytes) % 2:
+            format_bytes = format_bytes[:-1]
+        definition.formats.append(format_bytes.decode("utf-16-le", errors="ignore"))
+        cursor += format_byte_length
+    if cursor + 2 <= len(values):
+        definition.unknown_short = int.from_bytes(values[cursor : cursor + 2], "little", signed=False)
+        cursor += 2
+    remaining_levels = min(_HWP_NUMBERING_LEVEL_COUNT, (len(values) - cursor) // 4)
+    for _ in range(remaining_levels):
+        definition.start_numbers.append(int.from_bytes(values[cursor : cursor + 4], "little", signed=False))
+        cursor += 4
+
+
+def _build_hwp_numbering_payload(definition: NumberingDefinition, fallback_payload: bytes | None = None) -> bytes:
+    template = NumberingDefinition()
+    _apply_hwp_numbering_payload(template, bytes(definition.native_hwp_payload or fallback_payload or _DEFAULT_HWP_NUMBERING_PAYLOAD))
+    payload = bytearray()
+    for level in range(_HWP_NUMBERING_LEVEL_COUNT):
+        para_head = (
+            definition.para_heads[level]
+            if level < len(definition.para_heads)
+            else (template.para_heads[level] if level < len(template.para_heads) else 12)
+        )
+        width_adjust = (
+            definition.width_adjusts[level]
+            if level < len(definition.width_adjusts)
+            else (template.width_adjusts[level] if level < len(template.width_adjusts) else 0)
+        )
+        text_offset = (
+            definition.text_offsets[level]
+            if level < len(definition.text_offsets)
+            else (template.text_offsets[level] if level < len(template.text_offsets) else 50)
+        )
+        if level < len(definition.char_pr_ids):
+            char_pr_id = definition.char_pr_ids[level]
+        else:
+            char_pr_id = template.char_pr_ids[level] if level < len(template.char_pr_ids) else None
+        if level < len(definition.formats) and definition.formats[level]:
+            format_text = definition.formats[level]
+        else:
+            format_text = template.formats[level] if level < len(template.formats) else f"^{level + 1}."
+        encoded_format = str(format_text).encode("utf-16-le")
+        payload.extend(int(para_head).to_bytes(4, "little", signed=False))
+        payload.extend(int(width_adjust).to_bytes(2, "little", signed=True))
+        payload.extend(int(text_offset).to_bytes(2, "little", signed=True))
+        payload.extend(int(-1 if char_pr_id is None else char_pr_id).to_bytes(4, "little", signed=True))
+        payload.extend((len(encoded_format) // 2).to_bytes(2, "little", signed=False))
+        payload.extend(encoded_format)
+    payload.extend(int(definition.unknown_short).to_bytes(2, "little", signed=False))
+    for level in range(_HWP_NUMBERING_LEVEL_COUNT):
+        start_number = (
+            definition.start_numbers[level]
+            if level < len(definition.start_numbers)
+            else (template.start_numbers[level] if level < len(template.start_numbers) else 1)
+        )
+        payload.extend(int(start_number).to_bytes(4, "little", signed=False))
+    return bytes(payload)
+
+
+def _apply_hwp_bullet_payload(definition: BulletDefinition, payload: bytes) -> None:
+    values = bytes(payload)
+    definition.native_hwp_payload = values
+    if len(values) >= 6:
+        definition.width_adjust = int.from_bytes(values[4:6], "little", signed=True)
+    if len(values) >= 8:
+        definition.text_offset = int.from_bytes(values[6:8], "little", signed=True)
+    if len(values) >= 12:
+        char_pr_id = int.from_bytes(values[8:12], "little", signed=True)
+        definition.char_pr_id = None if char_pr_id < 0 else char_pr_id
+    if len(values) >= 14:
+        definition.bullet_char = values[12:14].decode("utf-16-le", errors="ignore") or "\uf0a1"
+    definition.unknown_tail = bytes(values[14:])
+
+
+def _build_hwp_bullet_payload(definition: BulletDefinition, fallback_payload: bytes | None = None) -> bytes:
+    payload = _seed_hwp_payload(definition.native_hwp_payload, fallback_payload, _DEFAULT_HWP_BULLET_PAYLOAD, min_len=14)
+    template = BulletDefinition()
+    _apply_hwp_bullet_payload(template, bytes(payload))
+    payload[4:6] = int(definition.width_adjust).to_bytes(2, "little", signed=True)
+    payload[6:8] = int(definition.text_offset).to_bytes(2, "little", signed=True)
+    char_pr_id = template.char_pr_id if definition.char_pr_id is None else definition.char_pr_id
+    payload[8:12] = int(-1 if char_pr_id is None else char_pr_id).to_bytes(4, "little", signed=True)
+    bullet_char = definition.bullet_char or template.bullet_char or "\uf0a1"
+    encoded_char = bullet_char[:1].encode("utf-16-le", errors="ignore")[:2].ljust(2, b"\x00")
+    payload[12:14] = encoded_char
+    if definition.unknown_tail is not None:
+        payload[14:] = definition.unknown_tail
+    return bytes(payload)
+
+
+def _merge_hwp_style_defaults_into_paragraphs(document: HancomDocument) -> None:
+    style_by_id = {
+        style.style_id: style
+        for style in document.style_definitions
+        if style.style_id is not None
+    }
+    for section in document.sections:
+        for block in section.blocks:
+            if not isinstance(block, Paragraph) or block.style_id is None:
+                continue
+            style = style_by_id.get(block.style_id)
+            if style is None:
+                continue
+            if block.para_pr_id is None and style.para_pr_id is not None:
+                block.para_pr_id = style.para_pr_id
+            if block.char_pr_id is None and style.char_pr_id is not None:
+                block.char_pr_id = style.char_pr_id
+
+
+def _sync_hwp_docinfo_styles(document: HwpDocument, hancom_document: HancomDocument) -> None:
+    docinfo_model = document.docinfo_model()
+    initial_style_count = len(docinfo_model.style_records())
+    _assign_missing_hwp_style_ids(
+        hancom_document.paragraph_styles,
+        existing_ids={
+            value
+            for value in (
+                _parse_optional_int(style.style_id)
+                for style in hancom_document.paragraph_styles
+            )
+            if value is not None
+        },
+    )
+    _assign_missing_hwp_style_ids(
+        hancom_document.character_styles,
+        existing_ids={
+            value
+            for value in (
+                _parse_optional_int(style.style_id)
+                for style in hancom_document.character_styles
+            )
+            if value is not None
+        },
+    )
+    _assign_missing_hwp_style_ids(
+        hancom_document.style_definitions,
+        existing_ids={
+            value
+            for value in (
+                _parse_optional_int(style.style_id)
+                for style in hancom_document.style_definitions
+            )
+            if value is not None and 0 <= value <= 0xFF
+        },
+        max_id=0xFF,
+    )
+    _assign_missing_hwp_style_ids(
+        hancom_document.numbering_definitions,
+        existing_ids={
+            value
+            for value in (
+                _parse_optional_int(definition.style_id)
+                for definition in hancom_document.numbering_definitions
+            )
+            if value is not None
+        },
+    )
+    _assign_missing_hwp_style_ids(
+        hancom_document.bullet_definitions,
+        existing_ids={
+            value
+            for value in (
+                _parse_optional_int(definition.style_id)
+                for definition in hancom_document.bullet_definitions
+            )
+            if value is not None
+        },
+    )
+
+    required_char_shape_ids = {
+        value
+        for value in (
+            _parse_optional_int(style.style_id)
+            for style in hancom_document.character_styles
+        )
+        if value is not None
+    }
+    required_para_shape_ids = {
+        value
+        for value in (
+            _parse_optional_int(style.style_id)
+            for style in hancom_document.paragraph_styles
+        )
+        if value is not None
+    }
+    required_style_ids = {
+        value
+        for value in (
+            _parse_optional_int(style.style_id)
+            for style in hancom_document.style_definitions
+        )
+        if value is not None and 0 <= value <= 0xFF
+    }
+    required_numbering_ids = {
+        value
+        for value in (
+            _parse_optional_int(definition.style_id)
+            for definition in hancom_document.numbering_definitions
+        )
+        if value is not None
+    }
+    required_bullet_ids = {
+        value
+        for value in (
+            _parse_optional_int(definition.style_id)
+            for definition in hancom_document.bullet_definitions
+        )
+        if value is not None
+    }
+
+    for style in hancom_document.style_definitions:
+        para_pr_id = _parse_optional_int(style.para_pr_id)
+        char_pr_id = _parse_optional_int(style.char_pr_id)
+        if para_pr_id is not None:
+            required_para_shape_ids.add(para_pr_id)
+        if char_pr_id is not None:
+            required_char_shape_ids.add(char_pr_id)
+    for definition in hancom_document.numbering_definitions:
+        for char_pr_id in definition.char_pr_ids:
+            if char_pr_id is not None:
+                required_char_shape_ids.add(char_pr_id)
+    for definition in hancom_document.bullet_definitions:
+        if definition.char_pr_id is not None:
+            required_char_shape_ids.add(definition.char_pr_id)
+
+    for section in hancom_document.sections:
+        for block in section.blocks:
+            if not isinstance(block, Paragraph):
+                continue
+            style_id = block.hwp_style_id
+            if style_id is None:
+                style_id = _parse_optional_int(block.style_id)
+            if style_id is not None and 0 <= style_id <= 0xFF:
+                required_style_ids.add(style_id)
+            para_shape_id = block.hwp_para_shape_id
+            if para_shape_id is None:
+                para_shape_id = _parse_optional_int(block.para_pr_id)
+            if para_shape_id is not None:
+                required_para_shape_ids.add(para_shape_id)
+            char_pr_id = _parse_optional_int(block.char_pr_id)
+            if char_pr_id is not None:
+                required_char_shape_ids.add(char_pr_id)
+        numbering_shape_id = _parse_optional_int(section.settings.numbering_shape_id)
+        if numbering_shape_id is not None:
+            required_numbering_ids.add(numbering_shape_id)
+
+    if required_char_shape_ids:
+        _ensure_hwp_docinfo_record_capacity(docinfo_model, TAG_CHAR_SHAPE, max(required_char_shape_ids) + 1)
+    if required_para_shape_ids:
+        _ensure_hwp_docinfo_record_capacity(docinfo_model, TAG_PARA_SHAPE, max(required_para_shape_ids) + 1)
+    if required_style_ids:
+        _ensure_hwp_docinfo_record_capacity(docinfo_model, TAG_STYLE, max(required_style_ids) + 1)
+    if required_numbering_ids:
+        _ensure_hwp_docinfo_record_capacity(
+            docinfo_model,
+            TAG_NUMBERING,
+            max(required_numbering_ids) + 1,
+            default_payload=_DEFAULT_HWP_NUMBERING_PAYLOAD,
+        )
+    if required_bullet_ids:
+        _ensure_hwp_docinfo_record_capacity(
+            docinfo_model,
+            TAG_BULLET,
+            max(required_bullet_ids) + 1,
+            default_payload=_DEFAULT_HWP_BULLET_PAYLOAD,
+        )
+
+    _sync_hwp_docinfo_slot_payloads(
+        docinfo_model.char_shape_records(),
+        hancom_document.character_styles,
+        builder=_build_hwp_character_style_payload,
+    )
+    _sync_hwp_docinfo_slot_payloads(
+        docinfo_model.para_shape_records(),
+        hancom_document.paragraph_styles,
+        builder=_build_hwp_paragraph_style_payload,
+    )
+    _sync_hwp_docinfo_slot_payloads(
+        docinfo_model.records_by_tag_id(TAG_NUMBERING),
+        hancom_document.numbering_definitions,
+        builder=_build_hwp_numbering_payload,
+    )
+    _sync_hwp_docinfo_slot_payloads(
+        docinfo_model.records_by_tag_id(TAG_BULLET),
+        hancom_document.bullet_definitions,
+        builder=_build_hwp_bullet_payload,
+    )
+
+    # Explicit style definitions still need direct HWP style record authoring.
+    explicit_style_ids = {
+        style_id
+        for style_id in (_parse_optional_int(style.style_id) for style in hancom_document.style_definitions)
+        if style_id is not None and 0 <= style_id <= 0xFF
+    }
+    for style in hancom_document.style_definitions:
+        style_id = _parse_optional_int(style.style_id)
+        if style_id is None or not 0 <= style_id <= 0xFF:
+            continue
+        docinfo_model.style_records()[style_id].payload = _build_hwp_style_definition_payload(style, style_id=style_id)
+
+    for style_id in range(initial_style_count, len(docinfo_model.style_records())):
+        if style_id in explicit_style_ids or style_id > 0xFF:
+            continue
+        docinfo_model.style_records()[style_id].payload = _build_hwp_style_definition_payload(
+            StyleDefinition(name=f"Style {style_id}", style_id=str(style_id)),
+            style_id=style_id,
+        )
+
+    document.binary_document().replace_docinfo_model(docinfo_model)
+
+
+def _assign_missing_hwp_style_ids(nodes, *, existing_ids: set[int], max_id: int | None = None) -> None:
+    next_id = max(existing_ids, default=-1) + 1
+    for node in nodes:
+        if getattr(node, "style_id", None) is not None:
+            continue
+        while next_id in existing_ids:
+            next_id += 1
+        if max_id is not None and next_id > max_id:
+            break
+        node.style_id = str(next_id)
+        existing_ids.add(next_id)
+        next_id += 1
+
+
+def _sync_hwp_docinfo_slot_payloads(records, nodes, *, builder=None) -> None:
+    for node in nodes:
+        style_id = _parse_optional_int(getattr(node, "style_id", None))
+        if style_id is None:
+            continue
+        if not 0 <= style_id < len(records):
+            continue
+        fallback_payload = bytes(records[style_id].payload)
+        if builder is None:
+            payload = getattr(node, "native_hwp_payload", None)
+            if payload is None:
+                continue
+            records[style_id].payload = bytes(payload)
+            continue
+        records[style_id].payload = bytes(builder(node, fallback_payload))
+
+
+def _ensure_hwp_docinfo_record_capacity(
+    docinfo_model,
+    tag_id: int,
+    count: int,
+    *,
+    default_payload: bytes | None = None,
+) -> None:
+    if count <= 0:
+        return
+    records = docinfo_model.records_by_tag_id(tag_id)
+    parent = docinfo_model.id_mappings_record()
+    if records:
+        template_level = records[-1].level
+        template_payload = bytes(records[-1].payload)
+        insert_at = max(index for index, child in enumerate(parent.children) if child.tag_id == tag_id)
+    else:
+        if default_payload is None:
+            return
+        template_level = 1
+        template_payload = bytes(default_payload)
+        insert_at = max((index for index, child in enumerate(parent.children) if child.tag_id <= tag_id), default=-1)
+    while len(records) < count:
+        clone = TypedRecord(tag_id=tag_id, level=template_level, payload=template_payload)
+        insert_at += 1
+        parent.children.insert(insert_at, clone)
+        records.append(clone)
+    count_index = _HWP_DOCINFO_COUNT_INDEX_BY_TAG.get(tag_id)
+    if count_index is not None:
+        docinfo_model.id_mappings_record().set_count(count_index, len(records))
+
+
+def _build_hwp_style_definition_payload(style: StyleDefinition, *, style_id: int) -> bytes:
+    name = style.name or f"Style {style_id}"
+    english_name = style.english_name or name
+    payload = bytearray()
+    payload.extend(len(name).to_bytes(2, "little", signed=False))
+    payload.extend(name.encode("utf-16-le"))
+    payload.extend(len(english_name).to_bytes(2, "little", signed=False))
+    payload.extend(english_name.encode("utf-16-le"))
+    style_type_code = _HWP_STYLE_TYPE_CODES.get(str(style.style_type or "PARA").upper(), 0)
+    payload.extend((((style_id & 0xFF) << 8) | (style_type_code & 0xFF)).to_bytes(2, "little", signed=False))
+    payload.extend(_coerce_hwp_docinfo_word(style.lang_id, default=1042).to_bytes(2, "little", signed=False))
+    payload.extend(_coerce_hwp_docinfo_word(style.next_style_id).to_bytes(2, "little", signed=False))
+    payload.extend(_coerce_hwp_docinfo_word(style.para_pr_id).to_bytes(2, "little", signed=False))
+    payload.extend(_coerce_hwp_docinfo_word(style.char_pr_id).to_bytes(2, "little", signed=False))
+    return bytes(payload)
+
+
+def _coerce_hwp_docinfo_word(value: str | None, *, default: int = 0) -> int:
+    parsed = _parse_optional_int(value)
+    resolved = default if parsed is None else parsed
+    return max(0, min(resolved, 0xFFFF))
 
 
 def _build_table_wrapper(section, node):
@@ -1372,10 +2474,17 @@ def _write_section_to_hwpx(document: HwpxDocument, section_index: int, section: 
     for block in section.blocks:
         if isinstance(block, Paragraph):
             if not first_paragraph_consumed and blocks_written == 0:
-                document.set_paragraph_text(section_index, 0, block.text)
+                document.set_paragraph_text(section_index, 0, block.text, char_pr_id=_resolve_hwpx_char_pr_id(document, block))
+                _apply_hwpx_paragraph_style_block(document, section_index, 0, block)
                 first_paragraph_consumed = True
             else:
-                document.append_paragraph(block.text, section_index=section_index)
+                document.append_paragraph(
+                    block.text,
+                    section_index=section_index,
+                    para_pr_id=_resolve_hwpx_para_pr_id(document, block),
+                    style_id=_resolve_hwpx_style_id(document, block),
+                    char_pr_id=_resolve_hwpx_char_pr_id(document, block),
+                )
             blocks_written += 1
             continue
 
@@ -1446,6 +2555,10 @@ def _write_section_to_hwpx(document: HwpxDocument, section_index: int, section: 
                 paragraph_index=paragraph_index,
                 width=block.width,
                 height=block.height,
+                shape_comment=block.shape_comment,
+                text_color=block.text_color,
+                base_unit=block.base_unit,
+                font=block.font,
             )
         elif isinstance(block, Shape):
             document.append_shape(
@@ -1455,17 +2568,28 @@ def _write_section_to_hwpx(document: HwpxDocument, section_index: int, section: 
                 height=block.height,
                 fill_color=block.fill_color,
                 line_color=block.line_color,
+                shape_comment=block.shape_comment,
                 section_index=section_index,
                 paragraph_index=paragraph_index,
             )
         elif isinstance(block, Ole):
-            document.append_ole(
+            appended = document.append_ole(
                 block.name,
                 block.data,
                 width=block.width,
                 height=block.height,
+                shape_comment=block.shape_comment,
+                object_type=block.object_type,
+                draw_aspect=block.draw_aspect,
+                has_moniker=block.has_moniker,
+                eq_baseline=block.eq_baseline,
                 section_index=section_index,
                 paragraph_index=paragraph_index,
+            )
+            appended.set_line_style(
+                color=block.line_color,
+                width=block.line_width,
+                style="SOLID" if block.line_width > 0 else "NONE",
             )
         blocks_written += 1
 
@@ -1473,6 +2597,45 @@ def _write_section_to_hwpx(document: HwpxDocument, section_index: int, section: 
 def _append_control_host_paragraph(document: HwpxDocument, section_index: int) -> int:
     document.append_paragraph("", section_index=section_index)
     return len(document.sections[section_index].paragraphs()) - 1
+
+
+def _apply_hwpx_paragraph_style_block(document: HwpxDocument, section_index: int, paragraph_index: int, block: Paragraph) -> None:
+    style_id = _resolve_hwpx_style_id(document, block)
+    para_pr_id = _resolve_hwpx_para_pr_id(document, block)
+    char_pr_id = _resolve_hwpx_char_pr_id(document, block)
+    if style_id is None and para_pr_id is None and char_pr_id is None:
+        return
+    document.apply_style_to_paragraph(
+        section_index,
+        paragraph_index,
+        style_id=style_id,
+        para_pr_id=para_pr_id,
+        char_pr_id=char_pr_id,
+    )
+
+
+def _resolve_hwpx_style_id(document: HwpxDocument, block: Paragraph) -> str | None:
+    if block.style_id is None:
+        return None
+    known = {style.style_id for style in document.styles() if style.style_id is not None}
+    return block.style_id if block.style_id in known else None
+
+
+def _resolve_hwpx_para_pr_id(document: HwpxDocument, block: Paragraph) -> str | None:
+    candidate = block.para_pr_id
+    if candidate is None and block.hwp_para_shape_id is not None:
+        candidate = str(block.hwp_para_shape_id)
+    if candidate is None:
+        return None
+    known = {style.style_id for style in document.paragraph_styles() if style.style_id is not None}
+    return candidate if candidate in known else None
+
+
+def _resolve_hwpx_char_pr_id(document: HwpxDocument, block: Paragraph) -> str | None:
+    if block.char_pr_id is None:
+        return None
+    known = {style.style_id for style in document.character_styles() if style.style_id is not None}
+    return block.char_pr_id if block.char_pr_id in known else None
 
 
 def _media_type_for_extension(extension: str | None) -> str | None:
@@ -1677,8 +2840,42 @@ def _apply_styles(document: HwpxDocument, hancom_document: HancomDocument) -> No
             style_id=style.style_id,
             alignment_horizontal=style.alignment_horizontal,
             alignment_vertical=style.alignment_vertical,
-            line_spacing=style.line_spacing,
+            line_spacing=None,
         )
+        if style.line_spacing is not None:
+            appended.set_line_spacing(style.line_spacing, spacing_type=style.line_spacing_type)
+        if style.margins:
+            appended.set_margin(
+                intent=style.margins.get("intent"),
+                left=style.margins.get("left"),
+                right=style.margins.get("right"),
+                prev=style.margins.get("prev"),
+                next=style.margins.get("next"),
+                unit=style.margins.get("unit"),
+            )
+        if style.heading:
+            heading_nodes = appended.element.xpath("./hh:heading", namespaces=NS)
+            heading = heading_nodes[0] if heading_nodes else etree.SubElement(appended.element, qname("hh", "heading"))
+            for attribute in ("type", "idRef", "level"):
+                value = style.heading.get(attribute)
+                if value is not None:
+                    heading.set(attribute, str(value))
+            appended.header_part.mark_modified()
+        if style.break_setting:
+            appended.set_break_setting(
+                break_latin_word=style.break_setting.get("breakLatinWord"),
+                break_non_latin_word=style.break_setting.get("breakNonLatinWord"),
+                widow_orphan=_coerce_bool(style.break_setting.get("widowOrphan")),
+                keep_with_next=_coerce_bool(style.break_setting.get("keepWithNext")),
+                keep_lines=_coerce_bool(style.break_setting.get("keepLines")),
+                page_break_before=_coerce_bool(style.break_setting.get("pageBreakBefore")),
+                line_wrap=style.break_setting.get("lineWrap"),
+            )
+        if style.auto_spacing:
+            appended.set_auto_spacing(
+                e_asian_eng=_coerce_bool(style.auto_spacing.get("eAsianEng")),
+                e_asian_num=_coerce_bool(style.auto_spacing.get("eAsianNum")),
+            )
         if style.style_id is None:
             style.style_id = appended.style_id
 
@@ -1688,6 +2885,16 @@ def _apply_styles(document: HwpxDocument, hancom_document: HancomDocument) -> No
             text_color=style.text_color,
             height=style.height,
         )
+        if style.font_refs:
+            appended.set_font_refs(
+                hangul=style.font_refs.get("hangul"),
+                latin=style.font_refs.get("latin"),
+                hanja=style.font_refs.get("hanja"),
+                japanese=style.font_refs.get("japanese"),
+                other=style.font_refs.get("other"),
+                symbol=style.font_refs.get("symbol"),
+                user=style.font_refs.get("user"),
+            )
         if style.style_id is None:
             style.style_id = appended.style_id
 

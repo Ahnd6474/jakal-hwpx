@@ -35,7 +35,7 @@ Releases = "https://github.com/Ahnd6474/jakal-hwpx/releases"
 
 [project.optional-dependencies]
 dev = ["build>=1.2", "pytest>=8.0", "setuptools>=77", "tox>=4.0", "twine>=5.0"]
-release = ["build>=1.2", "setuptools>=77", "twine>=5.0"]
+release = ["build>=1.2", "pytest>=8.0", "setuptools>=77", "twine>=5.0"]
 test = ["pytest>=8.0"]
 
 [tool.setuptools]
