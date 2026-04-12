@@ -108,6 +108,16 @@ def _parse_shape_native_metadata(payload: bytes) -> dict[str, str]:
     return metadata
 
 
+def _parse_textart_payload_text(payload: bytes) -> str:
+    if len(payload) < 34:
+        return ""
+    text_length = int.from_bytes(payload[32:34], "little", signed=False)
+    end = 34 + text_length * 2
+    if end > len(payload):
+        return ""
+    return payload[34:end].decode("utf-16-le", errors="ignore").replace("\r", "")
+
+
 def _shape_specific_payload_size(tag_id: int) -> int:
     if tag_id == TAG_SHAPE_COMPONENT_LINE:
         return _HWP_SHAPE_LINE_SPECIFIC_SIZE
@@ -1832,6 +1842,15 @@ class HwpShapeObject(HwpControlObject):
 
     @property
     def text(self) -> str:
+        metadata = self._shape_native_metadata()
+        if "text" in metadata:
+            return metadata["text"]
+        if self.kind == "textart":
+            specific_record = self._shape_specific_record()
+            if specific_record is not None:
+                native_text = _parse_textart_payload_text(specific_record.payload).strip()
+                if native_text:
+                    return native_text
         control_text = _collect_text_from_node(self.control_node).replace("\r", "").strip()
         if control_text:
             return control_text
@@ -1842,6 +1861,11 @@ class HwpShapeObject(HwpControlObject):
         metadata = self._shape_native_metadata()
         if "line_color" in metadata:
             return metadata["line_color"]
+        shape_component = self._shape_component_record()
+        if self.kind in {"ellipse", "arc", "polygon", "textart"} and shape_component is not None and len(shape_component.payload) >= 200:
+            native_color = shape_component.payload[196:200]
+            if any(native_color):
+                return _parse_colorref(native_color)
         common_payload, _specific_payload = self._shape_specific_payload_parts()
         if len(common_payload) < 4:
             return "#000000"
@@ -1852,6 +1876,11 @@ class HwpShapeObject(HwpControlObject):
         metadata = self._shape_native_metadata()
         if "fill_color" in metadata:
             return metadata["fill_color"]
+        shape_component = self._shape_component_record()
+        if self.kind == "textart" and shape_component is not None and len(shape_component.payload) >= 217:
+            native_color = shape_component.payload[213:217]
+            if any(native_color):
+                return _parse_colorref(native_color)
         common_payload, _specific_payload = self._shape_specific_payload_parts()
         if len(common_payload) <= 11:
             return "#FFFFFF"
@@ -1863,12 +1892,28 @@ class HwpShapeObject(HwpControlObject):
 
     def size(self) -> dict[str, int]:
         record = self._shape_component_record()
-        if record is None or len(record.payload) < 28:
-            return {"width": 0, "height": 0}
-        return {
-            "width": int.from_bytes(record.payload[20:24], "little", signed=False),
-            "height": int.from_bytes(record.payload[24:28], "little", signed=False),
-        }
+        width = 0
+        height = 0
+        if record is not None and len(record.payload) >= 28:
+            width = int.from_bytes(record.payload[20:24], "little", signed=False)
+            height = int.from_bytes(record.payload[24:28], "little", signed=False)
+        if self.kind == "textart":
+            native_width, native_height = self._control_size()
+            if native_width or native_height:
+                return {"width": native_width, "height": native_height}
+        if width or height:
+            return {"width": width, "height": height}
+        native_width, native_height = self._control_size()
+        return {"width": native_width, "height": native_height}
+
+    def _control_size(self) -> tuple[int, int]:
+        payload = self.control_node.payload
+        if len(payload) < 24:
+            return (0, 0)
+        return (
+            int.from_bytes(payload[16:20], "little", signed=False),
+            int.from_bytes(payload[20:24], "little", signed=False),
+        )
 
     def _shape_component_record(self, control_node: RecordNode | None = None) -> RecordNode | None:
         target = self.control_node if control_node is None else control_node

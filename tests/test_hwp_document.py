@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 
 import jakal_hwpx.hwp_document as hwp_document_module
-from jakal_hwpx.hwp_binary import TAG_LIST_HEADER, TAG_PARA_HEADER
+from jakal_hwpx.hwp_binary import TAG_CTRL_HEADER, TAG_LIST_HEADER, TAG_PARA_HEADER
 
 from jakal_hwpx import (
     DocInfoModel,
@@ -724,6 +724,7 @@ def test_hwp_document_native_shape_append_writes_richer_ellipse_arc_polygon_and_
     assert ellipse.fill_color == "#A1B2C3"
     assert ellipse.line_color == "#102030"
     assert ellipse.shape_comment == "ELLIPSE-COMMENT"
+    assert sum(1 for child in ellipse._paragraph.header.children if child.tag_id == TAG_CTRL_HEADER) >= 3
 
     assert arc.text == "NATIVE-ARC"
     assert arc.size() == {"width": 4000, "height": 2200}
@@ -742,8 +743,9 @@ def test_hwp_document_native_shape_append_writes_richer_ellipse_arc_polygon_and_
     assert textart.fill_color == "#FFEEDD"
     assert textart.line_color == "#405060"
     assert textart.shape_comment == "TEXTART-COMMENT"
-    assert TAG_LIST_HEADER in textart.descendant_tag_ids()
-    assert TAG_PARA_HEADER in textart.descendant_tag_ids()
+    assert sum(1 for child in textart._paragraph.header.children if child.tag_id == TAG_CTRL_HEADER) >= 3
+    assert TAG_LIST_HEADER not in textart.descendant_tag_ids()
+    assert TAG_PARA_HEADER not in textart.descendant_tag_ids()
 
 
 def test_hwp_document_native_table_picture_hyperlink_append_do_not_require_profile_reload(
@@ -876,7 +878,7 @@ def test_hwp_document_append_methods_support_paragraph_index() -> None:
     assert "FIELD-MID" in texts[updated_first_index + 1]
     assert texts[equation_index] == "\r"
     assert "OLE-MID" in texts[ole_index]
-    assert "SHAPE-MID" in texts[rect_index]
+    assert texts[rect_index] == "\r"
     assert texts[-2:] == ["SECOND", "THIRD"]
     assert updated_first_index + 1 < equation_index < ole_index < rect_index
 

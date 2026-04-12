@@ -174,17 +174,35 @@ _DEFAULT_EQUATION_CTRL_HEADER = bytes.fromhex(
 _DEFAULT_SHAPE_CTRL_HEADER = bytes.fromhex(
     "206f736700206a048d2a0000fb1400006e2300002e0c00004902000000000000000000009158d143000000000000"
 )
+_DEFAULT_ELLIPSE_CTRL_HEADER = bytes.fromhex(
+    "206f736711222a100000000000000000d80e0000d0070000000000000000000000000000e84d387f000000000600c0d0d0c685c7c8b2e4b22e00"
+)
+_DEFAULT_ARC_CTRL_HEADER = bytes.fromhex(
+    "206f736711222a000000000000000000a00f0000980800000000000000000000000000008150387f00000000050038d685c7c8b2e4b22e00"
+)
+_DEFAULT_POLYGON_CTRL_HEADER = bytes.fromhex(
+    "206f736711222a00000000000000000068100000600900000100000000000000000000008350387f000000000700e4b201ac15d685c7c8b2e4b22e00"
+)
+_DEFAULT_TEXTART_CTRL_HEADER = bytes.fromhex(
+    "206f736711220a140000000000000000e457000088130000000000003800380000000000cc76387f00000000070000aef5b9dcc285c7c8b2e4b22e00"
+)
 _DEFAULT_SHAPE_COMPONENT = bytes.fromhex(
     "636572246365722400000000feffffff000001006c2300002c0c00006e2300002d0c0000000000010000b7110000170600000100000000000000"
     "f03f000000000000000000000000000000000000000000000000000000000000f03f00000000000000c0a435ff44e700f03f00000000000000000000"
     "000000000000000000000000001db2e606a102f03f0000000000000040000000000000f03f000000000000000000000000000000000000000000000000"
     "0000000000f03f00000000000000000000000038000000410000c0000000000000000000000000000000000000000000000000009258d1030000"
 )
-_DEFAULT_NATIVE_SHAPE_COMPONENT = bytes.fromhex(
-    "636572246365722400000000feffffff000001006c2300002c0c00006e2300002d0c0000000000010000b7110000170600000100000000000000"
-    "f03f000000000000000000000000000000000000000000000000000000000000f03f00000000000000c0a435ff44e700f03f00000000000000000000"
-    "00000000000000000000000000001db2e606a102f03f0000000000000040000000000000f03f000000000000000000000000000000000000000000000000"
-    "000000000000f03f00000000000000000000000038000000410000c0000000000000000000000000000000000000000000000000009258d1030000"
+_DEFAULT_ELLIPSE_SHAPE_COMPONENT = bytes.fromhex(
+    "6c6c65246c6c65240000000000000000000001000000000000000000000000000000000000000900000000000000000000000100000000000000f03f000000000000000000000000000000000000000000000000000000000000f03f0000000000000000000000000000f03f000000000000000000000000000000000000000000000000000000000000f03f0000000000000000000000000000f03f000000000000000000000000000000000000000000000000000000000000f03f000000000000000000000000000000000000000000000000000000000000000000b2b2b2000000000000000000e94d383f0000"
+)
+_DEFAULT_ARC_SHAPE_COMPONENT = bytes.fromhex(
+    "63726124637261240000000000000000000001000000000000000000000000000000000000000800000000000000000000000100000000000000f03f000000000000000000000000000000000000000000000000000000000000f03f0000000000000000000000000000f03f000000000000000000000000000000000000000000000000000000000000f03f0000000000000000000000000000f03f000000000000000000000000000000000000000000000000000000000000f03f000000000000000000000000000000000000000000000000000000000000000000b2b2b20000000000000000008250383f0000"
+)
+_DEFAULT_POLYGON_SHAPE_COMPONENT = bytes.fromhex(
+    "6c6f70246c6f70240000000000000000000001000000000000000000000000000000000000000800000000000000000000000100000000000000f03f000000000000000000000000000000000000000000000000000000000000f03f0000000000000000000000000000f03f000000000000000000000000000000000000000000000000000000000000f03f0000000000000000000000000000f03f000000000000000000000000000000000000000000000000000000000000f03f000000000000000000000000000000000000000000000000000000000000000000b2b2b20000000000000000008450383f0000"
+)
+_DEFAULT_TEXTART_SHAPE_COMPONENT = bytes.fromhex(
+    "74617424746174240000000000000000000001005d3700005d3700005d3700005d37000000000b00000000000000000000000100000000000000f03f000000000000000000000000000000000000000000000000000000000000f03f0000000000000000000000000000f03f000000000000000000000000000000000000000000000000000000000000f03f0000000000000000000000000000f03f000000000000000000000000000000000000000000000000000000000000f03f00000000000000004455660021000000000000000201000000ddeeff000000000001000000000000000000000000b2b2b2000000000000000000cd76383f0000"
 )
 _DEFAULT_SHAPE_LIST_HEADER = bytes.fromhex("010000000000000000000000000000006e230000000000000000000000000000ff1b0201000000004001000000")
 _DEFAULT_SHAPE_TEXT_PARA_CONTROL_MASK = int.from_bytes(bytes.fromhex("00000080"), "little", signed=False)
@@ -198,17 +216,35 @@ _DEFAULT_SHAPE_TEXT_CHAR_SHAPE = bytes.fromhex(
 _DEFAULT_SHAPE_TEXT_LINE_SEG = bytes.fromhex("000000006400000098080000980800004e07000028050000000000006c23000000000600")
 _DEFAULT_SHAPE_RECTANGLE_PAYLOAD = bytes.fromhex("3200000000000000006c230000000000006c2300002c0c0000000000002c0c0000")
 _DEFAULT_SHAPE_LINE_PAYLOAD = bytes.fromhex("0000000000000000640000006400000000000000")
-_DEFAULT_TEXTART_PAYLOAD = bytes.fromhex("00000000")
+_DEFAULT_ELLIPSE_PAYLOAD = bytes.fromhex(
+    "00000000200020007d00200020007e00200020007f000d00000000004a01000000000000000000000000000083002000200084002000200085000d00"
+)
+_DEFAULT_ARC_PAYLOAD = bytes.fromhex("00200020008100200020008200200020008300200020008400")
+_DEFAULT_POLYGON_PAYLOAD = bytes.fromhex("0000000000000000")
 _EQUATION_VERSION_MARKER = "Equation Version 60"
+_DEFAULT_TEXTART_FONT_NAME = "Malgun Gothic"
+_DEFAULT_TEXTART_FONT_STYLE = "Bold"
 _DEFAULT_SHAPE_LINE_WIDTH = 33
 _DEFAULT_OLE_LINE_WIDTH = 0
 _HWP_FILLED_SHAPE_COMMON_PAYLOAD_SIZE = 32
 _SHAPE_NATIVE_METADATA_PREFIX = "JAKAL_SHAPE_META"
-_HWP_COMPLEX_SHAPE_SIGNATURES = {
-    "ellipse": b"lle$",
-    "arc": b"cra$",
-    "polygon": b"lop$",
-    "textart": b"tat$",
+_HWP_COMPLEX_SHAPE_TEMPLATES = {
+    "ellipse": {
+        "ctrl": _DEFAULT_ELLIPSE_CTRL_HEADER,
+        "component": _DEFAULT_ELLIPSE_SHAPE_COMPONENT,
+    },
+    "arc": {
+        "ctrl": _DEFAULT_ARC_CTRL_HEADER,
+        "component": _DEFAULT_ARC_SHAPE_COMPONENT,
+    },
+    "polygon": {
+        "ctrl": _DEFAULT_POLYGON_CTRL_HEADER,
+        "component": _DEFAULT_POLYGON_SHAPE_COMPONENT,
+    },
+    "textart": {
+        "ctrl": _DEFAULT_TEXTART_CTRL_HEADER,
+        "component": _DEFAULT_TEXTART_SHAPE_COMPONENT,
+    },
 }
 
 _HWP_LINE_STYLE_CODES = {
@@ -258,6 +294,7 @@ _CONTROL_MARKER_CODES = {
     "atno": 0x12,
     "nwno": 0x15,
     "pgnp": 0x15,
+    "gso ": 0x0B,
     "fn  ": 0x11,
     "en  ": 0x11,
     "bokm": 0x16,
@@ -346,14 +383,30 @@ def _build_minimal_shape_component_payload(width: int, height: int) -> bytes:
     return bytes(payload)
 
 
-def _build_shape_component_payload(kind: str, width: int, height: int) -> bytes:
-    if kind in _HWP_COMPLEX_SHAPE_SIGNATURES:
-        payload = bytearray(_DEFAULT_NATIVE_SHAPE_COMPONENT)
-        signature = _HWP_COMPLEX_SHAPE_SIGNATURES[kind]
-        payload[0:4] = signature
-        payload[4:8] = signature
-    else:
-        payload = bytearray(_DEFAULT_SHAPE_COMPONENT)
+def _shape_control_header_template(kind: str) -> bytes:
+    return _HWP_COMPLEX_SHAPE_TEMPLATES.get(kind, {}).get("ctrl", _DEFAULT_SHAPE_CTRL_HEADER)
+
+
+def _build_shape_component_payload(
+    kind: str,
+    width: int,
+    height: int,
+    *,
+    fill_color: str = "#FFFFFF",
+    line_color: str = "#000000",
+    line_width: int = _DEFAULT_SHAPE_LINE_WIDTH,
+) -> bytes:
+    template = _HWP_COMPLEX_SHAPE_TEMPLATES.get(kind, {}).get("component")
+    if template is not None:
+        payload = bytearray(template)
+        if len(payload) >= 200:
+            payload[196:200] = _build_colorref(line_color)
+        if len(payload) >= 202:
+            payload[200:202] = max(0, min(int(line_width), 0xFFFF)).to_bytes(2, "little", signed=False)
+        if kind == "textart" and len(payload) >= 217:
+            payload[213:217] = _build_colorref(fill_color)
+        return bytes(payload)
+    payload = bytearray(_DEFAULT_SHAPE_COMPONENT)
     payload[20:24] = int(width).to_bytes(4, "little", signed=False)
     payload[24:28] = int(height).to_bytes(4, "little", signed=False)
     payload[28:32] = int(width).to_bytes(4, "little", signed=False)
@@ -361,8 +414,9 @@ def _build_shape_component_payload(kind: str, width: int, height: int) -> bytes:
     return bytes(payload)
 
 
-def _build_shape_native_metadata_payload(*, fill_color: str, line_color: str) -> bytes:
-    text = f"{_SHAPE_NATIVE_METADATA_PREFIX};fill_color={fill_color};line_color={line_color}"
+def _build_shape_native_metadata_payload(**fields: str) -> bytes:
+    serialized = ";".join(f"{name}={value}" for name, value in fields.items())
+    text = f"{_SHAPE_NATIVE_METADATA_PREFIX};{serialized}" if serialized else _SHAPE_NATIVE_METADATA_PREFIX
     return text.encode("utf-16-le")
 
 
@@ -497,6 +551,24 @@ def _build_polygon_specific_payload(width: int, height: int) -> bytes:
     return bytes(payload)
 
 
+def _build_textart_specific_payload(
+    text: str,
+    *,
+    font_name: str = _DEFAULT_TEXTART_FONT_NAME,
+    font_style: str = _DEFAULT_TEXTART_FONT_STYLE,
+) -> bytes:
+    raw_text = f"{text}\r"
+    payload = bytearray(bytes.fromhex("00000000000000005d370000000000005d3700005d370000000000005d370000"))
+    payload.extend(len(raw_text).to_bytes(2, "little", signed=False))
+    payload.extend(raw_text.encode("utf-16-le"))
+    payload.extend(len(font_name).to_bytes(2, "little", signed=False))
+    payload.extend(font_name.encode("utf-16-le"))
+    payload.extend(len(font_style).to_bytes(2, "little", signed=False))
+    payload.extend(font_style.encode("utf-16-le"))
+    payload.extend(bytes.fromhex("01000000000000007800000064000000000000000000000000000000000000000000000000000000"))
+    return bytes(payload)
+
+
 def _build_ole_attribute_flags(
     *,
     object_type: str = "EMBEDDED",
@@ -553,6 +625,7 @@ def _build_ole_specific_payload(
 def _build_shape_specific_payload(
     kind: str,
     *,
+    text: str = DEFAULT_HWP_SHAPE_TEXT,
     width: int,
     height: int,
     fill_color: str = "#FFFFFF",
@@ -561,11 +634,11 @@ def _build_shape_specific_payload(
     if kind == "rect":
         return _build_filled_shape_common_payload(fill_color=fill_color, line_color=line_color) + _DEFAULT_SHAPE_RECTANGLE_PAYLOAD
     if kind == "ellipse":
-        return _build_ellipse_specific_payload(width, height)
+        return _DEFAULT_ELLIPSE_PAYLOAD
     if kind == "arc":
-        return _build_arc_specific_payload(width, height)
+        return _DEFAULT_ARC_PAYLOAD
     if kind == "polygon":
-        return _build_polygon_specific_payload(width, height)
+        return _DEFAULT_POLYGON_PAYLOAD
     if kind == "line":
         common = _build_shape_line_info_payload(color=line_color, width=_DEFAULT_SHAPE_LINE_WIDTH)
         payload = bytearray(_DEFAULT_SHAPE_LINE_PAYLOAD)
@@ -573,7 +646,7 @@ def _build_shape_specific_payload(
         payload[12:16] = int(height).to_bytes(4, "little", signed=False)
         return common + bytes(payload)
     if kind == "textart":
-        return _DEFAULT_TEXTART_PAYLOAD
+        return _build_textart_specific_payload(text)
     return b""
 
 
@@ -705,6 +778,71 @@ def _build_blank_section_model(model: "SectionModel", *, section_index: int | No
     blank_header.children = blank_children
     blank_header.sync_payload()
     return SectionModel(section_index=target_section_index, roots=[blank_header])
+
+
+def _build_blank_paragraph_header(source_paragraph: "SectionParagraphModel") -> ParagraphHeaderRecord:
+    source_header = source_paragraph.header
+    blank_raw_text = _build_blank_paragraph_raw_text(source_paragraph.raw_text)
+    blank_children: list[RecordNode] = []
+    text_record_added = False
+
+    for child in source_header.children:
+        if isinstance(child, ParagraphTextRecord):
+            blank_children.append(
+                ParagraphTextRecord(
+                    level=child.level,
+                    raw_text=blank_raw_text,
+                    header_size=child.header_size,
+                    offset=child.offset,
+                )
+            )
+            text_record_added = True
+            continue
+        if child.tag_id == TAG_CTRL_HEADER:
+            control_id = _decode_control_id_payload(child.payload)
+            if _is_blank_preserved_control_id(control_id):
+                blank_children.append(child.clone())
+            continue
+        blank_children.append(child.clone())
+
+    if not text_record_added:
+        blank_children.insert(0, ParagraphTextRecord(level=source_header.level + 1, raw_text=blank_raw_text))
+
+    blank_header = ParagraphHeaderRecord(
+        level=source_header.level,
+        char_count=len(blank_raw_text),
+        control_mask=source_header.control_mask,
+        para_shape_id=source_header.para_shape_id,
+        style_id=source_header.style_id,
+        split_flags=source_header.split_flags,
+        header_size=source_header.header_size,
+        offset=source_header.offset,
+        trailing_payload=source_header.trailing_payload,
+    )
+    blank_header.children = blank_children
+    blank_header.sync_payload()
+    return blank_header
+
+
+def _insert_blank_like_paragraph(model: "SectionModel", paragraph_index: int | None = None) -> "SectionParagraphModel":
+    current_paragraphs = model.paragraphs()
+    target_index = len(current_paragraphs) if paragraph_index is None or paragraph_index < 0 else paragraph_index
+    if target_index < 0 or target_index > len(current_paragraphs):
+        raise IndexError(f"paragraph_index {target_index} is out of range for section {model.section_index}.")
+
+    if current_paragraphs:
+        header = _build_blank_paragraph_header(current_paragraphs[0])
+    else:
+        header = ParagraphHeaderRecord(level=0, char_count=1)
+        header.add_child(ParagraphTextRecord(level=1, raw_text="\r"))
+
+    if target_index == len(current_paragraphs):
+        model.roots.append(header)
+    else:
+        root_index = model._root_insert_index_for_paragraph(target_index)
+        model.roots.insert(root_index, header)
+
+    return SectionParagraphModel(section_index=model.section_index, index=target_index, header=header)
 
 
 def _find_section_definition_control_node(model: "SectionModel") -> RecordNode | None:
@@ -3157,38 +3295,46 @@ class HwpBinaryDocument:
         target_section_index = self._resolve_append_section_index(None, section_index)
         model = self.section_model(target_section_index)
         use_synthetic_line_numbers = _section_uses_synthetic_line_number_layout(model)
-        paragraph_text = f"{text}\r" if text else "\r"
-        if paragraph_index is None or paragraph_index < 0:
-            paragraph = model.append_paragraph(paragraph_text)
-        else:
-            paragraph = model.insert_paragraph(paragraph_index, paragraph_text)
+        paragraph = _insert_blank_like_paragraph(model, paragraph_index)
         if use_synthetic_line_numbers:
             _ensure_paragraph_line_seg(paragraph)
+        _append_control_marker_to_paragraph(paragraph, "gso ")
         control_node = RecordNode(
             tag_id=TAG_CTRL_HEADER,
             level=1,
             payload=_build_graphic_control_header_payload(
-                _DEFAULT_SHAPE_CTRL_HEADER,
+                _shape_control_header_template(kind),
                 "gso ",
                 width=width,
                 height=height,
                 description=shape_comment,
             ),
         )
-        if kind in _HWP_COMPLEX_SHAPE_SIGNATURES:
+        metadata_fields: dict[str, str] = {}
+        if kind in {"ellipse", "arc", "polygon"} and fill_color:
+            metadata_fields["fill_color"] = fill_color
+        if kind in {"ellipse", "arc", "polygon"} and text:
+            metadata_fields["text"] = text
+        if metadata_fields:
             control_node.add_child(
                 RecordNode(
                     tag_id=TAG_CTRL_DATA,
                     level=2,
-                    payload=_build_shape_native_metadata_payload(fill_color=fill_color, line_color=line_color),
+                    payload=_build_shape_native_metadata_payload(**metadata_fields),
                 )
             )
         shape_component = RecordNode(
             tag_id=TAG_SHAPE_COMPONENT,
             level=2,
-            payload=_build_shape_component_payload(kind, width, height),
+            payload=_build_shape_component_payload(
+                kind,
+                width,
+                height,
+                fill_color=fill_color,
+                line_color=line_color,
+            ),
         )
-        if text and kind != "line":
+        if text and kind not in {"line", "ellipse", "arc", "polygon", "textart"}:
             list_header, paragraph_header = _build_shape_text_records(text)
             shape_component.add_child(list_header)
             shape_component.add_child(paragraph_header)
@@ -3198,6 +3344,7 @@ class HwpBinaryDocument:
                 level=3,
                 payload=_build_shape_specific_payload(
                     kind,
+                    text=text,
                     width=width,
                     height=height,
                     fill_color=fill_color,
@@ -3241,7 +3388,7 @@ class HwpBinaryDocument:
             tag_id=TAG_CTRL_HEADER,
             level=1,
             payload=_build_graphic_control_header_payload(
-                _DEFAULT_SHAPE_CTRL_HEADER,
+                _shape_control_header_template("ole"),
                 "gso ",
                 width=width,
                 height=height,
