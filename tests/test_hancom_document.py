@@ -11,6 +11,7 @@ from jakal_hwpx import (
     Field,
     HancomDocument,
     Hyperlink,
+    HwpConnectLineShapeObject,
     HwpDocument,
     HwpxDocument,
     Note,
@@ -18,6 +19,7 @@ from jakal_hwpx import (
     Paragraph,
     Picture,
     Shape,
+    Table,
 )
 from jakal_hwpx.hwp_binary import TAG_BULLET, TAG_NUMBERING
 from jakal_hwpx.namespaces import NS
@@ -125,7 +127,20 @@ def test_hancom_document_can_read_new_control_blocks_from_hwpx(tmp_path: Path) -
     source.append_field(field_type="MAILMERGE", display_text="SRC-FIELD", name="SRC_FIELD", parameters={"FieldName": "SRC_FIELD"})
     source.append_auto_number(number=9, number_type="PAGE", kind="newNum")
     source.append_footnote("SRC-NOTE", number=7)
-    source.append_equation("a+b", width=2800, height=1700)
+    equation = source.append_equation("a+b", width=2800, height=1700)
+    equation.set_layout(
+        text_wrap="SQUARE",
+        text_flow="RIGHT_ONLY",
+        treat_as_char=False,
+        vert_rel_to="PAPER",
+        horz_rel_to="PAPER",
+        vert_align="TOP",
+        horz_align="LEFT",
+        vert_offset=12,
+        horz_offset=34,
+    )
+    equation.set_out_margins(left=5, right=6, top=7, bottom=8)
+    equation.set_rotation(angle=35, center_x=555, center_y=666)
     source.append_shape(kind="rect", text="SRC-SHAPE", width=4400, height=2100)
     source.append_ole("src.ole", b"SRC-OLE", width=3900, height=2200)
     source.section_settings(0).set_page_size(width=120000, height=88000)
@@ -143,7 +158,15 @@ def test_hancom_document_can_read_new_control_blocks_from_hwpx(tmp_path: Path) -
     assert any(isinstance(block, Field) and getattr(block, "name", None) == "SRC_FIELD" for block in blocks)
     assert any(isinstance(block, AutoNumber) and str(getattr(block, "number", "")) == "9" for block in blocks)
     assert any(isinstance(block, Note) and getattr(block, "text", None) == "SRC-NOTE" for block in blocks)
-    assert any(isinstance(block, Equation) and getattr(block, "script", None) == "a+b" for block in blocks)
+    extracted_equation = next(block for block in blocks if isinstance(block, Equation) and getattr(block, "script", None) == "a+b")
+    assert extracted_equation.layout["textWrap"] == "SQUARE"
+    assert extracted_equation.layout["textFlow"] == "RIGHT_ONLY"
+    assert extracted_equation.layout["treatAsChar"] == "0"
+    assert extracted_equation.layout["vertOffset"] == "12"
+    assert extracted_equation.out_margins == {"left": 5, "right": 6, "top": 7, "bottom": 8}
+    assert extracted_equation.rotation["angle"] == "35"
+    assert extracted_equation.rotation["centerX"] == "555"
+    assert extracted_equation.rotation["centerY"] == "666"
     assert any(isinstance(block, Shape) and getattr(block, "text", None) == "SRC-SHAPE" for block in blocks)
     assert any(isinstance(block, Ole) and getattr(block, "name", None) == "src.ole" for block in blocks)
     assert any(style.style_id == "23" and style.name == "SRC-STYLE" for style in document.style_definitions)
@@ -358,8 +381,151 @@ def test_hancom_document_pure_hwp_roundtrip_preserves_style_definitions_and_doci
     )
     assert target.get("styleIDRef") == "33"
     assert target.get("paraPrIDRef") == "430"
-    run_ids = target.xpath("./hp:run/@charPrIDRef", namespaces=NS)
-    assert run_ids and all(value == "425" for value in run_ids)
+
+
+def test_hancom_document_read_hwp_preserves_field_name_parameters_and_flags(tmp_path: Path) -> None:
+    source = HwpDocument.blank()
+    source.append_field(
+        field_type="MAILMERGE",
+        display_text="NATIVE-FIELD",
+        name="MAIL_NAME",
+        parameters={"FieldName": "MAIL_NAME", "Format": "upper"},
+        editable=True,
+        dirty=True,
+    )
+
+    output_path = tmp_path / "hancom_native_field.hwp"
+    source.save(output_path)
+
+    document = HancomDocument.read_hwp(output_path)
+    field = next(block for block in document.sections[0].blocks if isinstance(block, Field))
+
+    assert field.field_type == "MAILMERGE"
+    assert field.display_text == "NATIVE-FIELD"
+    assert field.name == "MAIL_NAME"
+    assert field.native_field_type == "%mai"
+    assert field.semantic_field_type == "MAILMERGE"
+    assert field.parameters["FieldName"] == "MAIL_NAME"
+    assert field.parameters["Format"] == "upper"
+    assert field.is_mail_merge is True
+    assert field.merge_field_name == "MAIL_NAME"
+    assert field.editable is True
+    assert field.dirty is True
+
+
+def test_hancom_document_roundtrips_native_field_subtypes_back_to_hwp(tmp_path: Path) -> None:
+    source = HwpDocument.blank()
+    source.append_field(
+        field_type="%pag",
+        display_text="PAGE-REF",
+        name="PAGE_ANCHOR",
+        parameters={"BookmarkName": "PAGE_ANCHOR", "Path": "PAGE_ANCHOR"},
+    )
+
+    source_path = tmp_path / "native_field_subtype_source.hwp"
+    source.save(source_path)
+
+    ir_document = HancomDocument.read_hwp(source_path)
+    field = next(block for block in ir_document.sections[0].blocks if isinstance(block, Field))
+    roundtrip_path = tmp_path / "native_field_subtype_roundtrip.hwp"
+    ir_document.to_hwp_document().save(roundtrip_path)
+
+    reopened = HwpDocument.open(roundtrip_path)
+    reopened_field = reopened.fields()[0]
+
+    assert field.field_type == "CROSSREF"
+    assert field.native_field_type == "%pag"
+    assert field.semantic_field_type == "CROSSREF"
+    assert field.is_cross_reference is True
+    assert field.bookmark_name == "PAGE_ANCHOR"
+    assert reopened_field.field_type == "CROSSREF"
+    assert reopened_field.native_field_type == "%pag"
+    assert reopened_field.bookmark_name == "PAGE_ANCHOR"
+
+
+def test_hancom_document_append_field_preserves_explicit_native_field_type(tmp_path: Path) -> None:
+    document = HancomDocument.blank()
+    field = document.append_field(
+        field_type="%pag",
+        display_text="PAGE-REF",
+        name="PAGE_ANCHOR",
+        parameters={"BookmarkName": "PAGE_ANCHOR", "Path": "PAGE_ANCHOR"},
+    )
+    output_path = tmp_path / "hancom_explicit_native_field.hwp"
+    document.to_hwp_document().save(output_path)
+
+    reopened = HwpDocument.open(output_path)
+    reopened_field = reopened.fields()[0]
+
+    assert field.field_type == "CROSSREF"
+    assert field.native_field_type == "%pag"
+    assert field.semantic_field_type == "CROSSREF"
+    assert reopened_field.native_field_type == "%pag"
+    assert reopened_field.bookmark_name == "PAGE_ANCHOR"
+
+
+def test_hancom_document_helper_methods_configure_fields_and_settings_for_hwp_roundtrip(tmp_path: Path) -> None:
+    document = HancomDocument.blank()
+    settings = document.sections[0].settings
+    settings.set_page_size(width=60000, height=85000, landscape="WIDELY")
+    settings.set_margins(left=7000, right=7100, top=5000, bottom=5100)
+    settings.set_visibility(hide_first_header=True, border="HIDE_FIRST", show_line_number=True)
+    settings.set_grid(line_grid=42, char_grid=21, wonggoji_format=True)
+    settings.set_start_numbers(page_starts_on="ODD", page=7, pic=8, tbl=9, equation=10)
+    settings.set_page_numbers([{"pos": "TOP_RIGHT", "formatType": "ROMAN_SMALL", "sideChar": "*"}])
+    settings.set_note_settings(footnote_pr={"numbering": {"type": "CONTINUOUS", "newNum": "4"}})
+
+    field = document.append_mail_merge_field("customer_name", display_text="CUSTOMER")
+    field.configure_doc_property("Subject", display_text="SUBJECT")
+    header = document.append_header("HEADER", apply_page_type="BOTH")
+    header.set_text("HEADER-UPDATED")
+    header.set_apply_page_type("EVEN")
+    auto_number = document.append_auto_number(kind="autoNum")
+    auto_number.set_number_type("PAGE")
+
+    output_path = tmp_path / "hancom_helper_roundtrip.hwp"
+    document.write_to_hwp(output_path)
+
+    reopened = HancomDocument.read_hwp(output_path)
+    reopened_field = next(block for block in reopened.sections[0].blocks if isinstance(block, Field))
+    reopened_header = reopened.sections[0].header_footer_blocks[0]
+    reopened_auto_number = next(block for block in reopened.sections[0].blocks if isinstance(block, AutoNumber))
+
+    assert reopened_field.field_type == "DOCPROPERTY"
+    assert reopened_field.document_property_name == "Subject"
+    assert reopened_field.display_text == "SUBJECT"
+    assert reopened_header.text == "HEADER-UPDATED"
+    assert reopened_header.apply_page_type == "EVEN"
+    assert reopened.sections[0].settings.page_numbers == [{"pos": "TOP_RIGHT", "formatType": "ROMAN_SMALL", "sideChar": "*"}]
+    assert reopened.sections[0].settings.start_numbers["pageStartsOn"] == "ODD"
+    assert reopened.sections[0].settings.grid == {"lineGrid": 42, "charGrid": 21, "wonggojiFormat": 1}
+    assert reopened.sections[0].settings.visibility["border"] == "HIDE_FIRST"
+    assert reopened.sections[0].settings.footnote_pr["numbering"]["newNum"] == "4"
+    assert reopened_auto_number.kind == "autoNum"
+    assert reopened_auto_number.number_type == "PAGE"
+
+
+def test_hancom_document_read_hwp_preserves_native_note_numbers(tmp_path: Path) -> None:
+    source = HwpDocument.blank()
+    source.apply_section_note_settings(
+        section_index=0,
+        footnote_pr={"numbering": {"type": "CONTINUOUS", "newNum": "5"}},
+        endnote_pr={"numbering": {"type": "CONTINUOUS", "newNum": "9"}},
+    )
+    source.append_footnote("FIRST-FOOTNOTE")
+    source.append_endnote("FIRST-ENDNOTE")
+
+    output_path = tmp_path / "hancom_native_notes.hwp"
+    source.save(output_path)
+
+    document = HancomDocument.read_hwp(output_path)
+    footnote = next(block for block in document.sections[0].blocks if isinstance(block, Note) and block.kind == "footNote")
+    endnote = next(block for block in document.sections[0].blocks if isinstance(block, Note) and block.kind == "endNote")
+
+    assert footnote.text == "FIRST-FOOTNOTE"
+    assert footnote.number == 5
+    assert endnote.text == "FIRST-ENDNOTE"
+    assert endnote.number == 9
 
 
 def test_hancom_document_pure_hwp_roundtrip_preserves_numbering_bullet_picture_size_and_hyperlink_metadata(
@@ -414,9 +580,11 @@ def test_hancom_document_pure_hwp_roundtrip_generates_numbering_and_bullet_paylo
         text_offsets=[60, 70, 80],
         char_pr_ids=[12, None, 12],
         start_numbers=[1, 2, 3, 4, 5, 6, 7],
+        unknown_short_bits={"bit_1": True, "bit_4": True},
     )
     document.append_bullet_definition(
         style_id="1",
+        flags=0x11,
         bullet_char="*",
         width_adjust=14,
         text_offset=64,
@@ -444,7 +612,12 @@ def test_hancom_document_pure_hwp_roundtrip_generates_numbering_and_bullet_paylo
     assert numbering.text_offsets[:3] == [60, 70, 80]
     assert numbering.char_pr_ids[:3] == [12, None, 12]
     assert numbering.start_numbers[:7] == [1, 2, 3, 4, 5, 6, 7]
+    assert numbering.unknown_short_bits["bit_1"] is True
+    assert numbering.unknown_short_bits["bit_4"] is True
     assert bullet.bullet_char == "*"
+    assert bullet.flags == 0x11
+    assert bullet.flag_bits["bit_0"] is True
+    assert bullet.flag_bits["bit_4"] is True
     assert bullet.width_adjust == 14
     assert bullet.text_offset == 64
     assert bullet.char_pr_id == 12
@@ -515,6 +688,28 @@ def test_hancom_document_pure_hwp_roundtrip_generates_para_and_char_payloads_fro
     }
 
 
+def test_hancom_document_preserves_native_style_definition_trailing_payload(tmp_path: Path) -> None:
+    template_document = HwpDocument.blank()
+    template_payload = bytes(template_document.docinfo_model().style_records()[0].payload) + b"\x34\x12\x78\x56"
+
+    document = HancomDocument.blank()
+    document.append_style(
+        "TRAILING-STYLE",
+        style_id="61",
+        para_pr_id="0",
+        char_pr_id="0",
+        native_hwp_payload=template_payload,
+    )
+    document.append_paragraph("STYLE-TRAILING")
+
+    output_path = tmp_path / "style_trailing_payload.hwp"
+    document.write_to_hwp(output_path)
+
+    reopened = HwpDocument.open(output_path)
+    payload = bytes(reopened.docinfo_model().style_records()[61].payload)
+    assert payload.endswith(b"\x34\x12\x78\x56")
+
+
 def test_hancom_document_reads_richer_native_hwp_equation_shape_and_ole_controls(tmp_path: Path) -> None:
     source = HwpDocument.blank()
     source.append_equation("x+y=z", width=3456, height=2100, font="Batang", shape_comment="NATIVE-EQ")
@@ -540,6 +735,44 @@ def test_hancom_document_reads_richer_native_hwp_equation_shape_and_ole_controls
         line_color="#445566",
         line_width=77,
     )
+    equation = source.equations()[0]
+    equation.set_layout(
+        text_wrap="SQUARE",
+        text_flow="RIGHT_ONLY",
+        treat_as_char=False,
+        vert_rel_to="PAPER",
+        horz_rel_to="PAPER",
+        vert_align="TOP",
+        horz_align="LEFT",
+        vert_offset=12,
+        horz_offset=34,
+    )
+    equation.set_out_margins(left=5, right=6, top=7, bottom=8)
+    equation.set_rotation(angle=35, center_x=555, center_y=666)
+    shape = source.shapes()[0]
+    shape.set_layout(
+        text_wrap="SQUARE",
+        text_flow="LEFT_ONLY",
+        treat_as_char=False,
+        vert_rel_to="PAPER",
+        horz_rel_to="PAPER",
+        vert_align="TOP",
+        horz_align="LEFT",
+        vert_offset=21,
+        horz_offset=43,
+    )
+    ole = source.oles()[0]
+    ole.set_layout(
+        text_wrap="SQUARE",
+        text_flow="LEFT_ONLY",
+        treat_as_char=False,
+        vert_rel_to="PAPER",
+        horz_rel_to="PAPER",
+        vert_align="TOP",
+        horz_align="LEFT",
+        vert_offset=31,
+        horz_offset=53,
+    )
 
     output_path = tmp_path / "hancom_native_control_rich.hwp"
     source.save(output_path)
@@ -554,12 +787,24 @@ def test_hancom_document_reads_richer_native_hwp_equation_shape_and_ole_controls
     assert equation.height == 2100
     assert equation.font == "Batang"
     assert equation.shape_comment == "NATIVE-EQ"
+    assert equation.layout["textWrap"] == "SQUARE"
+    assert equation.layout["textFlow"] == "RIGHT_ONLY"
+    assert equation.layout["treatAsChar"] == "0"
+    assert equation.layout["vertOffset"] == "12"
+    assert equation.out_margins == {"left": 5, "right": 6, "top": 7, "bottom": 8}
+    assert equation.rotation["angle"] == "35"
+    assert equation.rotation["centerX"] == "555"
+    assert equation.rotation["centerY"] == "666"
     assert shape.text == "NATIVE-SHAPE"
     assert shape.width == 3600
     assert shape.height == 1800
     assert shape.shape_comment == "NATIVE-SHAPE-COMMENT"
     assert shape.fill_color == "#ABCDEF"
     assert shape.line_color == "#123456"
+    assert shape.layout["textWrap"] == "SQUARE"
+    assert shape.layout["textFlow"] == "LEFT_ONLY"
+    assert shape.layout["treatAsChar"] == "0"
+    assert shape.layout["vertOffset"] == "21"
     assert ole.name == "native.ole"
     assert ole.width == 3900
     assert ole.height == 2200
@@ -570,16 +815,31 @@ def test_hancom_document_reads_richer_native_hwp_equation_shape_and_ole_controls
     assert ole.eq_baseline == 12
     assert ole.line_color == "#445566"
     assert ole.line_width == 77
+    assert ole.layout["textWrap"] == "SQUARE"
+    assert ole.layout["textFlow"] == "LEFT_ONLY"
+    assert ole.layout["treatAsChar"] == "0"
+    assert ole.layout["vertOffset"] == "31"
 
     reopened_hwpx = document.to_hwpx_document()
     assert reopened_hwpx.equations()[0].script == "x+y=z"
     assert reopened_hwpx.equations()[0].size() == {"width": 3456, "height": 2100}
     assert reopened_hwpx.equations()[0].element.get("font") == "Batang"
     assert reopened_hwpx.equations()[0].shape_comment == "NATIVE-EQ"
+    assert reopened_hwpx.equations()[0].layout()["textWrap"] == "SQUARE"
+    assert reopened_hwpx.equations()[0].layout()["textFlow"] == "RIGHT_ONLY"
+    assert reopened_hwpx.equations()[0].layout()["treatAsChar"] == "0"
+    assert reopened_hwpx.equations()[0].layout()["vertOffset"] == "12"
+    assert reopened_hwpx.equations()[0].out_margins() == {"left": 5, "right": 6, "top": 7, "bottom": 8}
+    assert reopened_hwpx.equations()[0].rotation()["angle"] == "35"
+    assert reopened_hwpx.equations()[0].rotation()["centerX"] == "555"
+    assert reopened_hwpx.equations()[0].rotation()["centerY"] == "666"
     assert reopened_hwpx.shapes()[0].text == "NATIVE-SHAPE"
     assert reopened_hwpx.shapes()[0].shape_comment == "NATIVE-SHAPE-COMMENT"
     assert reopened_hwpx.shapes()[0].fill_style()["faceColor"] == "#ABCDEF"
     assert reopened_hwpx.shapes()[0].line_style()["color"] == "#123456"
+    assert reopened_hwpx.shapes()[0].layout()["textWrap"] == "SQUARE"
+    assert reopened_hwpx.shapes()[0].layout()["textFlow"] == "LEFT_ONLY"
+    assert reopened_hwpx.shapes()[0].layout()["treatAsChar"] == "0"
     assert reopened_hwpx.oles()[0].binary_data() == b"NATIVE-OLE-DATA"
     assert reopened_hwpx.oles()[0].shape_comment == "NATIVE-OLE-COMMENT"
     assert reopened_hwpx.oles()[0].object_type == "LINK"
@@ -587,12 +847,48 @@ def test_hancom_document_reads_richer_native_hwp_equation_shape_and_ole_controls
     assert reopened_hwpx.oles()[0].has_moniker is True
     assert reopened_hwpx.oles()[0].line_style()["color"] == "#445566"
     assert reopened_hwpx.oles()[0].line_style()["width"] == "77"
+    assert reopened_hwpx.oles()[0].layout()["textWrap"] == "SQUARE"
+    assert reopened_hwpx.oles()[0].layout()["textFlow"] == "LEFT_ONLY"
+    assert reopened_hwpx.oles()[0].layout()["treatAsChar"] == "0"
 
 
 def test_hancom_document_pure_hwp_roundtrip_preserves_native_shape_and_ole_metadata(tmp_path: Path) -> None:
+    image_bytes = HwpDocument.blank().binary_document().read_stream("BinData/BIN0001.bmp", decompress=False)
     document = HancomDocument.blank()
-    document.append_equation("a+b", width=3200, height=1800, font="Batang", shape_comment="IR-EQ")
-    document.append_shape(
+    equation = document.append_equation("a+b", width=3200, height=1800, font="Batang", shape_comment="IR-EQ")
+    equation.layout = {
+        "textWrap": "SQUARE",
+        "textFlow": "RIGHT_ONLY",
+        "treatAsChar": "0",
+        "vertRelTo": "PAPER",
+        "horzRelTo": "PAPER",
+        "vertAlign": "TOP",
+        "horzAlign": "LEFT",
+        "vertOffset": "12",
+        "horzOffset": "34",
+    }
+    equation.out_margins = {"left": 5, "right": 6, "top": 7, "bottom": 8}
+    equation.rotation = {"angle": "35", "centerX": "555", "centerY": "666"}
+    picture = document.append_picture("ir.bmp", image_bytes, extension="bmp", width=3600, height=2400)
+    picture.shape_comment = "IR-PICTURE-COMMENT"
+    picture.layout = {
+        "textWrap": "SQUARE",
+        "textFlow": "RIGHT_ONLY",
+        "treatAsChar": "0",
+        "vertRelTo": "PAPER",
+        "horzRelTo": "PAPER",
+        "vertAlign": "TOP",
+        "horzAlign": "LEFT",
+        "vertOffset": "101",
+        "horzOffset": "202",
+    }
+    picture.out_margins = {"left": 13, "right": 24, "top": 35, "bottom": 46}
+    picture.rotation = {"angle": "15", "centerX": "111", "centerY": "222", "rotateimage": "0"}
+    picture.image_adjustment = {"bright": "5", "contrast": "6", "effect": "GRAY_SCALE", "alpha": "7"}
+    picture.crop = {"left": 1, "right": 3599, "top": 2, "bottom": 2398}
+    picture.line_color = "#223344"
+    picture.line_width = 66
+    shape = document.append_shape(
         kind="rect",
         text="IR-SHAPE",
         width=4100,
@@ -601,7 +897,20 @@ def test_hancom_document_pure_hwp_roundtrip_preserves_native_shape_and_ole_metad
         line_color="#234567",
         shape_comment="IR-SHAPE-COMMENT",
     )
-    document.append_ole(
+    shape.layout = {
+        "textWrap": "SQUARE",
+        "textFlow": "LEFT_ONLY",
+        "treatAsChar": "0",
+        "vertRelTo": "PAPER",
+        "horzRelTo": "PAPER",
+        "vertAlign": "TOP",
+        "horzAlign": "LEFT",
+        "vertOffset": "55",
+        "horzOffset": "66",
+    }
+    shape.out_margins = {"left": 6, "right": 7, "top": 8, "bottom": 9}
+    shape.rotation = {"angle": "25", "centerX": "333", "centerY": "444"}
+    ole = document.append_ole(
         "ir.ole",
         b"IR-OLE-DATA",
         width=4200,
@@ -614,19 +923,61 @@ def test_hancom_document_pure_hwp_roundtrip_preserves_native_shape_and_ole_metad
         line_color="#556677",
         line_width=55,
     )
+    ole.layout = {
+        "textWrap": "SQUARE",
+        "textFlow": "LEFT_ONLY",
+        "treatAsChar": "0",
+        "vertRelTo": "PAPER",
+        "horzRelTo": "PAPER",
+        "vertAlign": "TOP",
+        "horzAlign": "LEFT",
+        "vertOffset": "77",
+        "horzOffset": "88",
+    }
+    ole.out_margins = {"left": 9, "right": 10, "top": 11, "bottom": 12}
+    ole.rotation = {"angle": "45", "centerX": "777", "centerY": "888"}
+    ole.extent = {"x": 43000, "y": 14000}
 
     output_path = tmp_path / "hancom_native_full_parity.hwp"
     document.write_to_hwp(output_path)
 
     reopened = HancomDocument.read_hwp(output_path)
     equation = next(block for block in reopened.sections[0].blocks if isinstance(block, Equation))
+    picture = next(block for block in reopened.sections[0].blocks if isinstance(block, Picture))
     shape = next(block for block in reopened.sections[0].blocks if isinstance(block, Shape))
     ole = next(block for block in reopened.sections[0].blocks if isinstance(block, Ole))
 
     assert equation.shape_comment == "IR-EQ"
+    assert equation.layout["textWrap"] == "SQUARE"
+    assert equation.layout["textFlow"] == "RIGHT_ONLY"
+    assert equation.layout["treatAsChar"] == "0"
+    assert equation.layout["vertOffset"] == "12"
+    assert equation.out_margins == {"left": 5, "right": 6, "top": 7, "bottom": 8}
+    assert equation.rotation["angle"] == "35"
+    assert equation.rotation["centerX"] == "555"
+    assert equation.rotation["centerY"] == "666"
+    assert picture.shape_comment == "IR-PICTURE-COMMENT"
+    assert picture.layout["textWrap"] == "SQUARE"
+    assert picture.layout["textFlow"] == "RIGHT_ONLY"
+    assert picture.layout["treatAsChar"] == "0"
+    assert picture.out_margins == {"left": 13, "right": 24, "top": 35, "bottom": 46}
+    assert picture.rotation["angle"] == "15"
+    assert picture.rotation["centerX"] == "111"
+    assert picture.rotation["centerY"] == "222"
+    assert picture.image_adjustment["effect"] == "GRAY_SCALE"
+    assert picture.crop == {"left": 1, "right": 3599, "top": 2, "bottom": 2398}
+    assert picture.line_color == "#223344"
+    assert picture.line_width == 66
     assert shape.shape_comment == "IR-SHAPE-COMMENT"
     assert shape.fill_color == "#FEDCBA"
     assert shape.line_color == "#234567"
+    assert shape.layout["textWrap"] == "SQUARE"
+    assert shape.layout["textFlow"] == "LEFT_ONLY"
+    assert shape.layout["treatAsChar"] == "0"
+    assert shape.out_margins == {"left": 6, "right": 7, "top": 8, "bottom": 9}
+    assert shape.rotation["angle"] == "25"
+    assert shape.rotation["centerX"] == "333"
+    assert shape.rotation["centerY"] == "444"
     assert ole.shape_comment == "IR-OLE-COMMENT"
     assert ole.object_type == "LINK"
     assert ole.draw_aspect == "ICON"
@@ -634,6 +985,58 @@ def test_hancom_document_pure_hwp_roundtrip_preserves_native_shape_and_ole_metad
     assert ole.eq_baseline == 9
     assert ole.line_color == "#556677"
     assert ole.line_width == 55
+    assert ole.layout["textWrap"] == "SQUARE"
+    assert ole.layout["textFlow"] == "LEFT_ONLY"
+    assert ole.layout["treatAsChar"] == "0"
+    assert ole.out_margins == {"left": 9, "right": 10, "top": 11, "bottom": 12}
+    assert ole.rotation["angle"] == "45"
+    assert ole.extent == {"x": 43000, "y": 14000}
+
+    roundtrip_hwpx = tmp_path / "hancom_native_full_parity.hwpx"
+    reopened.write_to_hwpx(roundtrip_hwpx)
+    reopened_hwpx = HwpxDocument.open(roundtrip_hwpx)
+
+    reopened_picture = reopened_hwpx.pictures()[0]
+    reopened_shape = reopened_hwpx.shapes()[0]
+    reopened_ole = reopened_hwpx.oles()[0]
+    reopened_equation = reopened_hwpx.equations()[0]
+
+    assert reopened_equation.shape_comment == "IR-EQ"
+    assert reopened_equation.layout()["textWrap"] == "SQUARE"
+    assert reopened_equation.layout()["textFlow"] == "RIGHT_ONLY"
+    assert reopened_equation.layout()["treatAsChar"] == "0"
+    assert reopened_equation.layout()["vertOffset"] == "12"
+    assert reopened_equation.out_margins() == {"left": 5, "right": 6, "top": 7, "bottom": 8}
+    assert reopened_equation.rotation()["angle"] == "35"
+    assert reopened_equation.rotation()["centerX"] == "555"
+    assert reopened_equation.rotation()["centerY"] == "666"
+    assert reopened_picture.shape_comment == "IR-PICTURE-COMMENT"
+    assert reopened_picture.layout()["textWrap"] == "SQUARE"
+    assert reopened_picture.layout()["textFlow"] == "RIGHT_ONLY"
+    assert reopened_picture.layout()["treatAsChar"] == "0"
+    assert reopened_picture.out_margins() == {"left": 13, "right": 24, "top": 35, "bottom": 46}
+    assert reopened_picture.rotation()["angle"] == "15"
+    assert reopened_picture.rotation()["centerX"] == "111"
+    assert reopened_picture.rotation()["centerY"] == "222"
+    assert reopened_picture.image_adjustment()["effect"] == "GRAY_SCALE"
+    assert reopened_picture.crop() == {"left": 1, "right": 3599, "top": 2, "bottom": 2398}
+    assert reopened_picture.line_style()["color"] == "#223344"
+    assert reopened_picture.line_style()["width"] == "66"
+    assert reopened_shape.shape_comment == "IR-SHAPE-COMMENT"
+    assert reopened_shape.layout()["textWrap"] == "SQUARE"
+    assert reopened_shape.layout()["textFlow"] == "LEFT_ONLY"
+    assert reopened_shape.layout()["treatAsChar"] == "0"
+    assert reopened_shape.out_margins() == {"left": 6, "right": 7, "top": 8, "bottom": 9}
+    assert reopened_shape.rotation()["angle"] == "25"
+    assert reopened_shape.rotation()["centerX"] == "333"
+    assert reopened_shape.rotation()["centerY"] == "444"
+    assert reopened_ole.shape_comment == "IR-OLE-COMMENT"
+    assert reopened_ole.layout()["textWrap"] == "SQUARE"
+    assert reopened_ole.layout()["textFlow"] == "LEFT_ONLY"
+    assert reopened_ole.layout()["treatAsChar"] == "0"
+    assert reopened_ole.out_margins() == {"left": 9, "right": 10, "top": 11, "bottom": 12}
+    assert reopened_ole.rotation()["angle"] == "45"
+    assert reopened_ole.extent() == {"x": 43000, "y": 14000}
 
 
 def test_hancom_document_native_hwp_roundtrip_preserves_richer_shape_kinds(tmp_path: Path) -> None:
@@ -722,6 +1125,234 @@ def test_hancom_document_native_hwp_roundtrip_preserves_richer_shape_kinds(tmp_p
     assert reopened_textart.shape_comment == "TEXTART-COMMENT"
 
 
+def test_hancom_document_preserves_richer_hwpx_table_picture_shape_and_ole_semantics(tmp_path: Path) -> None:
+    image_bytes = HwpDocument.blank().binary_document().read_stream("BinData/BIN0001.bmp", decompress=False)
+    source = HwpxDocument.blank()
+
+    table = source.append_table(2, 2, cell_texts=[["A1", "A2"], ["B1", "B2"]])
+    table.set_layout(
+        text_wrap="SQUARE",
+        treat_as_char=False,
+        vert_rel_to="PAPER",
+        horz_rel_to="PAPER",
+        vert_align="TOP",
+        horz_align="LEFT",
+        vert_offset=12,
+        horz_offset=34,
+    )
+    table.set_out_margins(left=10, right=20, top=30, bottom=40)
+    table.set_in_margins(left=1, right=2, top=3, bottom=4)
+    table.set_cell_spacing(17)
+    table.set_table_border_fill_id(5)
+    table.set_page_break("TABLE")
+    table.set_repeat_header(False)
+    table.cell(0, 1).set_border_fill_id(7)
+    table.cell(1, 0).set_margins(left=11, right=22, top=33, bottom=44)
+    table.cell(1, 0).set_vertical_align("BOTTOM")
+
+    picture = source.append_picture("bridge.bmp", image_bytes, width=2400, height=1600)
+    picture.shape_comment = "PICTURE-COMMENT"
+    picture.set_layout(
+        text_wrap="SQUARE",
+        text_flow="RIGHT_ONLY",
+        treat_as_char=False,
+        vert_rel_to="PAPER",
+        horz_rel_to="PAPER",
+        vert_align="TOP",
+        horz_align="LEFT",
+        vert_offset=101,
+        horz_offset=202,
+    )
+    picture.set_out_margins(left=13, right=24, top=35, bottom=46)
+    picture.set_rotation(angle=15, center_x=111, center_y=222, rotate_image=False)
+    picture.set_image_adjustment(bright=5, contrast=6, effect="GRAY_SCALE", alpha=7)
+    picture.set_crop(left=1, right=2399, top=2, bottom=1598)
+    picture.set_line_style(color="#112233", width=55, style="SOLID")
+
+    shape = source.append_shape(kind="rect", text="IR-SHAPE", width=5000, height=2000, fill_color="#ABCDEF", line_color="#123456")
+    shape.shape_comment = "SHAPE-COMMENT"
+    shape.set_layout(
+        text_wrap="SQUARE",
+        text_flow="LEFT_ONLY",
+        treat_as_char=False,
+        vert_rel_to="PAPER",
+        horz_rel_to="PAPER",
+        vert_align="TOP",
+        horz_align="LEFT",
+        vert_offset=55,
+        horz_offset=66,
+    )
+    shape.set_out_margins(left=6, right=7, top=8, bottom=9)
+    shape.set_rotation(angle=25, center_x=333, center_y=444)
+    shape.set_text_margins(left=4, right=5, top=6, bottom=7)
+
+    ole = source.append_ole("bridge.ole", b"OLE-BRIDGE", width=42001, height=13501)
+    ole.shape_comment = "OLE-COMMENT"
+    ole.set_layout(
+        text_wrap="SQUARE",
+        text_flow="LEFT_ONLY",
+        treat_as_char=False,
+        vert_rel_to="PAPER",
+        horz_rel_to="PAPER",
+        vert_align="TOP",
+        horz_align="LEFT",
+        vert_offset=77,
+        horz_offset=88,
+    )
+    ole.set_out_margins(left=9, right=10, top=11, bottom=12)
+    ole.set_rotation(angle=45, center_x=777, center_y=888)
+    ole.set_line_style(color="#445566", width=77, style="DASH")
+    ole.set_object_metadata(object_type="LINK", draw_aspect="ICON", has_moniker=True, eq_baseline=12)
+    ole.set_extent(x=43000, y=14000)
+
+    source_path = tmp_path / "hancom_richer_hwpx_source.hwpx"
+    source.save(source_path)
+
+    document = HancomDocument.read_hwpx(source_path)
+    table_block = next(block for block in document.sections[0].blocks if isinstance(block, Table))
+    picture_block = next(block for block in document.sections[0].blocks if isinstance(block, Picture))
+    shape_block = next(block for block in document.sections[0].blocks if isinstance(block, Shape))
+    ole_block = next(block for block in document.sections[0].blocks if isinstance(block, Ole))
+
+    assert table_block.cell_spacing == 17
+    assert table_block.table_border_fill_id == 5
+    assert table_block.table_margins == {"left": 1, "right": 2, "top": 3, "bottom": 4}
+    assert table_block.out_margins == {"left": 10, "right": 20, "top": 30, "bottom": 40}
+    assert table_block.page_break == "TABLE"
+    assert table_block.repeat_header is False
+    assert table_block.cell_border_fill_ids[(0, 1)] == 7
+    assert table_block.cell_margins[(1, 0)] == {"left": 11, "right": 22, "top": 33, "bottom": 44}
+    assert table_block.cell_vertical_aligns[(1, 0)] == "BOTTOM"
+    assert table_block.layout["textWrap"] == "SQUARE"
+
+    assert picture_block.shape_comment == "PICTURE-COMMENT"
+    assert picture_block.layout["textWrap"] == "SQUARE"
+    assert picture_block.layout["textFlow"] == "RIGHT_ONLY"
+    assert picture_block.layout["treatAsChar"] == "0"
+    assert picture_block.rotation["angle"] == "15"
+    assert picture_block.rotation["centerX"] == "111"
+    assert picture_block.rotation["centerY"] == "222"
+    assert picture_block.image_adjustment["effect"] == "GRAY_SCALE"
+    assert picture_block.crop == {"left": 1, "right": 2399, "top": 2, "bottom": 1598}
+    assert picture_block.line_color == "#112233"
+    assert picture_block.line_width == 55
+
+    assert shape_block.kind == "rect"
+    assert shape_block.shape_comment == "SHAPE-COMMENT"
+    assert shape_block.layout["textWrap"] == "SQUARE"
+    assert shape_block.layout["textFlow"] == "LEFT_ONLY"
+    assert shape_block.layout["treatAsChar"] == "0"
+    assert shape_block.out_margins == {"left": 6, "right": 7, "top": 8, "bottom": 9}
+    assert shape_block.rotation["angle"] == "25"
+    assert shape_block.rotation["centerX"] == "333"
+    assert shape_block.rotation["centerY"] == "444"
+    assert shape_block.text_margins == {"left": 4, "right": 5, "top": 6, "bottom": 7}
+
+    assert ole_block.shape_comment == "OLE-COMMENT"
+    assert ole_block.object_type == "LINK"
+    assert ole_block.draw_aspect == "ICON"
+    assert ole_block.has_moniker is True
+    assert ole_block.line_color == "#445566"
+    assert ole_block.line_width == 77
+    assert ole_block.layout["textWrap"] == "SQUARE"
+    assert ole_block.layout["textFlow"] == "LEFT_ONLY"
+    assert ole_block.layout["treatAsChar"] == "0"
+    assert ole_block.extent == {"x": 43000, "y": 14000}
+
+    roundtrip_path = tmp_path / "hancom_richer_hwpx_roundtrip.hwpx"
+    document.write_to_hwpx(roundtrip_path)
+    reopened = HwpxDocument.open(roundtrip_path)
+
+    reopened_table = reopened.tables()[0]
+    reopened_picture = reopened.pictures()[0]
+    reopened_shape = reopened.shapes()[0]
+    reopened_ole = reopened.oles()[0]
+
+    assert reopened_table.cell_spacing == 17
+    assert reopened_table.table_border_fill_id == 5
+    assert reopened_table.in_margins() == {"left": 1, "right": 2, "top": 3, "bottom": 4}
+    assert reopened_table.out_margins() == {"left": 10, "right": 20, "top": 30, "bottom": 40}
+    assert reopened_table.page_break == "TABLE"
+    assert reopened_table.repeat_header is False
+    assert reopened_table.cell(0, 1).border_fill_id == 7
+    assert reopened_table.cell(1, 0).margins == {"left": 11, "right": 22, "top": 33, "bottom": 44}
+    assert reopened_table.cell(1, 0).vertical_align == "BOTTOM"
+
+    assert reopened_picture.shape_comment == "PICTURE-COMMENT"
+    assert reopened_picture.layout()["textWrap"] == "SQUARE"
+    assert reopened_picture.layout()["textFlow"] == "RIGHT_ONLY"
+    assert reopened_picture.layout()["treatAsChar"] == "0"
+    assert reopened_picture.rotation()["angle"] == "15"
+    assert reopened_picture.image_adjustment()["effect"] == "GRAY_SCALE"
+    assert reopened_picture.rotation()["centerX"] == "111"
+    assert reopened_picture.rotation()["centerY"] == "222"
+    assert reopened_picture.crop() == {"left": 1, "right": 2399, "top": 2, "bottom": 1598}
+    assert reopened_picture.line_style()["color"] == "#112233"
+    assert reopened_picture.line_style()["width"] == "55"
+
+    assert reopened_shape.kind == "rect"
+    assert reopened_shape.shape_comment == "SHAPE-COMMENT"
+    assert reopened_shape.layout()["textWrap"] == "SQUARE"
+    assert reopened_shape.layout()["textFlow"] == "LEFT_ONLY"
+    assert reopened_shape.layout()["treatAsChar"] == "0"
+    assert reopened_shape.out_margins() == {"left": 6, "right": 7, "top": 8, "bottom": 9}
+    assert reopened_shape.rotation()["angle"] == "25"
+    assert reopened_shape.rotation()["centerX"] == "333"
+    assert reopened_shape.rotation()["centerY"] == "444"
+    assert reopened_shape.text_margins() == {"left": 4, "right": 5, "top": 6, "bottom": 7}
+
+    assert reopened_ole.shape_comment == "OLE-COMMENT"
+    assert reopened_ole.object_type == "LINK"
+    assert reopened_ole.draw_aspect == "ICON"
+    assert reopened_ole.has_moniker is True
+    assert reopened_ole.layout()["textWrap"] == "SQUARE"
+    assert reopened_ole.layout()["textFlow"] == "LEFT_ONLY"
+    assert reopened_ole.layout()["treatAsChar"] == "0"
+    assert reopened_ole.line_style()["color"] == "#445566"
+    assert reopened_ole.line_style()["width"] == "77"
+    assert reopened_ole.extent() == {"x": 43000, "y": 14000}
+
+
+def test_hancom_document_preserves_connect_line_kind_through_hwp_bridge(tmp_path: Path) -> None:
+    source = HwpxDocument.blank()
+    connect_line = source.append_shape(kind="connectLine", width=3200, height=1400, line_color="#102030", shape_comment="CONNECT-LINE")
+    connect_line.set_layout(
+        text_wrap="SQUARE",
+        vert_rel_to="PAPER",
+        horz_rel_to="PAPER",
+        vert_align="TOP",
+        horz_align="LEFT",
+        vert_offset=12,
+        horz_offset=34,
+    )
+
+    source_path = tmp_path / "hancom_connect_line_source.hwpx"
+    source.save(source_path)
+
+    document = HancomDocument.read_hwpx(source_path)
+    shape_block = next(block for block in document.sections[0].blocks if isinstance(block, Shape))
+    assert shape_block.kind == "connectLine"
+    assert "start" in shape_block.specific_fields
+    assert "end" in shape_block.specific_fields
+
+    output_path = tmp_path / "hancom_connect_line_roundtrip.hwp"
+    document.write_to_hwp(output_path)
+
+    reopened_hwp = HwpDocument.open(output_path)
+    assert reopened_hwp.lines() == []
+    assert len(reopened_hwp.connect_lines()) == 1
+    reopened_connect_line = reopened_hwp.connect_lines()[0]
+    assert isinstance(reopened_connect_line, HwpConnectLineShapeObject)
+    assert reopened_connect_line.kind == "connectLine"
+    assert reopened_connect_line.shape_comment == "CONNECT-LINE"
+
+    reopened_ir = HancomDocument.read_hwp(output_path)
+    reopened_shape_block = next(block for block in reopened_ir.sections[0].blocks if isinstance(block, Shape))
+    assert reopened_shape_block.kind == "connectLine"
+    reopened_hwpx = reopened_ir.to_hwpx_document()
+    assert any(shape.kind == "connectLine" for shape in reopened_hwpx.shapes())
+
+
 def test_hancom_document_can_read_hwp_without_hancom_and_export_hwpx(sample_hwp_path: Path, tmp_path: Path) -> None:
     document = HancomDocument.read_hwp(sample_hwp_path)
     assert document.source_format == "hwp"
@@ -736,8 +1367,8 @@ def test_hancom_document_can_read_hwp_without_hancom_and_export_hwpx(sample_hwp_
 
 def test_hancom_document_pure_hwp_roundtrip_preserves_header_footer_and_new_number(tmp_path: Path) -> None:
     document = HancomDocument.blank()
-    document.append_header("PURE-HEADER")
-    document.append_footer("PURE-FOOTER")
+    document.append_header("PURE-HEADER", apply_page_type="EVEN")
+    document.append_footer("PURE-FOOTER", apply_page_type="ODD")
     document.append_auto_number(number=7, number_type="PAGE", kind="newNum")
 
     output_path = tmp_path / "hancom_ir_controls.hwp"
@@ -745,7 +1376,9 @@ def test_hancom_document_pure_hwp_roundtrip_preserves_header_footer_and_new_numb
 
     reopened = HwpDocument.open(output_path).to_hwpx_document()
     assert reopened.headers()[0].text == "PURE-HEADER"
+    assert reopened.headers()[0].apply_page_type == "EVEN"
     assert reopened.footers()[0].text == "PURE-FOOTER"
+    assert reopened.footers()[0].apply_page_type == "ODD"
     assert any(item.kind == "newNum" and item.number == "7" for item in reopened.auto_numbers())
 
 

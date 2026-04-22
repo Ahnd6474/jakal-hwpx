@@ -10,7 +10,18 @@ from lxml import etree
 
 from .document import DocumentMetadata, HwpxDocument
 from .hwp_binary import TAG_BULLET, TAG_CHAR_SHAPE, TAG_CTRL_DATA, TAG_NUMBERING, TAG_PARA_SHAPE, TAG_STYLE, TypedRecord
-from .hwp_document import HwpDocument
+from .hwp_document import (
+    HwpArcShapeObject,
+    HwpConnectLineShapeObject,
+    HwpContainerShapeObject,
+    HwpCurveShapeObject,
+    HwpDocument,
+    HwpEllipseShapeObject,
+    HwpLineShapeObject,
+    HwpPolygonShapeObject,
+    HwpRectangleShapeObject,
+    HwpTextArtShapeObject,
+)
 from .namespaces import NS, qname
 
 HancomConverter = Callable[[str | Path, str | Path, str], Path]
@@ -52,6 +63,35 @@ _HWP_PARA_ALIGN_CODES = {
 _HWP_PARA_ALIGN_NAMES = {value: key for key, value in _HWP_PARA_ALIGN_CODES.items()}
 _HWP_NUMBERING_LEVEL_COUNT = 7
 _HWP_CHAR_FONT_ORDER = ("hangul", "latin", "hanja", "japanese", "other", "symbol", "user")
+_HWP_NATIVE_FIELD_TYPE_BY_SEMANTIC_TYPE = {
+    "DOCPROPERTY": "%doc",
+    "DATE": "%dat",
+    "MAILMERGE": "%mai",
+    "FORMULA": "%for",
+    "CROSSREF": "%ref",
+}
+
+
+def _semantic_field_type_from_native(native_field_type: str, parameters: dict[str, str | int] | None = None) -> str:
+    normalized = native_field_type.strip().upper()
+    normalized_parameters = {str(key).upper(): str(value) for key, value in (parameters or {}).items()}
+    if normalized in {"%DOC", "DOCPROPERTY"}:
+        return "DOCPROPERTY"
+    if normalized in {"%DAT", "DATE"}:
+        return "DATE"
+    if normalized in {"%MAI", "MAILMERGE", "MAIL_MERGE", "MERGEFIELD"}:
+        return "MAILMERGE"
+    if normalized in {"%FOR", "%CAL", "FORMULA", "CALCULATE", "CALC"}:
+        return "FORMULA"
+    if normalized in {"%REF", "%PAG", "%CRO", "REF", "PAGEREF", "BOOKMARKREF", "CROSSREF", "CROSS_REF"}:
+        return "CROSSREF"
+    if "MERGEFIELD" in normalized_parameters or ("FIELDNAME" in normalized_parameters and normalized == "%MAI"):
+        return "MAILMERGE"
+    if "EXPRESSION" in normalized_parameters or (normalized == "%FOR" and "COMMAND" in normalized_parameters):
+        return "FORMULA"
+    if "BOOKMARKNAME" in normalized_parameters:
+        return "CROSSREF"
+    return native_field_type
 
 
 @dataclass
@@ -120,7 +160,15 @@ class Table:
     col_widths: list[int] | None = None
     cell_spans: dict[tuple[int, int], tuple[int, int]] | None = None
     cell_border_fill_ids: dict[tuple[int, int], int] | None = None
+    cell_margins: dict[tuple[int, int], dict[str, int]] | None = None
+    cell_vertical_aligns: dict[tuple[int, int], str] | None = None
     table_border_fill_id: int = 1
+    cell_spacing: int | None = None
+    table_margins: dict[str, int] | None = None
+    layout: dict[str, str] = field(default_factory=dict)
+    out_margins: dict[str, int] = field(default_factory=dict)
+    page_break: str | None = None
+    repeat_header: bool | None = None
 
 
 @dataclass
@@ -130,6 +178,14 @@ class Picture:
     extension: str | None = None
     width: int = 7200
     height: int = 7200
+    shape_comment: str | None = None
+    layout: dict[str, str] = field(default_factory=dict)
+    out_margins: dict[str, int] = field(default_factory=dict)
+    rotation: dict[str, str] = field(default_factory=dict)
+    image_adjustment: dict[str, str] = field(default_factory=dict)
+    crop: dict[str, int] = field(default_factory=dict)
+    line_color: str = "#000000"
+    line_width: int = 0
 
 
 @dataclass
@@ -152,6 +208,112 @@ class Field:
     parameters: dict[str, str | int] = field(default_factory=dict)
     editable: bool = False
     dirty: bool = False
+    native_field_type: str | None = None
+
+    @property
+    def semantic_field_type(self) -> str:
+        return _semantic_field_type_from_native(self.native_field_type or self.field_type, self.parameters)
+
+    @property
+    def effective_native_field_type(self) -> str:
+        return self.native_field_type or _HWP_NATIVE_FIELD_TYPE_BY_SEMANTIC_TYPE.get(self.semantic_field_type, self.field_type)
+
+    @property
+    def is_mail_merge(self) -> bool:
+        return self.semantic_field_type == "MAILMERGE"
+
+    @property
+    def is_calculation(self) -> bool:
+        return self.semantic_field_type == "FORMULA"
+
+    @property
+    def is_cross_reference(self) -> bool:
+        return self.semantic_field_type == "CROSSREF"
+
+    @property
+    def is_doc_property(self) -> bool:
+        return self.semantic_field_type == "DOCPROPERTY"
+
+    @property
+    def is_date(self) -> bool:
+        return self.semantic_field_type == "DATE"
+
+    def get_parameter(self, name: str) -> str | None:
+        value = self.parameters.get(name)
+        return None if value is None else str(value)
+
+    @property
+    def merge_field_name(self) -> str | None:
+        return self.get_parameter("MergeField") or self.get_parameter("FieldName") or self.name
+
+    @property
+    def expression(self) -> str | None:
+        return self.get_parameter("Expression") or self.get_parameter("Command")
+
+    @property
+    def bookmark_name(self) -> str | None:
+        return self.get_parameter("BookmarkName") or self.get_parameter("Path") or self.name
+
+    @property
+    def document_property_name(self) -> str | None:
+        if not self.is_doc_property:
+            return None
+        return self.get_parameter("FieldName") or self.name
+
+    def set_parameter(self, name: str, value: str | int) -> None:
+        self.parameters[str(name)] = value
+
+    def set_name(self, value: str) -> None:
+        self.name = value
+
+    def set_display_text(self, value: str) -> None:
+        self.display_text = value
+
+    def set_field_type(self, value: str) -> None:
+        normalized = value.strip()
+        semantic = _semantic_field_type_from_native(normalized, self.parameters)
+        if normalized.startswith("%"):
+            self.native_field_type = normalized
+            self.field_type = semantic
+            return
+        self.field_type = semantic if semantic != normalized else normalized
+        if self.native_field_type is None or _semantic_field_type_from_native(self.native_field_type, self.parameters) != self.field_type:
+            self.native_field_type = _HWP_NATIVE_FIELD_TYPE_BY_SEMANTIC_TYPE.get(self.field_type)
+
+    def configure_mail_merge(self, field_name: str, *, display_text: str | None = None) -> None:
+        self.set_field_type("MAILMERGE")
+        self.set_name(field_name)
+        self.set_parameter("FieldName", field_name)
+        self.set_parameter("MergeField", field_name)
+        if display_text is not None:
+            self.set_display_text(display_text)
+
+    def configure_calculation(self, expression: str, *, display_text: str | None = None) -> None:
+        self.set_field_type("FORMULA")
+        self.set_parameter("Expression", expression)
+        self.set_parameter("Command", expression)
+        if display_text is not None:
+            self.set_display_text(display_text)
+
+    def configure_cross_reference(self, bookmark_name: str, *, display_text: str | None = None) -> None:
+        self.set_field_type("CROSSREF")
+        self.set_name(bookmark_name)
+        self.set_parameter("BookmarkName", bookmark_name)
+        self.set_parameter("Path", bookmark_name)
+        if display_text is not None:
+            self.set_display_text(display_text)
+
+    def configure_doc_property(self, property_name: str, *, display_text: str | None = None) -> None:
+        self.set_field_type("DOCPROPERTY")
+        self.set_name(property_name)
+        self.set_parameter("FieldName", property_name)
+        if display_text is not None:
+            self.set_display_text(display_text)
+
+    def configure_date(self, *, display_text: str | None = None) -> None:
+        self.set_field_type("DATE")
+        if display_text is not None:
+            self.set_display_text(display_text)
 
 
 @dataclass
@@ -160,12 +322,24 @@ class AutoNumber:
     number: int | str = 1
     number_type: str = "PAGE"
 
+    def set_number(self, value: int | str) -> None:
+        self.number = value
+
+    def set_number_type(self, value: str) -> None:
+        self.number_type = value
+
 
 @dataclass
 class Note:
     kind: str
     text: str
     number: int | None = None
+
+    def set_text(self, value: str) -> None:
+        self.text = value
+
+    def set_number(self, value: int | None) -> None:
+        self.number = value
 
 
 @dataclass
@@ -177,6 +351,9 @@ class Equation:
     text_color: str = "#000000"
     base_unit: int = 1100
     font: str = "HYhwpEQ"
+    layout: dict[str, str] = field(default_factory=dict)
+    out_margins: dict[str, int] = field(default_factory=dict)
+    rotation: dict[str, str] = field(default_factory=dict)
 
 
 @dataclass
@@ -188,6 +365,11 @@ class Shape:
     fill_color: str = "#FFFFFF"
     line_color: str = "#000000"
     shape_comment: str | None = None
+    layout: dict[str, str] = field(default_factory=dict)
+    out_margins: dict[str, int] = field(default_factory=dict)
+    rotation: dict[str, str] = field(default_factory=dict)
+    text_margins: dict[str, int] = field(default_factory=dict)
+    specific_fields: dict[str, object] = field(default_factory=dict)
 
 
 @dataclass
@@ -203,6 +385,10 @@ class Ole:
     eq_baseline: int = 0
     line_color: str = "#000000"
     line_width: int = 0
+    layout: dict[str, str] = field(default_factory=dict)
+    out_margins: dict[str, int] = field(default_factory=dict)
+    rotation: dict[str, str] = field(default_factory=dict)
+    extent: dict[str, int] = field(default_factory=dict)
 
 
 HancomBlock = (
@@ -225,6 +411,12 @@ class HeaderFooter:
     kind: str
     text: str
     apply_page_type: str = "BOTH"
+
+    def set_text(self, value: str) -> None:
+        self.text = value
+
+    def set_apply_page_type(self, value: str) -> None:
+        self.apply_page_type = value
 
 
 @dataclass
@@ -249,6 +441,12 @@ class ParagraphStyle:
     line_spacing: int | str | None = None
     line_spacing_type: str | None = None
     margins: dict[str, str] = field(default_factory=dict)
+    tab_pr_id: str | None = None
+    snap_to_grid: str | None = None
+    condense: str | None = None
+    font_line_height: str | None = None
+    suppress_line_numbers: str | None = None
+    checked: str | None = None
     heading: dict[str, str] = field(default_factory=dict)
     break_setting: dict[str, str] = field(default_factory=dict)
     auto_spacing: dict[str, str] = field(default_factory=dict)
@@ -259,7 +457,11 @@ class ParagraphStyle:
 class CharacterStyle:
     style_id: str | None = None
     text_color: str | None = None
+    shade_color: str | None = None
     height: int | str | None = None
+    use_font_space: str | None = None
+    use_kerning: str | None = None
+    sym_mark: str | None = None
     font_refs: dict[str, str] = field(default_factory=dict)
     native_hwp_payload: bytes | None = None
 
@@ -269,17 +471,21 @@ class NumberingDefinition:
     style_id: str | None = None
     formats: list[str] = field(default_factory=list)
     para_heads: list[int] = field(default_factory=list)
+    para_head_flags: list[dict[str, bool]] = field(default_factory=list)
     width_adjusts: list[int] = field(default_factory=list)
     text_offsets: list[int] = field(default_factory=list)
     char_pr_ids: list[int | None] = field(default_factory=list)
     start_numbers: list[int] = field(default_factory=list)
     unknown_short: int = 0
+    unknown_short_bits: dict[str, bool] = field(default_factory=dict)
     native_hwp_payload: bytes | None = None
 
 
 @dataclass
 class BulletDefinition:
     style_id: str | None = None
+    flags: int | None = None
+    flag_bits: dict[str, bool] = field(default_factory=dict)
     bullet_char: str = "\uf0a1"
     width_adjust: int = 0
     text_offset: int = 50
@@ -303,6 +509,101 @@ class SectionSettings:
     endnote_pr: dict[str, object] = field(default_factory=dict)
     line_number_shape: dict[str, str] = field(default_factory=dict)
     numbering_shape_id: str | None = None
+
+    def set_page_size(
+        self,
+        *,
+        width: int | None = None,
+        height: int | None = None,
+        landscape: str | None = None,
+    ) -> None:
+        if width is not None:
+            self.page_width = width
+        if height is not None:
+            self.page_height = height
+        if landscape is not None:
+            self.landscape = landscape
+
+    def set_margins(self, **values: int) -> None:
+        self.margins.update({key: int(value) for key, value in values.items()})
+
+    def set_visibility(
+        self,
+        *,
+        hide_first_header: bool | None = None,
+        hide_first_footer: bool | None = None,
+        hide_first_master_page: bool | None = None,
+        border: str | None = None,
+        fill: str | None = None,
+        hide_first_page_num: bool | None = None,
+        hide_first_empty_line: bool | None = None,
+        show_line_number: bool | None = None,
+    ) -> None:
+        values = {
+            "hideFirstHeader": hide_first_header,
+            "hideFirstFooter": hide_first_footer,
+            "hideFirstMasterPage": hide_first_master_page,
+            "border": border,
+            "fill": fill,
+            "hideFirstPageNum": hide_first_page_num,
+            "hideFirstEmptyLine": hide_first_empty_line,
+            "showLineNumber": show_line_number,
+        }
+        for key, value in values.items():
+            if value is None:
+                continue
+            if isinstance(value, bool):
+                self.visibility[key] = "1" if value else "0"
+            else:
+                self.visibility[key] = str(value)
+
+    def set_grid(
+        self,
+        *,
+        line_grid: int | None = None,
+        char_grid: int | None = None,
+        wonggoji_format: bool | None = None,
+    ) -> None:
+        if line_grid is not None:
+            self.grid["lineGrid"] = int(line_grid)
+        if char_grid is not None:
+            self.grid["charGrid"] = int(char_grid)
+        if wonggoji_format is not None:
+            self.grid["wonggojiFormat"] = 1 if wonggoji_format else 0
+
+    def set_start_numbers(
+        self,
+        *,
+        page_starts_on: str | None = None,
+        page: int | str | None = None,
+        pic: int | str | None = None,
+        tbl: int | str | None = None,
+        equation: int | str | None = None,
+    ) -> None:
+        values = {
+            "pageStartsOn": page_starts_on,
+            "page": page,
+            "pic": pic,
+            "tbl": tbl,
+            "equation": equation,
+        }
+        for key, value in values.items():
+            if value is not None:
+                self.start_numbers[key] = str(value)
+
+    def set_page_numbers(self, page_numbers: list[dict[str, str]]) -> None:
+        self.page_numbers = [dict(page_number) for page_number in page_numbers]
+
+    def set_note_settings(
+        self,
+        *,
+        footnote_pr: dict[str, object] | None = None,
+        endnote_pr: dict[str, object] | None = None,
+    ) -> None:
+        if footnote_pr is not None:
+            self.footnote_pr = dict(footnote_pr)
+        if endnote_pr is not None:
+            self.endnote_pr = dict(endnote_pr)
 
 
 ParagraphNode = Paragraph
@@ -500,15 +801,121 @@ class HancomDocument:
         section_index: int = 0,
     ) -> Field:
         section = self._ensure_section(section_index)
+        normalized_field_type = field_type.strip()
+        native_field_type = normalized_field_type if normalized_field_type.startswith("%") else None
         block = Field(
-            field_type=field_type,
+            field_type=_semantic_field_type_from_native(normalized_field_type, parameters)
+            if native_field_type is not None
+            else normalized_field_type,
             display_text=display_text,
             name=name,
             parameters=dict(parameters or {}),
             editable=editable,
             dirty=dirty,
+            native_field_type=native_field_type,
         )
         section.blocks.append(block)
+        return block
+
+    def append_mail_merge_field(
+        self,
+        field_name: str,
+        *,
+        display_text: str | None = None,
+        editable: bool = False,
+        dirty: bool = False,
+        section_index: int = 0,
+    ) -> Field:
+        block = self.append_field(
+            field_type="MAILMERGE",
+            display_text=display_text,
+            name=field_name,
+            parameters={"FieldName": field_name, "MergeField": field_name},
+            editable=editable,
+            dirty=dirty,
+            section_index=section_index,
+        )
+        block.configure_mail_merge(field_name, display_text=display_text)
+        return block
+
+    def append_calculation_field(
+        self,
+        expression: str,
+        *,
+        display_text: str | None = None,
+        editable: bool = False,
+        dirty: bool = False,
+        section_index: int = 0,
+    ) -> Field:
+        block = self.append_field(
+            field_type="FORMULA",
+            display_text=display_text,
+            parameters={"Expression": expression, "Command": expression},
+            editable=editable,
+            dirty=dirty,
+            section_index=section_index,
+        )
+        block.configure_calculation(expression, display_text=display_text)
+        return block
+
+    def append_cross_reference(
+        self,
+        bookmark_name: str,
+        *,
+        display_text: str | None = None,
+        editable: bool = False,
+        dirty: bool = False,
+        section_index: int = 0,
+    ) -> Field:
+        block = self.append_field(
+            field_type="CROSSREF",
+            display_text=display_text,
+            name=bookmark_name,
+            parameters={"BookmarkName": bookmark_name, "Path": bookmark_name},
+            editable=editable,
+            dirty=dirty,
+            section_index=section_index,
+        )
+        block.configure_cross_reference(bookmark_name, display_text=display_text)
+        return block
+
+    def append_doc_property_field(
+        self,
+        property_name: str,
+        *,
+        display_text: str | None = None,
+        editable: bool = False,
+        dirty: bool = False,
+        section_index: int = 0,
+    ) -> Field:
+        block = self.append_field(
+            field_type="DOCPROPERTY",
+            display_text=display_text,
+            name=property_name,
+            parameters={"FieldName": property_name},
+            editable=editable,
+            dirty=dirty,
+            section_index=section_index,
+        )
+        block.configure_doc_property(property_name, display_text=display_text)
+        return block
+
+    def append_date_field(
+        self,
+        *,
+        display_text: str | None = None,
+        editable: bool = False,
+        dirty: bool = False,
+        section_index: int = 0,
+    ) -> Field:
+        block = self.append_field(
+            field_type="DATE",
+            display_text=display_text,
+            editable=editable,
+            dirty=dirty,
+            section_index=section_index,
+        )
+        block.configure_date(display_text=display_text)
         return block
 
     def append_auto_number(
@@ -674,6 +1081,7 @@ class HancomDocument:
         next_style_id: str | None = None,
         lang_id: str = "1042",
         lock_form: bool = False,
+        native_hwp_payload: bytes | None = None,
     ) -> StyleDefinition:
         node = StyleDefinition(
             name=name,
@@ -685,6 +1093,7 @@ class HancomDocument:
             next_style_id=next_style_id,
             lang_id=lang_id,
             lock_form=lock_form,
+            native_hwp_payload=native_hwp_payload,
         )
         self.style_definitions.append(node)
         return node
@@ -698,6 +1107,12 @@ class HancomDocument:
         line_spacing: int | str | None = None,
         line_spacing_type: str | None = None,
         margins: dict[str, str] | None = None,
+        tab_pr_id: str | None = None,
+        snap_to_grid: str | None = None,
+        condense: str | None = None,
+        font_line_height: str | None = None,
+        suppress_line_numbers: str | None = None,
+        checked: str | None = None,
         heading: dict[str, str] | None = None,
         break_setting: dict[str, str] | None = None,
         auto_spacing: dict[str, str] | None = None,
@@ -709,6 +1124,12 @@ class HancomDocument:
             line_spacing=line_spacing,
             line_spacing_type=line_spacing_type,
             margins=dict(margins or {}),
+            tab_pr_id=tab_pr_id,
+            snap_to_grid=snap_to_grid,
+            condense=condense,
+            font_line_height=font_line_height,
+            suppress_line_numbers=suppress_line_numbers,
+            checked=checked,
             heading=dict(heading or {}),
             break_setting=dict(break_setting or {}),
             auto_spacing=dict(auto_spacing or {}),
@@ -721,13 +1142,21 @@ class HancomDocument:
         *,
         style_id: str | None = None,
         text_color: str | None = None,
+        shade_color: str | None = None,
         height: int | str | None = None,
+        use_font_space: str | None = None,
+        use_kerning: str | None = None,
+        sym_mark: str | None = None,
         font_refs: dict[str, str] | None = None,
     ) -> CharacterStyle:
         node = CharacterStyle(
             style_id=style_id,
             text_color=text_color,
+            shade_color=shade_color,
             height=height,
+            use_font_space=use_font_space,
+            use_kerning=use_kerning,
+            sym_mark=sym_mark,
             font_refs=dict(font_refs or {}),
         )
         self.character_styles.append(node)
@@ -739,22 +1168,26 @@ class HancomDocument:
         style_id: str | None = None,
         formats: list[str] | None = None,
         para_heads: list[int] | None = None,
+        para_head_flags: list[dict[str, bool]] | None = None,
         width_adjusts: list[int] | None = None,
         text_offsets: list[int] | None = None,
         char_pr_ids: list[int | None] | None = None,
         start_numbers: list[int] | None = None,
         unknown_short: int = 0,
+        unknown_short_bits: dict[str, bool] | None = None,
         native_hwp_payload: bytes | None = None,
     ) -> NumberingDefinition:
         node = NumberingDefinition(
             style_id=style_id,
             formats=list(formats or []),
             para_heads=list(para_heads or []),
+            para_head_flags=[dict(value) for value in (para_head_flags or [])],
             width_adjusts=list(width_adjusts or []),
             text_offsets=list(text_offsets or []),
             char_pr_ids=list(char_pr_ids or []),
             start_numbers=list(start_numbers or []),
             unknown_short=unknown_short,
+            unknown_short_bits=dict(unknown_short_bits or {}),
             native_hwp_payload=native_hwp_payload,
         )
         self.numbering_definitions.append(node)
@@ -764,6 +1197,8 @@ class HancomDocument:
         self,
         *,
         style_id: str | None = None,
+        flags: int | None = None,
+        flag_bits: dict[str, bool] | None = None,
         bullet_char: str = "\uf0a1",
         width_adjust: int = 0,
         text_offset: int = 50,
@@ -773,6 +1208,8 @@ class HancomDocument:
     ) -> BulletDefinition:
         node = BulletDefinition(
             style_id=style_id,
+            flags=flags,
+            flag_bits=dict(flag_bits or {}),
             bullet_char=bullet_char,
             width_adjust=width_adjust,
             text_offset=text_offset,
@@ -840,10 +1277,10 @@ class HancomDocument:
             footer_written = False
             for block in section.header_footer_blocks:
                 if block.kind == "header" and not header_written:
-                    document.append_header(block.text, section_index=section_index)
+                    document.append_header(block.text, apply_page_type=block.apply_page_type, section_index=section_index)
                     header_written = True
                 elif block.kind == "footer" and not footer_written:
-                    document.append_footer(block.text, section_index=section_index)
+                    document.append_footer(block.text, apply_page_type=block.apply_page_type, section_index=section_index)
                     footer_written = True
             for block in section.blocks:
                 _append_hancom_block_to_hwp(document, block, section_index=section_index)
@@ -976,6 +1413,25 @@ def _normalize_hwp_text(value: str) -> str:
     return value.replace("\r", "").strip()
 
 
+def _xml_safe_scalar(value: object | None) -> str:
+    if value is None:
+        return ""
+    text = str(value)
+    def _is_xml_char(character: str) -> bool:
+        codepoint = ord(character)
+        return (
+            codepoint in {0x09, 0x0A, 0x0D}
+            or 0x20 <= codepoint <= 0xD7FF
+            or 0xE000 <= codepoint <= 0xFFFD
+            or 0x10000 <= codepoint <= 0x10FFFF
+        )
+    return "".join(
+        character
+        for character in text
+        if _is_xml_char(character)
+    )
+
+
 def _build_hwp_paragraph_block(paragraph, text: str) -> Paragraph:
     header = getattr(paragraph, "header", None)
     style_id = getattr(header, "style_id", None) if header is not None else None
@@ -1054,15 +1510,25 @@ def _extract_hwp_control(control) -> HancomBlock | None:
     )
 
     if isinstance(control, HwpTableObject):
+        cells = control.cells()
         cell_texts = control.cell_text_matrix()
         cell_spans = {
             (cell.row, cell.column): (cell.row_span, cell.col_span)
-            for cell in control.cells()
+            for cell in cells
             if cell.row_span != 1 or cell.col_span != 1
         }
         cell_border_fill_ids = {
             (cell.row, cell.column): cell.border_fill_id
-            for cell in control.cells()
+            for cell in cells
+        }
+        cell_margins = {
+            (cell.row, cell.column): {
+                "left": cell.margins[0],
+                "right": cell.margins[1],
+                "top": cell.margins[2],
+                "bottom": cell.margins[3],
+            }
+            for cell in cells
         }
         return Table(
             rows=control.row_count,
@@ -1072,7 +1538,15 @@ def _extract_hwp_control(control) -> HancomBlock | None:
             col_widths=_extract_hwp_table_column_widths(control),
             cell_spans=cell_spans or None,
             cell_border_fill_ids=cell_border_fill_ids or None,
+            cell_margins=cell_margins or None,
             table_border_fill_id=control.table_border_fill_id,
+            cell_spacing=control.cell_spacing,
+            table_margins={
+                "left": control.table_margins[0],
+                "right": control.table_margins[1],
+                "top": control.table_margins[2],
+                "bottom": control.table_margins[3],
+            },
         )
     if isinstance(control, HwpPictureObject):
         size = control.size() if hasattr(control, "size") else {"width": 7200, "height": 7200}
@@ -1083,6 +1557,14 @@ def _extract_hwp_control(control) -> HancomBlock | None:
             extension=control.extension,
             width=size.get("width", 7200),
             height=size.get("height", 7200),
+            shape_comment=getattr(control, "shape_comment", "") or None,
+            layout=dict(control.layout()) if hasattr(control, "layout") else {},
+            out_margins=dict(control.out_margins()) if hasattr(control, "out_margins") else {},
+            rotation=dict(control.rotation()) if hasattr(control, "rotation") else {},
+            image_adjustment=dict(control.image_adjustment()) if hasattr(control, "image_adjustment") else {},
+            crop=dict(control.crop()) if hasattr(control, "crop") else {},
+            line_color=getattr(control, "line_color", "#000000"),
+            line_width=int(getattr(control, "line_width", 0)),
         )
     if isinstance(control, HwpHyperlinkObject):
         return Hyperlink(
@@ -1099,7 +1581,8 @@ def _extract_hwp_control(control) -> HancomBlock | None:
             number_type=control.number_type or "PAGE",
         )
     if isinstance(control, HwpNoteObject):
-        return Note(kind=control.kind, text=control.text, number=None)
+        number = int(control.number) if control.number and str(control.number).isdigit() else None
+        return Note(kind=control.kind, text=control.text, number=number)
     if isinstance(control, HwpOleObject):
         size = control.size()
         return Ole(
@@ -1114,6 +1597,10 @@ def _extract_hwp_control(control) -> HancomBlock | None:
             eq_baseline=int(getattr(control, "eq_baseline", 0)),
             line_color=getattr(control, "line_color", "#000000"),
             line_width=int(getattr(control, "line_width", 0)),
+            layout=dict(control.layout()) if hasattr(control, "layout") else {},
+            out_margins=dict(control.out_margins()) if hasattr(control, "out_margins") else {},
+            rotation=dict(control.rotation()) if hasattr(control, "rotation") else {},
+            extent=dict(control.extent()) if hasattr(control, "extent") else {},
         )
     if isinstance(control, HwpShapeObject):
         size = control.size()
@@ -1125,6 +1612,10 @@ def _extract_hwp_control(control) -> HancomBlock | None:
             fill_color=getattr(control, "fill_color", "#FFFFFF"),
             line_color=getattr(control, "line_color", "#000000"),
             shape_comment=getattr(control, "shape_comment", "") or None,
+            layout=dict(control.layout()) if hasattr(control, "layout") else {},
+            out_margins=dict(control.out_margins()) if hasattr(control, "out_margins") else {},
+            rotation=dict(control.rotation()) if hasattr(control, "rotation") else {},
+            specific_fields=dict(control.specific_fields()) if hasattr(control, "specific_fields") else {},
         )
     if isinstance(control, HwpEquationObject):
         size = control.size() if hasattr(control, "size") else {"width": 4800, "height": 2300}
@@ -1134,15 +1625,19 @@ def _extract_hwp_control(control) -> HancomBlock | None:
             height=size.get("height", 2300),
             shape_comment=getattr(control, "shape_comment", "") or None,
             font=getattr(control, "font", "HYhwpEQ"),
+            layout=dict(control.layout()) if hasattr(control, "layout") else {},
+            out_margins=dict(control.out_margins()) if hasattr(control, "out_margins") else {},
+            rotation=dict(control.rotation()) if hasattr(control, "rotation") else {},
         )
     if isinstance(control, HwpFieldObject):
         return Field(
             field_type=control.field_type,
-            display_text=_normalize_hwp_text(
-                control.document.section(control.section_index).paragraph(control.paragraph_index).text
-            )
-            or None,
-            parameters=_parse_hwp_field_parameters(control),
+            display_text=_normalize_hwp_text(control.display_text) or None,
+            name=control.name,
+            parameters=dict(control.parameters),
+            editable=control.editable,
+            dirty=control.dirty,
+            native_field_type=control.native_field_type,
         )
     return None
 
@@ -1163,6 +1658,260 @@ def _extract_hwp_table_column_widths(table) -> list[int]:
         for index in missing:
             widths[index] = distributed
     return [value or fallback for value in widths]
+
+
+def _normalize_str_map(values: dict[str, object] | None) -> dict[str, str]:
+    if not values:
+        return {}
+    return {str(key): str(value) for key, value in values.items() if value is not None}
+
+
+def _normalize_int_map(values: dict[str, object] | None) -> dict[str, int]:
+    if not values:
+        return {}
+    result: dict[str, int] = {}
+    for key, value in values.items():
+        if value is None:
+            continue
+        try:
+            result[str(key)] = int(value)
+        except (TypeError, ValueError):
+            continue
+    return result
+
+
+def _hwpx_layout_kwargs(values: dict[str, object] | None) -> dict[str, object]:
+    if not values:
+        return {}
+    mapping = {
+        "textWrap": "text_wrap",
+        "textFlow": "text_flow",
+        "treatAsChar": "treat_as_char",
+        "affectLSpacing": "affect_line_spacing",
+        "flowWithText": "flow_with_text",
+        "allowOverlap": "allow_overlap",
+        "holdAnchorAndSO": "hold_anchor_and_so",
+        "vertRelTo": "vert_rel_to",
+        "horzRelTo": "horz_rel_to",
+        "vertAlign": "vert_align",
+        "horzAlign": "horz_align",
+        "vertOffset": "vert_offset",
+        "horzOffset": "horz_offset",
+    }
+    bool_fields = {
+        "treatAsChar",
+        "affectLSpacing",
+        "flowWithText",
+        "allowOverlap",
+        "holdAnchorAndSO",
+    }
+    result: dict[str, object] = {}
+    for source, target in mapping.items():
+        value = values.get(source)
+        if value in (None, ""):
+            continue
+        if source in bool_fields:
+            coerced = _coerce_bool(value)
+            if coerced is None:
+                continue
+            result[target] = coerced
+            continue
+        result[target] = value
+    return result
+
+
+def _hwpx_rotation_kwargs(values: dict[str, object] | None) -> dict[str, object]:
+    if not values:
+        return {}
+    mapping = {
+        "angle": "angle",
+        "centerX": "center_x",
+        "centerY": "center_y",
+        "rotateimage": "rotate_image",
+    }
+    return {
+        target: value
+        for source, target in mapping.items()
+        if (value := values.get(source)) not in (None, "")
+    }
+
+
+def _extract_hwpx_shape_points(node: etree._Element) -> list[dict[str, int]]:
+    points: list[dict[str, int]] = []
+    for child in node:
+        if etree.QName(child).localname.startswith("pt"):
+            try:
+                points.append(
+                    {
+                        "x": int(child.get("x", "0")),
+                        "y": int(child.get("y", "0")),
+                    }
+                )
+            except ValueError:
+                continue
+    return points
+
+
+def _extract_hwpx_shape_specific_fields(shape) -> dict[str, object]:
+    points = _extract_hwpx_shape_points(shape.element)
+    if shape.kind in {"line", "connectLine"} and len(points) >= 2:
+        return {
+            "start": points[0],
+            "end": points[1],
+        }
+    if shape.kind == "polygon" and points:
+        return {
+            "point_count": len(points),
+            "points": points,
+        }
+    return {}
+
+
+def _set_hwpx_shape_points(node: etree._Element, points: list[dict[str, int]]) -> None:
+    for child in list(node):
+        if etree.QName(child).localname.startswith("pt"):
+            node.remove(child)
+    for index, point in enumerate(points):
+        child = etree.SubElement(node, qname("hc", f"pt{index}"))
+        child.set("x", str(int(point.get("x", 0))))
+        child.set("y", str(int(point.get("y", 0))))
+
+
+def _apply_hwp_shape_specific_fields(shape, block: Shape) -> None:
+    fields = dict(block.specific_fields)
+    if not fields:
+        return
+    if isinstance(shape, (HwpLineShapeObject, HwpConnectLineShapeObject)):
+        start = fields.get("start")
+        end = fields.get("end")
+        attributes = fields.get("attributes")
+        if start is not None or end is not None or attributes is not None:
+            shape.set_endpoints(start=start, end=end, attributes=int(attributes) if attributes is not None else None)
+        return
+    if isinstance(shape, HwpRectangleShapeObject) and "corner_radius" in fields:
+        shape.set_corner_radius(int(fields["corner_radius"]))
+        return
+    if isinstance(shape, HwpEllipseShapeObject):
+        kwargs = {key: fields[key] for key in ("arc_flags", "center", "axis1", "axis2", "start", "end", "start_2", "end_2") if key in fields}
+        if kwargs:
+            shape.set_geometry(**kwargs)
+        return
+    if isinstance(shape, HwpArcShapeObject):
+        kwargs = {key: fields[key] for key in ("arc_type", "center", "axis1", "axis2") if key in fields}
+        if kwargs:
+            shape.set_geometry(**kwargs)
+        return
+    if isinstance(shape, HwpPolygonShapeObject) and isinstance(fields.get("points"), list):
+        shape.set_points(fields["points"], trailing_payload=fields.get("trailing_payload") if isinstance(fields.get("trailing_payload"), bytes) else None)
+        return
+    if isinstance(shape, HwpCurveShapeObject) and isinstance(fields.get("raw_payload"), (bytes, bytearray)):
+        shape.set_raw_payload(bytes(fields["raw_payload"]))
+        return
+    if isinstance(shape, HwpContainerShapeObject) and isinstance(fields.get("raw_payload"), (bytes, bytearray)):
+        shape.set_raw_payload(bytes(fields["raw_payload"]))
+        return
+    if isinstance(shape, HwpTextArtShapeObject):
+        if "text" in fields:
+            shape.set_text(str(fields["text"]))
+        if "font_name" in fields or "font_style" in fields:
+            shape.set_style(
+                font_name=str(fields["font_name"]) if "font_name" in fields else None,
+                font_style=str(fields["font_style"]) if "font_style" in fields else None,
+            )
+
+
+def _apply_hwpx_shape_specific_fields(shape, block: Shape) -> None:
+    fields = dict(block.specific_fields)
+    if not fields:
+        return
+    if block.kind in {"line", "connectLine"}:
+        start = fields.get("start", {"x": 0, "y": 0})
+        end = fields.get("end", {"x": 0, "y": 0})
+        if isinstance(start, dict) and isinstance(end, dict):
+            _set_hwpx_shape_points(shape.element, [start, end])
+            shape.section.mark_modified()
+        return
+    if block.kind == "polygon" and isinstance(fields.get("points"), list):
+        points = [point for point in fields["points"] if isinstance(point, dict)]
+        if points:
+            _set_hwpx_shape_points(shape.element, points)
+            shape.section.mark_modified()
+
+
+def _apply_hwpx_table_block(table, block: Table) -> None:
+    if block.layout:
+        table.set_layout(**_hwpx_layout_kwargs(block.layout))
+    if block.out_margins:
+        table.set_out_margins(**block.out_margins)
+    if block.table_margins:
+        table.set_in_margins(**block.table_margins)
+    if block.cell_spacing is not None:
+        table.set_cell_spacing(block.cell_spacing)
+    table.set_table_border_fill_id(block.table_border_fill_id)
+    if block.page_break:
+        table.set_page_break(block.page_break)
+    if block.repeat_header is not None:
+        table.set_repeat_header(block.repeat_header)
+    for (row, column), border_fill_id in (block.cell_border_fill_ids or {}).items():
+        table.cell(row, column).set_border_fill_id(border_fill_id)
+    for (row, column), margins in (block.cell_margins or {}).items():
+        table.cell(row, column).set_margins(**_normalize_int_map(margins))
+    for (row, column), vertical_align in (block.cell_vertical_aligns or {}).items():
+        table.cell(row, column).set_vertical_align(vertical_align)
+
+
+def _apply_hwpx_picture_block(picture, block: Picture) -> None:
+    if block.shape_comment:
+        picture.shape_comment = block.shape_comment
+    if block.layout:
+        picture.set_layout(**_hwpx_layout_kwargs(block.layout))
+    if block.out_margins:
+        picture.set_out_margins(**block.out_margins)
+    if block.rotation:
+        picture.set_rotation(**_hwpx_rotation_kwargs(block.rotation))
+    if block.image_adjustment:
+        picture.set_image_adjustment(**block.image_adjustment)
+    if block.crop:
+        picture.set_crop(**block.crop)
+    if block.line_color or block.line_width:
+        picture.set_line_style(color=block.line_color, width=block.line_width, style="SOLID" if block.line_width > 0 else "NONE")
+
+
+def _apply_hwpx_equation_block(equation, block: Equation) -> None:
+    if block.layout:
+        equation.set_layout(**_hwpx_layout_kwargs(block.layout))
+    if block.out_margins:
+        equation.set_out_margins(**block.out_margins)
+    if block.rotation:
+        equation.set_rotation(**_hwpx_rotation_kwargs(block.rotation))
+
+
+def _apply_hwpx_shape_block(shape, block: Shape) -> None:
+    if block.shape_comment:
+        shape.shape_comment = block.shape_comment
+    if block.layout:
+        shape.set_layout(**_hwpx_layout_kwargs(block.layout))
+    if block.out_margins:
+        shape.set_out_margins(**block.out_margins)
+    if block.rotation:
+        shape.set_rotation(**_hwpx_rotation_kwargs(block.rotation))
+    if block.text_margins:
+        shape.set_text_margins(**block.text_margins)
+    _apply_hwpx_shape_specific_fields(shape, block)
+
+
+def _apply_hwpx_ole_block(ole, block: Ole) -> None:
+    if block.shape_comment:
+        ole.shape_comment = block.shape_comment
+    if block.layout:
+        ole.set_layout(**_hwpx_layout_kwargs(block.layout))
+    if block.out_margins:
+        ole.set_out_margins(**block.out_margins)
+    if block.rotation:
+        ole.set_rotation(**_hwpx_rotation_kwargs(block.rotation))
+    if block.extent:
+        ole.set_extent(**block.extent)
+    ole.set_line_style(color=block.line_color, width=block.line_width, style="SOLID" if block.line_width > 0 else "NONE")
 
 
 def _parse_hwp_field_parameters(control) -> dict[str, str | int]:
@@ -1221,6 +1970,17 @@ def _append_hancom_block_to_hwp(document: HwpDocument, block: HancomBlock, *, se
             table_border_fill_id=block.table_border_fill_id,
             section_index=section_index,
         )
+        table = document.section(section_index).tables()[-1]
+        if block.col_widths:
+            table.set_column_widths(block.col_widths)
+        if block.cell_spacing is not None:
+            table.set_cell_spacing(block.cell_spacing)
+        if block.table_margins:
+            table.set_table_margins(**block.table_margins)
+        for (row, column), border_fill_id in (block.cell_border_fill_ids or {}).items():
+            table.set_cell_border_fill_id(row, column, border_fill_id)
+        for (row, column), margins in (block.cell_margins or {}).items():
+            table.set_cell_margins(row, column, **_normalize_int_map(margins))
         return
     if isinstance(block, Picture):
         document.append_picture(
@@ -1230,6 +1990,21 @@ def _append_hancom_block_to_hwp(document: HwpDocument, block: HancomBlock, *, se
             height=block.height,
             section_index=section_index,
         )
+        picture = document.section(section_index).pictures()[-1]
+        if block.shape_comment:
+            picture.set_shape_comment(block.shape_comment)
+        if block.layout:
+            picture.set_layout(**_hwpx_layout_kwargs(block.layout))
+        if block.out_margins:
+            picture.set_out_margins(**block.out_margins)
+        if block.rotation:
+            picture.set_rotation(**_hwpx_rotation_kwargs(block.rotation))
+        if block.image_adjustment:
+            picture.set_image_adjustment(**block.image_adjustment)
+        if block.crop:
+            picture.set_crop(**block.crop)
+        if block.line_color or block.line_width:
+            picture.set_line_style(color=block.line_color, width=block.line_width)
         return
     if isinstance(block, Hyperlink):
         document.append_hyperlink(
@@ -1245,7 +2020,7 @@ def _append_hancom_block_to_hwp(document: HwpDocument, block: HancomBlock, *, se
         return
     if isinstance(block, Field):
         document.append_field(
-            field_type=block.field_type,
+            field_type=block.effective_native_field_type,
             display_text=block.display_text,
             name=block.name,
             parameters=block.parameters,
@@ -1269,9 +2044,16 @@ def _append_hancom_block_to_hwp(document: HwpDocument, block: HancomBlock, *, se
             shape_comment=block.shape_comment,
             section_index=section_index,
         )
+        equation = document.section(section_index).equations()[-1]
+        if block.layout:
+            equation.set_layout(**_hwpx_layout_kwargs(block.layout))
+        if block.out_margins:
+            equation.set_out_margins(**block.out_margins)
+        if block.rotation:
+            equation.set_rotation(**_hwpx_rotation_kwargs(block.rotation))
         return
     if isinstance(block, Shape):
-        kind = block.kind if block.kind in {"line", "rect", "ellipse", "arc", "polygon", "curve", "container", "textart"} else "rect"
+        kind = block.kind if block.kind in {"line", "connectLine", "rect", "ellipse", "arc", "polygon", "curve", "container", "textart"} else "rect"
         document.append_shape(
             kind=kind,
             text=block.text,
@@ -1282,6 +2064,14 @@ def _append_hancom_block_to_hwp(document: HwpDocument, block: HancomBlock, *, se
             shape_comment=block.shape_comment,
             section_index=section_index,
         )
+        shape = document.section(section_index).shapes()[-1]
+        if block.layout:
+            shape.set_layout(**_hwpx_layout_kwargs(block.layout))
+        if block.out_margins:
+            shape.set_out_margins(**block.out_margins)
+        if block.rotation:
+            shape.set_rotation(**_hwpx_rotation_kwargs(block.rotation))
+        _apply_hwp_shape_specific_fields(shape, block)
         return
     if isinstance(block, Ole):
         document.append_ole(
@@ -1298,6 +2088,17 @@ def _append_hancom_block_to_hwp(document: HwpDocument, block: HancomBlock, *, se
             line_width=block.line_width,
             section_index=section_index,
         )
+        ole = document.section(section_index).oles()[-1]
+        if block.layout:
+            ole.set_layout(**_hwpx_layout_kwargs(block.layout))
+        if block.out_margins:
+            ole.set_out_margins(**block.out_margins)
+        if block.rotation:
+            ole.set_rotation(**_hwpx_rotation_kwargs(block.rotation))
+        if block.extent:
+            ole.set_extent(**block.extent)
+        if block.line_color or block.line_width:
+            ole.set_line_style(color=block.line_color, width=block.line_width)
         return
 
 
@@ -1349,7 +2150,7 @@ def _extract_hwp_header_footer(control) -> HeaderFooter | None:
     kind = getattr(control, "kind", "")
     if kind not in {"header", "footer"}:
         return None
-    return HeaderFooter(kind=kind, text=text, apply_page_type="BOTH")
+    return HeaderFooter(kind=kind, text=text, apply_page_type=getattr(control, "apply_page_type", "BOTH") or "BOTH")
 
 
 def _extract_hwpx_section(section) -> HancomSection:
@@ -1422,7 +2223,8 @@ def _extract_hwpx_paragraph_char_pr_id(paragraph) -> str | None:
 def _extract_hwpx_table(table) -> Table:
     cell_texts = _blank_cell_texts(table.row_count, table.column_count)
     cell_spans: dict[tuple[int, int], tuple[int, int]] = {}
-    for cell in table.cells():
+    cells = table.cells()
+    for cell in cells:
         if cell.row < table.row_count and cell.column < table.column_count:
             cell_texts[cell.row][cell.column] = cell.text
             if cell.row_span != 1 or cell.col_span != 1:
@@ -1431,7 +2233,20 @@ def _extract_hwpx_table(table) -> Table:
         rows=table.row_count,
         cols=table.column_count,
         cell_texts=cell_texts,
+        cell_border_fill_ids={(cell.row, cell.column): cell.border_fill_id for cell in cells} or None,
+        cell_margins={(cell.row, cell.column): cell.margins for cell in cells} or None,
+        cell_vertical_aligns={
+            (cell.row, cell.column): cell.vertical_align for cell in cells if cell.vertical_align != "CENTER"
+        }
+        or None,
         cell_spans=cell_spans or None,
+        table_border_fill_id=table.table_border_fill_id,
+        cell_spacing=table.cell_spacing,
+        table_margins=table.in_margins() or None,
+        layout=_normalize_str_map(table.layout()),
+        out_margins=_normalize_int_map(table.out_margins()),
+        page_break=table.page_break,
+        repeat_header=table.repeat_header,
     )
 
 
@@ -1439,12 +2254,21 @@ def _extract_hwpx_picture(picture) -> Picture:
     path = picture.binary_part_path()
     extension = Path(path).suffix.lstrip(".") or None
     size = picture.size()
+    line_style = picture.line_style()
     return Picture(
         name=Path(path).name,
         data=picture.binary_data(),
         extension=extension,
         width=size.get("width", 7200),
         height=size.get("height", 7200),
+        shape_comment=picture.shape_comment or None,
+        layout=_normalize_str_map(picture.layout()),
+        out_margins=_normalize_int_map(picture.out_margins()),
+        rotation=_normalize_str_map(picture.rotation()),
+        image_adjustment=_normalize_str_map(picture.image_adjustment()),
+        crop=_normalize_int_map(picture.crop()) if hasattr(picture, "crop") else {},
+        line_color=line_style.get("color", "#000000"),
+        line_width=int(line_style.get("width", "0")),
     )
 
 
@@ -1463,6 +2287,9 @@ def _extract_hwpx_equation(equation) -> Equation:
         text_color=equation.element.get("textColor", "#000000"),
         base_unit=int(equation.element.get("baseUnit", "1100")),
         font=equation.element.get("font", "HYhwpEQ"),
+        layout=_normalize_str_map(equation.layout()),
+        out_margins=_normalize_int_map(equation.out_margins()),
+        rotation=_normalize_str_map(equation.rotation()),
     )
 
 
@@ -1478,6 +2305,11 @@ def _extract_hwpx_shape(shape) -> Shape:
         fill_color=fill_style.get("faceColor", "#FFFFFF"),
         line_color=line_style.get("color", "#000000"),
         shape_comment=shape.shape_comment or None,
+        layout=_normalize_str_map(shape.layout()),
+        out_margins=_normalize_int_map(shape.out_margins()),
+        rotation=_normalize_str_map(shape.rotation()),
+        text_margins=_normalize_int_map(shape.text_margins()),
+        specific_fields=_extract_hwpx_shape_specific_fields(shape),
     )
 
 
@@ -1496,6 +2328,10 @@ def _extract_hwpx_ole(ole) -> Ole:
         eq_baseline=int(ole.element.get("eqBaseLine", "0")),
         line_color=line_style.get("color", "#000000"),
         line_width=int(line_style.get("width", "0")),
+        layout=_normalize_str_map(ole.layout()),
+        out_margins=_normalize_int_map(ole.out_margins()),
+        rotation=_normalize_str_map(ole.rotation()),
+        extent=_normalize_int_map(ole.extent()),
     )
 
 
@@ -1670,6 +2506,12 @@ def _extract_paragraph_style(style) -> ParagraphStyle:
         line_spacing=style.line_spacing,
         line_spacing_type=line_spacing_types[0] if line_spacing_types else None,
         margins=_extract_hwpx_margin_map(style.element),
+        tab_pr_id=style.element.get("tabPrIDRef"),
+        snap_to_grid=style.element.get("snapToGrid"),
+        condense=style.element.get("condense"),
+        font_line_height=style.element.get("fontLineHeight"),
+        suppress_line_numbers=style.element.get("suppressLineNumbers"),
+        checked=style.element.get("checked"),
         heading=_extract_hwpx_attribute_map(
             style.element,
             "./hh:heading",
@@ -1701,7 +2543,11 @@ def _extract_character_style(style) -> CharacterStyle:
     return CharacterStyle(
         style_id=style.style_id,
         text_color=style.text_color,
+        shade_color=style.element.get("shadeColor"),
         height=style.height,
+        use_font_space=style.element.get("useFontSpace"),
+        use_kerning=style.element.get("useKerning"),
+        sym_mark=style.element.get("symMark"),
         font_refs=_extract_hwpx_attribute_map(
             style.element,
             "./hh:fontRef",
@@ -1847,18 +2693,24 @@ def _build_hwp_placeholder_character_styles(docinfo_model, style_definitions: li
 
 def _extract_hwp_numbering_definitions(docinfo_model) -> list[NumberingDefinition]:
     definitions: list[NumberingDefinition] = []
-    for index, record in enumerate(docinfo_model.records_by_tag_id(TAG_NUMBERING)):
+    for index, record in enumerate(docinfo_model.numbering_records()):
         definition = NumberingDefinition(style_id=str(index), native_hwp_payload=bytes(record.payload))
         _apply_hwp_numbering_payload(definition, record.payload)
+        fields = record.fields()
+        definition.para_head_flags = [dict(level.get("para_head_flags", {})) for level in fields.get("levels", [])]
+        definition.unknown_short_bits = dict(fields.get("unknown_short_bits", {}))
         definitions.append(definition)
     return definitions
 
 
 def _extract_hwp_bullet_definitions(docinfo_model) -> list[BulletDefinition]:
     definitions: list[BulletDefinition] = []
-    for index, record in enumerate(docinfo_model.records_by_tag_id(TAG_BULLET)):
+    for index, record in enumerate(docinfo_model.bullet_records()):
         definition = BulletDefinition(style_id=str(index), native_hwp_payload=bytes(record.payload))
         _apply_hwp_bullet_payload(definition, record.payload)
+        fields = record.fields()
+        definition.flags = int(fields.get("flags", 0))
+        definition.flag_bits = dict(fields.get("flag_bits", {}))
         definitions.append(definition)
     return definitions
 
@@ -1912,6 +2764,20 @@ def _apply_hwp_paragraph_style_payload(style: ParagraphStyle, payload: bytes) ->
     if len(values) >= 4:
         attributes = int.from_bytes(values[0:4], "little", signed=False)
         style.alignment_horizontal = _HWP_PARA_ALIGN_NAMES.get(attributes & 0x07)
+        style.snap_to_grid = "1" if attributes & (1 << 7) else "0"
+        style.break_setting = {
+            "breakLatinWord": "KEEP_WORD" if attributes & (1 << 8) else "BREAK_WORD",
+            "breakNonLatinWord": "KEEP_WORD" if attributes & (1 << 8) else "BREAK_WORD",
+            "widowOrphan": "1" if attributes & (1 << 9) else "0",
+            "keepWithNext": "1" if attributes & (1 << 10) else "0",
+            "keepLines": "1" if attributes & (1 << 11) else "0",
+            "pageBreakBefore": "1" if attributes & (1 << 12) else "0",
+            "lineWrap": "SQUEEZE" if attributes & (1 << 15) else "BREAK",
+        }
+        style.auto_spacing = {
+            "eAsianEng": "1" if attributes & (1 << 23) else "0",
+            "eAsianNum": "1" if attributes & (1 << 24) else "0",
+        }
     if len(values) >= 24:
         margins = {
             "intent": str(int.from_bytes(values[4:8], "little", signed=True)),
@@ -1922,6 +2788,15 @@ def _apply_hwp_paragraph_style_payload(style: ParagraphStyle, payload: bytes) ->
             "unit": "HWPUNIT",
         }
         style.margins = margins
+    if len(values) >= 30:
+        style.tab_pr_id = str(int.from_bytes(values[28:30], "little", signed=False))
+    if len(values) >= 32:
+        numbering_id = int.from_bytes(values[30:32], "little", signed=False)
+        style.heading = {
+            "type": "NUMBER" if numbering_id > 0 else "NONE",
+            "idRef": str(numbering_id),
+            "level": "0",
+        }
     if len(values) >= 54:
         style.line_spacing = str(int.from_bytes(values[50:54], "little", signed=True))
 
@@ -1932,7 +2807,33 @@ def _build_hwp_paragraph_style_payload(style: ParagraphStyle, fallback_payload: 
     alignment_code = _HWP_PARA_ALIGN_CODES.get(str(style.alignment_horizontal or "").upper())
     if alignment_code is not None:
         attributes = (attributes & ~0x07) | alignment_code
-        payload[0:4] = attributes.to_bytes(4, "little", signed=False)
+    snap_to_grid = _coerce_bool(style.snap_to_grid)
+    if snap_to_grid is not None:
+        attributes = (attributes | (1 << 7)) if snap_to_grid else (attributes & ~(1 << 7))
+    keep_word = str(style.break_setting.get("breakLatinWord", "")).upper() == "KEEP_WORD" or str(style.break_setting.get("breakNonLatinWord", "")).upper() == "KEEP_WORD"
+    attributes = (attributes | (1 << 8)) if keep_word else (attributes & ~(1 << 8))
+    for key, bit in {
+        "widowOrphan": 9,
+        "keepWithNext": 10,
+        "keepLines": 11,
+        "pageBreakBefore": 12,
+    }.items():
+        enabled = _coerce_bool(style.break_setting.get(key))
+        if enabled is None:
+            continue
+        attributes = (attributes | (1 << bit)) if enabled else (attributes & ~(1 << bit))
+    line_wrap = str(style.break_setting.get("lineWrap", "")).upper()
+    if line_wrap:
+        attributes = (attributes | (1 << 15)) if line_wrap == "SQUEEZE" else (attributes & ~(1 << 15))
+    for key, bit in {
+        "eAsianEng": 23,
+        "eAsianNum": 24,
+    }.items():
+        enabled = _coerce_bool(style.auto_spacing.get(key))
+        if enabled is None:
+            continue
+        attributes = (attributes | (1 << bit)) if enabled else (attributes & ~(1 << bit))
+    payload[0:4] = attributes.to_bytes(4, "little", signed=False)
     for key, offset in {
         "intent": 4,
         "left": 8,
@@ -1946,6 +2847,12 @@ def _build_hwp_paragraph_style_payload(style: ParagraphStyle, fallback_payload: 
         if value is None:
             continue
         payload[offset : offset + 4] = int(value).to_bytes(4, "little", signed=True)
+    tab_pr_id = _coerce_int(style.tab_pr_id)
+    if tab_pr_id is not None:
+        payload[28:30] = int(tab_pr_id).to_bytes(2, "little", signed=False)
+    heading_id = _coerce_int(style.heading.get("idRef")) if style.heading else None
+    if heading_id is not None:
+        payload[30:32] = int(heading_id).to_bytes(2, "little", signed=False)
     line_spacing = _coerce_int(style.line_spacing)
     if line_spacing is not None:
         payload[50:54] = int(line_spacing).to_bytes(4, "little", signed=True)
@@ -1962,8 +2869,14 @@ def _apply_hwp_character_style_payload(style: CharacterStyle, payload: bytes) ->
         }
     if len(values) >= 46:
         style.height = str(int.from_bytes(values[42:46], "little", signed=False))
+    if len(values) >= 50:
+        attributes = int.from_bytes(values[46:50], "little", signed=False)
+        style.use_font_space = "1" if attributes & 0x20000000 else "0"
+        style.use_kerning = "1" if attributes & 0x40000000 else "0"
     if len(values) >= 58:
         style.text_color = _parse_hwp_colorref(values[54:58])
+    if len(values) >= 64:
+        style.shade_color = "none" if values[60:64] == b"\xff\xff\xff\xff" else _parse_hwp_colorref(values[60:64])
 
 
 def _build_hwp_character_style_payload(style: CharacterStyle, fallback_payload: bytes | None = None) -> bytes:
@@ -1978,8 +2891,18 @@ def _build_hwp_character_style_payload(style: CharacterStyle, fallback_payload: 
     height = _coerce_int(style.height)
     if height is not None:
         payload[42:46] = int(height).to_bytes(4, "little", signed=False)
+    attributes = int.from_bytes(payload[46:50], "little", signed=False)
+    use_font_space = _coerce_bool(style.use_font_space)
+    if use_font_space is not None:
+        attributes = (attributes | 0x20000000) if use_font_space else (attributes & ~0x20000000)
+    use_kerning = _coerce_bool(style.use_kerning)
+    if use_kerning is not None:
+        attributes = (attributes | 0x40000000) if use_kerning else (attributes & ~0x40000000)
+    payload[46:50] = int(attributes).to_bytes(4, "little", signed=False)
     if style.text_color is not None:
         payload[54:58] = _build_hwp_colorref(style.text_color)
+    if style.shade_color is not None:
+        payload[60:64] = b"\xff\xff\xff\xff" if str(style.shade_color).lower() == "none" else _build_hwp_colorref(style.shade_color)
     return bytes(payload)
 
 
@@ -1988,16 +2911,20 @@ def _apply_hwp_numbering_payload(definition: NumberingDefinition, payload: bytes
     definition.native_hwp_payload = values
     definition.formats = []
     definition.para_heads = []
+    definition.para_head_flags = []
     definition.width_adjusts = []
     definition.text_offsets = []
     definition.char_pr_ids = []
     definition.start_numbers = []
     definition.unknown_short = 0
+    definition.unknown_short_bits = {}
     cursor = 0
     for _ in range(_HWP_NUMBERING_LEVEL_COUNT):
         if cursor + 14 > len(values):
             break
-        definition.para_heads.append(int.from_bytes(values[cursor : cursor + 4], "little", signed=False))
+        para_head = int.from_bytes(values[cursor : cursor + 4], "little", signed=False)
+        definition.para_heads.append(para_head)
+        definition.para_head_flags.append({f"bit_{bit}": bool(para_head & (1 << bit)) for bit in range(32)})
         cursor += 4
         definition.width_adjusts.append(int.from_bytes(values[cursor : cursor + 2], "little", signed=True))
         cursor += 2
@@ -2016,6 +2943,7 @@ def _apply_hwp_numbering_payload(definition: NumberingDefinition, payload: bytes
         cursor += format_byte_length
     if cursor + 2 <= len(values):
         definition.unknown_short = int.from_bytes(values[cursor : cursor + 2], "little", signed=False)
+        definition.unknown_short_bits = {f"bit_{bit}": bool(definition.unknown_short & (1 << bit)) for bit in range(16)}
         cursor += 2
     remaining_levels = min(_HWP_NUMBERING_LEVEL_COUNT, (len(values) - cursor) // 4)
     for _ in range(remaining_levels):
@@ -2028,10 +2956,11 @@ def _build_hwp_numbering_payload(definition: NumberingDefinition, fallback_paylo
     _apply_hwp_numbering_payload(template, bytes(definition.native_hwp_payload or fallback_payload or _DEFAULT_HWP_NUMBERING_PAYLOAD))
     payload = bytearray()
     for level in range(_HWP_NUMBERING_LEVEL_COUNT):
+        flag_value = _bit_dict_to_int(definition.para_head_flags[level]) if level < len(definition.para_head_flags) else 0
         para_head = (
             definition.para_heads[level]
             if level < len(definition.para_heads)
-            else (template.para_heads[level] if level < len(template.para_heads) else 12)
+            else (flag_value if flag_value else (template.para_heads[level] if level < len(template.para_heads) else 12))
         )
         width_adjust = (
             definition.width_adjusts[level]
@@ -2058,7 +2987,8 @@ def _build_hwp_numbering_payload(definition: NumberingDefinition, fallback_paylo
         payload.extend(int(-1 if char_pr_id is None else char_pr_id).to_bytes(4, "little", signed=True))
         payload.extend((len(encoded_format) // 2).to_bytes(2, "little", signed=False))
         payload.extend(encoded_format)
-    payload.extend(int(definition.unknown_short).to_bytes(2, "little", signed=False))
+    unknown_short = definition.unknown_short if not definition.unknown_short_bits else _bit_dict_to_int(definition.unknown_short_bits)
+    payload.extend(int(unknown_short).to_bytes(2, "little", signed=False))
     for level in range(_HWP_NUMBERING_LEVEL_COUNT):
         start_number = (
             definition.start_numbers[level]
@@ -2072,6 +3002,9 @@ def _build_hwp_numbering_payload(definition: NumberingDefinition, fallback_paylo
 def _apply_hwp_bullet_payload(definition: BulletDefinition, payload: bytes) -> None:
     values = bytes(payload)
     definition.native_hwp_payload = values
+    if len(values) >= 4:
+        definition.flags = int.from_bytes(values[0:4], "little", signed=False)
+        definition.flag_bits = {f"bit_{bit}": bool(definition.flags & (1 << bit)) for bit in range(32)}
     if len(values) >= 6:
         definition.width_adjust = int.from_bytes(values[4:6], "little", signed=True)
     if len(values) >= 8:
@@ -2088,6 +3021,12 @@ def _build_hwp_bullet_payload(definition: BulletDefinition, fallback_payload: by
     payload = _seed_hwp_payload(definition.native_hwp_payload, fallback_payload, _DEFAULT_HWP_BULLET_PAYLOAD, min_len=14)
     template = BulletDefinition()
     _apply_hwp_bullet_payload(template, bytes(payload))
+    flags = definition.flags
+    if flags is None and definition.flag_bits:
+        flags = _bit_dict_to_int(definition.flag_bits)
+    if flags is None:
+        flags = template.flags if template.flags is not None else int.from_bytes(payload[0:4], "little", signed=False)
+    payload[0:4] = int(flags).to_bytes(4, "little", signed=False)
     payload[4:6] = int(definition.width_adjust).to_bytes(2, "little", signed=True)
     payload[6:8] = int(definition.text_offset).to_bytes(2, "little", signed=True)
     char_pr_id = template.char_pr_id if definition.char_pr_id is None else definition.char_pr_id
@@ -2397,13 +3336,48 @@ def _build_hwp_style_definition_payload(style: StyleDefinition, *, style_id: int
     payload.extend(_coerce_hwp_docinfo_word(style.next_style_id).to_bytes(2, "little", signed=False))
     payload.extend(_coerce_hwp_docinfo_word(style.para_pr_id).to_bytes(2, "little", signed=False))
     payload.extend(_coerce_hwp_docinfo_word(style.char_pr_id).to_bytes(2, "little", signed=False))
+    trailing_payload = _extract_hwp_style_definition_trailing_payload(style.native_hwp_payload)
+    if trailing_payload:
+        payload.extend(trailing_payload)
     return bytes(payload)
+
+
+def _extract_hwp_style_definition_trailing_payload(payload: bytes | None) -> bytes:
+    if not payload or len(payload) < 4:
+        return b""
+    cursor = 0
+    name_length = int.from_bytes(payload[cursor : cursor + 2], "little", signed=False)
+    cursor += 2 + name_length * 2
+    if cursor + 2 > len(payload):
+        return b""
+    english_name_length = int.from_bytes(payload[cursor : cursor + 2], "little", signed=False)
+    cursor += 2 + english_name_length * 2 + 10
+    if cursor >= len(payload):
+        return b""
+    return bytes(payload[cursor:])
 
 
 def _coerce_hwp_docinfo_word(value: str | None, *, default: int = 0) -> int:
     parsed = _parse_optional_int(value)
     resolved = default if parsed is None else parsed
     return max(0, min(resolved, 0xFFFF))
+
+
+def _bit_dict_to_int(bits: dict[str, bool] | None) -> int:
+    if not bits:
+        return 0
+    value = 0
+    for key, enabled in bits.items():
+        if not enabled or not key.startswith("bit_"):
+            continue
+        try:
+            bit = int(key[4:])
+        except ValueError:
+            continue
+        if bit < 0:
+            continue
+        value |= 1 << bit
+    return value
 
 
 def _build_table_wrapper(section, node):
@@ -2491,15 +3465,16 @@ def _write_section_to_hwpx(document: HwpxDocument, section_index: int, section: 
         paragraph_index = 0 if blocks_written == 0 else _append_control_host_paragraph(document, section_index)
 
         if isinstance(block, Table):
-            document.append_table(
+            appended = document.append_table(
                 block.rows,
                 block.cols,
                 section_index=section_index,
                 paragraph_index=paragraph_index,
                 cell_texts=block.cell_texts,
             )
+            _apply_hwpx_table_block(appended, block)
         elif isinstance(block, Picture):
-            document.append_picture(
+            appended = document.append_picture(
                 block.name,
                 block.data,
                 section_index=section_index,
@@ -2508,6 +3483,7 @@ def _write_section_to_hwpx(document: HwpxDocument, section_index: int, section: 
                 height=block.height,
                 media_type=_media_type_for_extension(block.extension),
             )
+            _apply_hwpx_picture_block(appended, block)
         elif isinstance(block, Hyperlink):
             document.append_hyperlink(
                 block.target,
@@ -2523,7 +3499,7 @@ def _write_section_to_hwpx(document: HwpxDocument, section_index: int, section: 
             )
         elif isinstance(block, Field):
             document.append_field(
-                field_type=block.field_type,
+                field_type=block.effective_native_field_type,
                 display_text=block.display_text,
                 name=block.name,
                 parameters=block.parameters,
@@ -2549,7 +3525,7 @@ def _write_section_to_hwpx(document: HwpxDocument, section_index: int, section: 
                 paragraph_index=paragraph_index,
             )
         elif isinstance(block, Equation):
-            document.append_equation(
+            appended = document.append_equation(
                 block.script,
                 section_index=section_index,
                 paragraph_index=paragraph_index,
@@ -2560,8 +3536,9 @@ def _write_section_to_hwpx(document: HwpxDocument, section_index: int, section: 
                 base_unit=block.base_unit,
                 font=block.font,
             )
+            _apply_hwpx_equation_block(appended, block)
         elif isinstance(block, Shape):
-            document.append_shape(
+            appended = document.append_shape(
                 kind=block.kind,
                 text=block.text,
                 width=block.width,
@@ -2572,6 +3549,7 @@ def _write_section_to_hwpx(document: HwpxDocument, section_index: int, section: 
                 section_index=section_index,
                 paragraph_index=paragraph_index,
             )
+            _apply_hwpx_shape_block(appended, block)
         elif isinstance(block, Ole):
             appended = document.append_ole(
                 block.name,
@@ -2586,11 +3564,7 @@ def _write_section_to_hwpx(document: HwpxDocument, section_index: int, section: 
                 section_index=section_index,
                 paragraph_index=paragraph_index,
             )
-            appended.set_line_style(
-                color=block.line_color,
-                width=block.line_width,
-                style="SOLID" if block.line_width > 0 else "NONE",
-            )
+            _apply_hwpx_ole_block(appended, block)
         blocks_written += 1
 
 
@@ -2768,11 +3742,11 @@ def _append_note_pr(sec_pr: etree._Element, kind: str, note_pr: dict[str, object
     note_node = etree.SubElement(sec_pr, f"{{{NS['hp']}}}{kind}")
     auto_num = dict(note_pr.get("autoNumFormat", {}))
     auto_num_node = etree.SubElement(note_node, f"{{{NS['hp']}}}autoNumFormat")
-    auto_num_node.set("type", str(auto_num.get("type", "DIGIT")))
-    auto_num_node.set("userChar", str(auto_num.get("userChar", "")))
-    auto_num_node.set("prefixChar", str(auto_num.get("prefixChar", "")))
-    auto_num_node.set("suffixChar", str(auto_num.get("suffixChar", "")))
-    auto_num_node.set("supscript", str(auto_num.get("supscript", "0")))
+    auto_num_node.set("type", _xml_safe_scalar(auto_num.get("type", "DIGIT")))
+    auto_num_node.set("userChar", _xml_safe_scalar(auto_num.get("userChar", "")))
+    auto_num_node.set("prefixChar", _xml_safe_scalar(auto_num.get("prefixChar", "")))
+    auto_num_node.set("suffixChar", _xml_safe_scalar(auto_num.get("suffixChar", "")))
+    auto_num_node.set("supscript", _xml_safe_scalar(auto_num.get("supscript", "0")))
     note_line = dict(note_pr.get("noteLine", {}))
     note_line_node = etree.SubElement(note_node, f"{{{NS['hp']}}}noteLine")
     note_line_node.set("length", str(note_line.get("length", "-1")))
@@ -2842,6 +3816,18 @@ def _apply_styles(document: HwpxDocument, hancom_document: HancomDocument) -> No
             alignment_vertical=style.alignment_vertical,
             line_spacing=None,
         )
+        for key, value in {
+            "tabPrIDRef": style.tab_pr_id,
+            "snapToGrid": style.snap_to_grid,
+            "condense": style.condense,
+            "fontLineHeight": style.font_line_height,
+            "suppressLineNumbers": style.suppress_line_numbers,
+            "checked": style.checked,
+        }.items():
+            if value is not None:
+                appended.element.set(key, str(value))
+        if any(value is not None for value in (style.tab_pr_id, style.snap_to_grid, style.condense, style.font_line_height, style.suppress_line_numbers, style.checked)):
+            appended.header_part.mark_modified()
         if style.line_spacing is not None:
             appended.set_line_spacing(style.line_spacing, spacing_type=style.line_spacing_type)
         if style.margins:
@@ -2885,6 +3871,13 @@ def _apply_styles(document: HwpxDocument, hancom_document: HancomDocument) -> No
             text_color=style.text_color,
             height=style.height,
         )
+        if any(value is not None for value in (style.shade_color, style.use_font_space, style.use_kerning, style.sym_mark)):
+            appended.set_effects(
+                shade_color=style.shade_color,
+                use_font_space=_coerce_bool(style.use_font_space),
+                use_kerning=_coerce_bool(style.use_kerning),
+                sym_mark=style.sym_mark,
+            )
         if style.font_refs:
             appended.set_font_refs(
                 hangul=style.font_refs.get("hangul"),

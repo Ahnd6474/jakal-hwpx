@@ -3,6 +3,7 @@ param(
     [string]$OutputRoot = "",
     [string]$SecurityModuleName = "FilePathCheckerModuleExample",
     [string]$SecurityModulePath = "",
+    [string]$SecurityModuleInstallRoot = "",
     [string]$SecurityRegistryRoot = "HKCU:\SOFTWARE\HNC\HwpAutomation\Modules",
     [int]$TimeoutSeconds = 90,
     [switch]$SkipSecurityModuleSetup,
@@ -39,28 +40,33 @@ $resolvedOutputRoot = Resolve-OutputRoot -RequestedPath $OutputRoot
 $setupScript = Join-Path $PSScriptRoot "setup_hancom_security_module.ps1"
 $smokeScript = Join-Path $PSScriptRoot "run_hancom_smoke_validation.ps1"
 
+if ($SkipSecurityModuleSetup) {
+    throw "Skipping Hancom security module setup is disabled. Remove -SkipSecurityModuleSetup."
+}
+
 if (-not (Test-Path $resolvedCorpusDir)) {
     throw "Corpus directory does not exist: $resolvedCorpusDir"
 }
 
 New-Item -ItemType Directory -Force $resolvedOutputRoot | Out-Null
 
-if (-not $SkipSecurityModuleSetup) {
-    $setupArgs = @(
-        "-NoProfile",
-        "-ExecutionPolicy", "Bypass",
-        "-File", $setupScript,
-        "-ModuleName", $SecurityModuleName,
-        "-RegistryRoot", $SecurityRegistryRoot
-    )
-    if (-not [string]::IsNullOrWhiteSpace($SecurityModulePath)) {
-        $setupArgs += @("-ModulePath", $SecurityModulePath)
-    }
-    else {
-        $setupArgs += "-DownloadIfMissing"
-    }
-    & powershell.exe @setupArgs | Out-Null
+$setupArgs = @(
+    "-NoProfile",
+    "-ExecutionPolicy", "Bypass",
+    "-File", $setupScript,
+    "-ModuleName", $SecurityModuleName,
+    "-RegistryRoot", $SecurityRegistryRoot
+)
+if (-not [string]::IsNullOrWhiteSpace($SecurityModuleInstallRoot)) {
+    $setupArgs += @("-InstallRoot", $SecurityModuleInstallRoot)
 }
+if (-not [string]::IsNullOrWhiteSpace($SecurityModulePath)) {
+    $setupArgs += @("-ModulePath", $SecurityModulePath)
+}
+else {
+    $setupArgs += "-DownloadIfMissing"
+}
+& powershell.exe @setupArgs | Out-Null
 
 $results = New-Object System.Collections.Generic.List[object]
 $files = Get-ChildItem -LiteralPath $resolvedCorpusDir -Filter *.hwpx | Sort-Object Name
@@ -84,6 +90,7 @@ foreach ($file in $files) {
             -LogPath $logPath `
             -SecurityModuleName $SecurityModuleName `
             -SecurityModulePath $SecurityModulePath `
+            -SecurityModuleInstallRoot $SecurityModuleInstallRoot `
             -SecurityRegistryRoot $SecurityRegistryRoot `
             -AllowExistingHwpProcesses:$AllowExistingHwpProcesses
     }

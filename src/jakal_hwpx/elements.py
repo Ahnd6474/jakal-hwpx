@@ -216,8 +216,11 @@ def _set_line_style(
     outline_style: str | None = None,
     alpha: int | str | None = None,
 ) -> None:
+    node = _first_node(element, "./hp:lineShape")
+    if node is None:
+        node = etree.SubElement(element, qname("hp", "lineShape"))
     _set_optional_attributes(
-        _first_node(element, "./hp:lineShape"),
+        node,
         color=color,
         width=width,
         style=style,
@@ -292,6 +295,27 @@ def _set_image_adjustment(
     alpha: int | str | None = None,
 ) -> None:
     _set_optional_attributes(_first_node(element, "./hc:img"), bright=bright, contrast=contrast, effect=effect, alpha=alpha)
+
+
+def _crop_values(element: etree._Element) -> dict[str, int]:
+    node = _first_node(element, "./hp:imgClip")
+    if node is None:
+        return {}
+    return {key: int(node.get(key, "0")) for key in ("left", "right", "top", "bottom")}
+
+
+def _set_crop_values(
+    element: etree._Element,
+    *,
+    left: int | str | None = None,
+    right: int | str | None = None,
+    top: int | str | None = None,
+    bottom: int | str | None = None,
+) -> None:
+    node = _first_node(element, "./hp:imgClip")
+    if node is None:
+        node = etree.SubElement(element, qname("hp", "imgClip"))
+    _set_optional_attributes(node, left=left, right=right, top=top, bottom=bottom)
 
 
 def _extract_text(element: etree._Element) -> str:
@@ -650,6 +674,19 @@ class TableCellXml:
         span = self.element.xpath("./hp:cellSpan/@colSpan", namespaces=NS)
         return int(span[0]) if span else 1
 
+    @property
+    def border_fill_id(self) -> int:
+        return int(self.element.get("borderFillIDRef", "0") or 0)
+
+    @property
+    def margins(self) -> dict[str, int]:
+        return _margin_values(self.element, "./hp:cellMargin")
+
+    @property
+    def vertical_align(self) -> str:
+        values = self.element.xpath("./hp:subList/@vertAlign", namespaces=NS)
+        return values[0] if values else "CENTER"
+
     def set_text(self, text: str) -> None:
         paragraphs, signatures = _capture_protected_paragraph_signatures(self.element)
         self.table.section.mark_modified()
@@ -671,6 +708,28 @@ class TableCellXml:
                 for index, _ in enumerate(paragraphs)
             ],
         )
+
+    def set_border_fill_id(self, value: int | str) -> None:
+        self.element.set("borderFillIDRef", str(value))
+        self.table.section.mark_modified()
+
+    def set_margins(
+        self,
+        *,
+        left: int | str | None = None,
+        right: int | str | None = None,
+        top: int | str | None = None,
+        bottom: int | str | None = None,
+    ) -> None:
+        _set_margin_values(self.element, "./hp:cellMargin", left=left, right=right, top=top, bottom=bottom)
+        self.table.section.mark_modified()
+
+    def set_vertical_align(self, value: str) -> None:
+        sub_list = _first_node(self.element, "./hp:subList")
+        if sub_list is None:
+            raise ValueError("Table cell does not contain hp:subList.")
+        sub_list.set("vertAlign", value)
+        self.table.section.mark_modified()
 
 
 @dataclass
@@ -706,6 +765,104 @@ class TableXml:
         for cell in self.cells():
             grouped.setdefault(cell.row, []).append(cell)
         return [sorted(grouped[index], key=lambda item: item.column) for index in sorted(grouped)]
+
+    def layout(self) -> dict[str, str]:
+        return _graphic_layout(self.element)
+
+    def out_margins(self) -> dict[str, int]:
+        return _margin_values(self.element, "./hp:outMargin")
+
+    def in_margins(self) -> dict[str, int]:
+        return _margin_values(self.element, "./hp:inMargin")
+
+    @property
+    def cell_spacing(self) -> int:
+        return int(self.element.get("cellSpacing", "0") or 0)
+
+    @property
+    def table_border_fill_id(self) -> int:
+        return int(self.element.get("borderFillIDRef", "0") or 0)
+
+    @property
+    def page_break(self) -> str:
+        return self.element.get("pageBreak", "CELL")
+
+    @property
+    def repeat_header(self) -> bool:
+        return self.element.get("repeatHeader", "0") == "1"
+
+    def set_layout(
+        self,
+        *,
+        text_wrap: str | None = None,
+        text_flow: str | None = None,
+        treat_as_char: bool | None = None,
+        affect_line_spacing: bool | None = None,
+        flow_with_text: bool | None = None,
+        allow_overlap: bool | None = None,
+        hold_anchor_and_so: bool | None = None,
+        vert_rel_to: str | None = None,
+        horz_rel_to: str | None = None,
+        vert_align: str | None = None,
+        horz_align: str | None = None,
+        vert_offset: int | str | None = None,
+        horz_offset: int | str | None = None,
+    ) -> None:
+        _set_graphic_layout(
+            self.element,
+            text_wrap=text_wrap,
+            text_flow=text_flow,
+            treat_as_char=treat_as_char,
+            affect_line_spacing=affect_line_spacing,
+            flow_with_text=flow_with_text,
+            allow_overlap=allow_overlap,
+            hold_anchor_and_so=hold_anchor_and_so,
+            vert_rel_to=vert_rel_to,
+            horz_rel_to=horz_rel_to,
+            vert_align=vert_align,
+            horz_align=horz_align,
+            vert_offset=vert_offset,
+            horz_offset=horz_offset,
+        )
+        self.section.mark_modified()
+
+    def set_out_margins(
+        self,
+        *,
+        left: int | str | None = None,
+        right: int | str | None = None,
+        top: int | str | None = None,
+        bottom: int | str | None = None,
+    ) -> None:
+        _set_margin_values(self.element, "./hp:outMargin", left=left, right=right, top=top, bottom=bottom)
+        self.section.mark_modified()
+
+    def set_in_margins(
+        self,
+        *,
+        left: int | str | None = None,
+        right: int | str | None = None,
+        top: int | str | None = None,
+        bottom: int | str | None = None,
+    ) -> None:
+        _set_margin_values(self.element, "./hp:inMargin", left=left, right=right, top=top, bottom=bottom)
+        self.section.mark_modified()
+
+    def set_cell_spacing(self, value: int | str) -> None:
+        self.element.set("cellSpacing", str(value))
+        self.section.mark_modified()
+
+    def set_table_border_fill_id(self, value: int | str) -> None:
+        self.element.set("borderFillIDRef", str(value))
+        self.section.mark_modified()
+
+    def set_page_break(self, value: str) -> None:
+        self.element.set("pageBreak", value)
+        self.section.mark_modified()
+
+    def set_repeat_header(self, value: bool) -> None:
+        self.element.set("repeatHeader", "1" if value else "0")
+        self.section.mark_modified()
 
     def append_row(self) -> list[TableCellXml]:
         rows = self.element.xpath("./hp:tr", namespaces=NS)
@@ -831,6 +988,12 @@ class PictureXml:
     def image_adjustment(self) -> dict[str, str]:
         return _image_adjustment(self.element)
 
+    def crop(self) -> dict[str, int]:
+        return _crop_values(self.element)
+
+    def line_style(self) -> dict[str, str]:
+        return _line_style(self.element)
+
     def set_layout(
         self,
         *,
@@ -924,6 +1087,50 @@ class PictureXml:
         alpha: int | str | None = None,
     ) -> None:
         _set_image_adjustment(self.element, bright=bright, contrast=contrast, effect=effect, alpha=alpha)
+        self.section.mark_modified()
+
+    def set_crop(
+        self,
+        *,
+        left: int | str | None = None,
+        right: int | str | None = None,
+        top: int | str | None = None,
+        bottom: int | str | None = None,
+    ) -> None:
+        _set_crop_values(self.element, left=left, right=right, top=top, bottom=bottom)
+        self.section.mark_modified()
+
+    def set_line_style(
+        self,
+        *,
+        color: str | None = None,
+        width: int | str | None = None,
+        style: str | None = None,
+        end_cap: str | None = None,
+        head_style: str | None = None,
+        tail_style: str | None = None,
+        head_fill: bool | None = None,
+        tail_fill: bool | None = None,
+        head_size: str | None = None,
+        tail_size: str | None = None,
+        outline_style: str | None = None,
+        alpha: int | str | None = None,
+    ) -> None:
+        _set_line_style(
+            self.element,
+            color=color,
+            width=width,
+            style=style,
+            end_cap=end_cap,
+            head_style=head_style,
+            tail_style=tail_style,
+            head_fill=head_fill,
+            tail_fill=tail_fill,
+            head_size=head_size,
+            tail_size=tail_size,
+            outline_style=outline_style,
+            alpha=alpha,
+        )
         self.section.mark_modified()
 
 
@@ -1378,6 +1585,10 @@ class NoteXml:
             ],
         )
 
+    def set_number(self, value: int | str) -> None:
+        self.element.set("number", str(value))
+        self.section.mark_modified()
+
 
 @dataclass
 class BookmarkXml:
@@ -1557,6 +1768,18 @@ class FieldXml:
         self.set_name(bookmark_name)
         self.set_parameter("BookmarkName", bookmark_name)
         self.set_parameter("Path", bookmark_name)
+        if display_text is not None:
+            self.set_display_text(display_text)
+
+    def configure_doc_property(self, property_name: str, *, display_text: str | None = None) -> None:
+        self.set_field_type("DOCPROPERTY")
+        self.set_name(property_name)
+        self.set_parameter("FieldName", property_name)
+        if display_text is not None:
+            self.set_display_text(display_text)
+
+    def configure_date(self, *, display_text: str | None = None) -> None:
+        self.set_field_type("DATE")
         if display_text is not None:
             self.set_display_text(display_text)
 

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import io
+import mimetypes
 import os
 import re
 import shutil
@@ -126,6 +127,13 @@ _GRAPHIC_CONTROL_TAGS = (
 
 def _graphic_attribute_xpath(attribute: str) -> str:
     return " | ".join(f".//hp:{tag}/@{attribute}" for tag in _GRAPHIC_CONTROL_TAGS)
+
+
+def _expected_binary_media_type(path: str) -> str | None:
+    suffix = PurePosixPath(path).suffix.lower()
+    if suffix == ".ole":
+        return "application/ole"
+    return mimetypes.guess_type(PurePosixPath(path).name)[0]
 
 
 def _build_blank_version_part() -> VersionPart:
@@ -950,8 +958,6 @@ class HwpxDocument:
         manifest_id: str | None = None,
         is_embedded: bool | int | str = True,
     ) -> BinaryDataPart:
-        import mimetypes
-
         normalized_name = PurePosixPath(name).name
         part_path = f"BinData/{normalized_name}"
         if part_path in self._parts:
@@ -2659,6 +2665,149 @@ class HwpxDocument:
             return [_issue("save_reopen_validation", str(exc))]
         finally:
             self._cleanup_temp_dir(temp_dir)
+
+    def strict_lint_errors(self) -> list[ValidationIssue]:
+        errors = list(self.reference_validation_errors())
+
+        ordered_paths = self.list_part_paths()
+        if ordered_paths and ordered_paths[0] != "mimetype":
+            errors.append(
+                _issue(
+                    "mimetype_packaging",
+                    "mimetype must be the first package entry",
+                    part_path="mimetype",
+                )
+            )
+
+        mimetype_info = self._zip_infos.get("mimetype")
+        if mimetype_info is not None and mimetype_info.compress_type != zipfile.ZIP_STORED:
+            errors.append(
+                _issue(
+                    "mimetype_packaging",
+                    "mimetype must be stored without compression",
+                    part_path="mimetype",
+                )
+            )
+
+        if not self.is_distribution_protected:
+            style_ids = {style.style_id for style in self.styles() if style.style_id is not None}
+            para_pr_ids = {style.style_id for style in self.paragraph_styles() if style.style_id is not None}
+            char_pr_ids = {style.style_id for style in self.character_styles() if style.style_id is not None}
+            for section_index, section in enumerate(self.sections):
+                paragraphs = section.root_element.xpath(".//hp:p", namespaces=NS)
+                for paragraph_index, paragraph in enumerate(paragraphs):
+                    if style_ids and not paragraph.get("styleIDRef"):
+                        errors.append(
+                            _issue(
+                                "style_binding",
+                                "paragraph is missing styleIDRef",
+                                part_path=section.path,
+                                section_index=section_index,
+                                paragraph_index=paragraph_index,
+                            )
+                        )
+                    if para_pr_ids and not paragraph.get("paraPrIDRef"):
+                        errors.append(
+                            _issue(
+                                "style_binding",
+                                "paragraph is missing paraPrIDRef",
+                                part_path=section.path,
+                                section_index=section_index,
+                                paragraph_index=paragraph_index,
+                            )
+                        )
+                    for run_index, run in enumerate(paragraph.xpath("./hp:run", namespaces=NS)):
+                        if char_pr_ids and not run.get("charPrIDRef"):
+                            errors.append(
+                                _issue(
+                                    "style_binding",
+                                    "run is missing charPrIDRef",
+                                    part_path=section.path,
+                                    section_index=section_index,
+                                    paragraph_index=paragraph_index,
+                                    context=f"run[{run_index}]",
+                                )
+                            )
+
+        binary_part_paths = {
+            path
+            for path, part in self._parts.items()
+            if path.startswith("BinData/") and isinstance(part, BinaryDataPart)
+        }
+        manifest_binary_items: dict[str, etree._Element] = {}
+        manifest_binary_hrefs: set[str] = set()
+        for item in self.content_hpf.manifest_items():
+            item_id = item.get("id")
+            href = item.get("href")
+            if not item_id or not href:
+                continue
+            normalized_href = _normalize_path(href)
+            if not normalized_href.startswith("BinData/"):
+                continue
+            manifest_binary_items[item_id] = item
+            manifest_binary_hrefs.add(normalized_href)
+            expected_media_type = _expected_binary_media_type(normalized_href)
+            actual_media_type = item.get("media-type")
+            if expected_media_type and actual_media_type and actual_media_type.lower() != expected_media_type.lower():
+                errors.append(
+                    _issue(
+                        "binary_media_type",
+                        f"manifest media-type {actual_media_type} does not match expected {expected_media_type} for {normalized_href}",
+                        part_path="Contents/content.hpf",
+                        context=f"manifest id={item_id}",
+                    )
+                )
+
+        for part_path in sorted(binary_part_paths - manifest_binary_hrefs):
+            errors.append(
+                _issue(
+                    "binary_closure",
+                    f"BinData part is not referenced by content.hpf manifest: {part_path}",
+                    part_path=part_path,
+                )
+            )
+
+        referenced_binary_item_ids: set[str] = set()
+        for section in self.sections:
+            values = section.root_element.xpath(
+                ".//hc:img/@binaryItemIDRef | " + _graphic_attribute_xpath("binaryItemIDRef"),
+                namespaces=NS,
+            )
+            referenced_binary_item_ids.update(str(value) for value in values if str(value).strip())
+
+        for item_id, item in manifest_binary_items.items():
+            href = _normalize_path(item.get("href") or "")
+            if item_id not in referenced_binary_item_ids:
+                errors.append(
+                    _issue(
+                        "binary_closure",
+                        f"manifest binary item is not referenced by any control: {item_id}",
+                        part_path="Contents/content.hpf",
+                        context=f"href={href}",
+                    )
+                )
+
+        for item_id in sorted(referenced_binary_item_ids):
+            item = manifest_binary_items.get(item_id)
+            if item is None:
+                continue
+            href = _normalize_path(item.get("href") or "")
+            if not href.startswith("BinData/"):
+                errors.append(
+                    _issue(
+                        "binary_closure",
+                        f"binaryItemIDRef {item_id} must resolve to a BinData part, got {href}",
+                        part_path="Contents/content.hpf",
+                        context=f"manifest id={item_id}",
+                    )
+                )
+
+        return errors
+
+    def strict_validate(self) -> None:
+        errors = self.strict_lint_errors()
+        if errors:
+            raise HwpxValidationError(errors)
 
     def _ensure_editable_sections(self) -> None:
         if self.sections:

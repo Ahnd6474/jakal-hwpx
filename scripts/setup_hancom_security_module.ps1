@@ -15,13 +15,21 @@ function Get-RepoRoot {
     return Split-Path -Parent $PSScriptRoot
 }
 
+function Get-DefaultInstallRoot {
+    $localAppData = [Environment]::GetFolderPath("LocalApplicationData")
+    if (-not [string]::IsNullOrWhiteSpace($localAppData)) {
+        return Join-Path $localAppData "jakal-hwpx\hancom-security"
+    }
+    return Join-Path (Get-RepoRoot) ".codex-temp\hancom-security"
+}
+
 function Resolve-InstallRoot {
     param([string]$RequestedRoot)
 
     if (-not [string]::IsNullOrWhiteSpace($RequestedRoot)) {
         return [System.IO.Path]::GetFullPath($RequestedRoot)
     }
-    return Join-Path (Get-RepoRoot) ".codex-temp\hancom-security"
+    return Get-DefaultInstallRoot
 }
 
 function Get-ExpandedModulePath {

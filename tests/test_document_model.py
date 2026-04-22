@@ -1,14 +1,29 @@
 from __future__ import annotations
 
 import base64
+import zipfile
 from pathlib import Path
 
 import pytest
 
-from jakal_hwpx import BinaryDataPart, ContentHpfPart, HeaderPart, HwpxDocument, OleXml, PreviewTextPart, SectionPart, ValidationIssue
+from jakal_hwpx import (
+    BinaryDataPart,
+    ContentHpfPart,
+    HeaderPart,
+    HwpxDocument,
+    HwpxValidationError,
+    OleXml,
+    PreviewTextPart,
+    SectionPart,
+    ValidationIssue,
+)
 
 
 HEAD_NS = {"hh": "http://www.hancom.co.kr/hwpml/2011/head", "hc": "http://www.hancom.co.kr/hwpml/2011/core"}
+PARA_NS = {
+    "hp": "http://www.hancom.co.kr/hwpml/2011/paragraph",
+    "hc": "http://www.hancom.co.kr/hwpml/2011/core",
+}
 REPO_ROOT = Path(__file__).resolve().parents[1]
 OLE_SAMPLE_PATH = REPO_ROOT / "ole_test.hwpx"
 UNICODE_STRESS_TEXT = "안성민은 자칼이다つㄹשׁשׁㄹㅇㄹㅇ 😱🎅🏦🌩⏩💵🔥"
@@ -303,6 +318,7 @@ def test_low_level_authoring_roundtrip(tmp_path: Path) -> None:
     picture.set_size(width=3333, height=4444, original_width=5555, original_height=6666, current_width=3333, current_height=4444)
     picture.set_rotation(angle=15, center_x=111, center_y=222, rotate_image=False)
     picture.set_image_adjustment(bright=5, contrast=6, effect="GRAY_SCALE", alpha=7)
+    picture.set_crop(left=1, right=2222, top=2, bottom=3333)
 
     shape = document.append_shape(kind="rect", text="shape", width=5000, height=2000)
     shape.set_size(width=5100, height=2200, original_width=5300, original_height=2400, current_width=5100, current_height=2200)
@@ -356,9 +372,12 @@ def test_low_level_authoring_roundtrip(tmp_path: Path) -> None:
     assert reopened_picture.rotation()["angle"] == "15"
     assert reopened_picture.rotation()["rotateimage"] == "0"
     assert reopened_picture.image_adjustment() == {"bright": "5", "contrast": "6", "effect": "GRAY_SCALE", "alpha": "7"}
+    assert reopened_picture.crop() == {"left": 1, "right": 2222, "top": 2, "bottom": 3333}
 
     assert reopened_shape.size() == {"width": 5100, "height": 2200}
     assert reopened_shape.rotation()["angle"] == "25"
+    assert reopened_shape.rotation()["centerX"] == "333"
+    assert reopened_shape.rotation()["centerY"] == "444"
     assert reopened_shape.line_style()["color"] == "#112233"
     assert reopened_shape.line_style()["width"] == "55"
     assert reopened_shape.fill_style() == {"faceColor": "#ABCDEF", "hatchColor": "#123456", "alpha": "11"}
@@ -641,3 +660,40 @@ def test_validation_errors_return_structured_issues() -> None:
     assert "Missing required part" in missing_header.message
     assert missing_header.to_dict()["code"] == "missing_part"
     assert missing_header.to_dict()["part_path"] == "Contents/header.xml"
+
+
+def test_strict_lint_reports_llm_prone_hwpx_package_issues() -> None:
+    document = HwpxDocument()
+    first_paragraph = document.sections[0].root_element.xpath("./hp:p", namespaces=PARA_NS)[0]
+    first_run = first_paragraph.xpath("./hp:run", namespaces=PARA_NS)[0]
+    first_run.attrib.pop("charPrIDRef", None)
+
+    document.add_part("BinData/orphan.bin", b"ORPHAN-BINARY")
+    document.add_or_replace_binary(
+        "manifest-only.png",
+        b"MANIFEST-ONLY",
+        media_type="image/jpeg",
+        manifest_id="manifest_only_png",
+    )
+
+    mimetype_info = zipfile.ZipInfo("mimetype")
+    mimetype_info.compress_type = zipfile.ZIP_DEFLATED
+    document._zip_infos["mimetype"] = mimetype_info
+    document._part_order = [path for path in document._part_order if path != "mimetype"] + ["mimetype"]
+
+    issues = document.strict_lint_errors()
+    issue_codes = {issue.code for issue in issues}
+    issue_messages = "\n".join(issue.message for issue in issues)
+
+    assert "style_binding" in issue_codes
+    assert "binary_closure" in issue_codes
+    assert "binary_media_type" in issue_codes
+    assert "mimetype_packaging" in issue_codes
+    assert "run is missing charPrIDRef" in issue_messages
+    assert "BinData part is not referenced by content.hpf manifest: BinData/orphan.bin" in issue_messages
+    assert "manifest binary item is not referenced by any control: manifest_only_png" in issue_messages
+    assert "mimetype must be the first package entry" in issue_messages
+    assert "mimetype must be stored without compression" in issue_messages
+
+    with pytest.raises(HwpxValidationError):
+        document.strict_validate()

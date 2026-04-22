@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import subprocess
 from pathlib import Path
 
@@ -12,6 +13,13 @@ DEFAULT_SECURITY_REGISTRY_ROOT = r"HKCU:\SOFTWARE\HNC\HwpAutomation\Modules"
 
 def _repo_root() -> Path:
     return Path(__file__).resolve().parents[2]
+
+
+def _default_security_module_install_root() -> Path:
+    local_app_data = os.environ.get("LOCALAPPDATA")
+    if local_app_data:
+        return Path(local_app_data) / "jakal-hwpx" / "hancom-security"
+    return _repo_root() / ".codex-temp" / "hancom-security"
 
 
 def _smoke_script_path() -> Path:
@@ -27,12 +35,24 @@ def convert_document(
     allow_existing_hwp_processes: bool = True,
     security_module_name: str = DEFAULT_SECURITY_MODULE_NAME,
     security_module_path: str = "",
+    security_module_install_root: str | Path | None = None,
     security_registry_root: str = DEFAULT_SECURITY_REGISTRY_ROOT,
     skip_security_module_registration: bool = False,
 ) -> Path:
+    if skip_security_module_registration:
+        raise HancomInteropError(
+            "Skipping Hancom security module registration is disabled. "
+            "Remove skip_security_module_registration=True."
+        )
+
     resolved_input = Path(input_path).expanduser().resolve()
     resolved_output = Path(output_path).expanduser().resolve()
     resolved_output.parent.mkdir(parents=True, exist_ok=True)
+    resolved_install_root = (
+        Path(security_module_install_root).expanduser().resolve()
+        if security_module_install_root
+        else _default_security_module_install_root().resolve()
+    )
 
     script_path = _smoke_script_path()
     if not script_path.exists():
@@ -54,6 +74,8 @@ def convert_document(
         str(timeout_seconds),
         "-SecurityModuleName",
         security_module_name,
+        "-SecurityModuleInstallRoot",
+        str(resolved_install_root),
         "-SecurityRegistryRoot",
         security_registry_root,
     ]
@@ -61,8 +83,6 @@ def convert_document(
         command.append("-AllowExistingHwpProcesses")
     if security_module_path:
         command.extend(["-SecurityModulePath", security_module_path])
-    if skip_security_module_registration:
-        command.append("-SkipSecurityModuleRegistration")
 
     completed = subprocess.run(
         command,

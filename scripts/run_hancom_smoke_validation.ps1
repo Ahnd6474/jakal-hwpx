@@ -10,6 +10,7 @@ param(
     [string[]]$AllowButtons = @(),
     [string]$SecurityModuleName = "FilePathCheckerModuleExample",
     [string]$SecurityModulePath = "",
+    [string]$SecurityModuleInstallRoot = "",
     [string]$SecurityRegistryRoot = "HKCU:\SOFTWARE\HNC\HwpAutomation\Modules",
     [switch]$SkipSecurityModuleRegistration,
     [switch]$AllowExistingHwpProcesses
@@ -120,26 +121,95 @@ function Get-RepoRoot {
     return Split-Path -Parent $PSScriptRoot
 }
 
+function Get-DefaultSecurityModuleInstallRoot {
+    $localAppData = [Environment]::GetFolderPath("LocalApplicationData")
+    if (-not [string]::IsNullOrWhiteSpace($localAppData)) {
+        return Join-Path $localAppData "jakal-hwpx\hancom-security"
+    }
+    return Join-Path (Get-RepoRoot) ".codex-temp\hancom-security"
+}
+
+function Resolve-SecurityModuleInstallRoot {
+    param([string]$RequestedRoot)
+
+    if (-not [string]::IsNullOrWhiteSpace($RequestedRoot)) {
+        return [System.IO.Path]::GetFullPath($RequestedRoot)
+    }
+    return Get-DefaultSecurityModuleInstallRoot
+}
+
+function Get-ExpandedSecurityModulePath {
+    param(
+        [string]$Root,
+        [string]$ModuleName
+    )
+
+    return Join-Path $Root ("expanded\{0}.dll" -f $ModuleName)
+}
+
 function Resolve-SecurityModulePath {
     param(
         [string]$RequestedPath,
-        [string]$ModuleName
+        [string]$ModuleName,
+        [string]$InstallRoot
     )
 
     if (-not [string]::IsNullOrWhiteSpace($RequestedPath)) {
         return [System.IO.Path]::GetFullPath($RequestedPath)
     }
 
+    $resolvedInstallRoot = Resolve-SecurityModuleInstallRoot -RequestedRoot $InstallRoot
+    $defaultInstallRoot = Get-DefaultSecurityModuleInstallRoot
+    $repoFallback = Join-Path (Get-RepoRoot) (".codex-temp\hancom-security\expanded\{0}.dll" -f $ModuleName)
     $candidates = @(
-        (Join-Path (Get-RepoRoot) (".codex-temp\hancom-security\expanded\{0}.dll" -f $ModuleName)),
-        (Join-Path $env:LOCALAPPDATA ("jakal-hwpx\hancom-security\{0}.dll" -f $ModuleName))
-    )
+        (Get-ExpandedSecurityModulePath -Root $resolvedInstallRoot -ModuleName $ModuleName),
+        (Get-ExpandedSecurityModulePath -Root $defaultInstallRoot -ModuleName $ModuleName),
+        $repoFallback
+    ) | Select-Object -Unique
     foreach ($candidate in $candidates) {
         if (Test-Path $candidate) {
             return [System.IO.Path]::GetFullPath($candidate)
         }
     }
     return ""
+}
+
+function Invoke-SecurityModuleSetup {
+    param(
+        [string]$ModuleName,
+        [string]$ModulePath,
+        [string]$InstallRoot,
+        [string]$RegistryRoot
+    )
+
+    $setupScript = Join-Path $PSScriptRoot "setup_hancom_security_module.ps1"
+    if (-not (Test-Path $setupScript)) {
+        throw "Hancom security module setup script was not found: $setupScript"
+    }
+
+    $resolvedInstallRoot = Resolve-SecurityModuleInstallRoot -RequestedRoot $InstallRoot
+    $resolvedExistingPath = Resolve-SecurityModulePath -RequestedPath $ModulePath -ModuleName $ModuleName -InstallRoot $resolvedInstallRoot
+    $setupArgs = @{
+        ModuleName = $ModuleName
+        RegistryRoot = $RegistryRoot
+        InstallRoot = $resolvedInstallRoot
+    }
+
+    if (-not [string]::IsNullOrWhiteSpace($ModulePath)) {
+        $setupArgs["ModulePath"] = [System.IO.Path]::GetFullPath($ModulePath)
+    }
+    elseif (-not [string]::IsNullOrWhiteSpace($resolvedExistingPath)) {
+        $setupArgs["ModulePath"] = $resolvedExistingPath
+    }
+    else {
+        $setupArgs["DownloadIfMissing"] = $true
+    }
+
+    $setupResult = & $setupScript @setupArgs
+    if ($setupResult -is [System.Array]) {
+        return $setupResult[-1]
+    }
+    return $setupResult
 }
 
 function Ensure-SecurityModuleRegistry {
@@ -169,6 +239,22 @@ function Get-HancomComObject {
     catch {
     }
     return New-Object -ComObject HWPFrame.HwpObject
+}
+
+function Test-TruthyResult {
+    param([object]$Value)
+
+    if ($null -eq $Value) {
+        return $false
+    }
+    if ($Value -is [bool]) {
+        return [bool]$Value
+    }
+    $stringValue = [string]$Value
+    if ([string]::IsNullOrWhiteSpace($stringValue)) {
+        return $false
+    }
+    return ($stringValue -ne "0" -and $stringValue.ToLowerInvariant() -ne "false")
 }
 
 function Get-HancomProcessSnapshot {
@@ -378,6 +464,7 @@ function Invoke-HancomSmokeValidation {
         [string[]]$AllowButtons,
         [string]$SecurityModuleName,
         [string]$SecurityModulePath,
+        [string]$SecurityModuleInstallRoot,
         [string]$SecurityRegistryRoot,
         [switch]$SkipSecurityModuleRegistration,
         [switch]$AllowExistingHwpProcesses
@@ -385,9 +472,12 @@ function Invoke-HancomSmokeValidation {
 
     Add-WindowInterop
 
+    if ($SkipSecurityModuleRegistration) {
+        throw "Skipping Hancom security module registration is disabled. Remove -SkipSecurityModuleRegistration."
+    }
+
     $resolvedInput = (Resolve-Path -LiteralPath $InputPath).Path
     $resolvedOutput = [System.IO.Path]::GetFullPath($OutputPath)
-    $resolvedSecurityModulePath = Resolve-SecurityModulePath -RequestedPath $SecurityModulePath -ModuleName $SecurityModuleName
     $logTarget = if ([string]::IsNullOrWhiteSpace($LogPath)) {
         Join-Path ([System.IO.Path]::GetDirectoryName($resolvedOutput)) "hancom-dialog-log.json"
     } else {
@@ -444,15 +534,27 @@ function Invoke-HancomSmokeValidation {
     }
 
     try {
-        if (-not $SkipSecurityModuleRegistration) {
-            $registryEntry = Ensure-SecurityModuleRegistry -ModuleName $SecurityModuleName -ModulePath $resolvedSecurityModulePath -RegistryRoot $SecurityRegistryRoot
-            $entries.Add((New-LogEntry -Kind "security_module_registry" -Data @{
-                moduleName = $SecurityModuleName
-                modulePath = $resolvedSecurityModulePath
-                registryRoot = $SecurityRegistryRoot
-                registryValue = $registryEntry.$SecurityModuleName
-            })) | Out-Null
+        $setupResult = Invoke-SecurityModuleSetup -ModuleName $SecurityModuleName -ModulePath $SecurityModulePath -InstallRoot $SecurityModuleInstallRoot -RegistryRoot $SecurityRegistryRoot
+        $resolvedSecurityModulePath = [string]$setupResult.ModulePath
+        if ([string]::IsNullOrWhiteSpace($resolvedSecurityModulePath)) {
+            $resolvedSecurityModulePath = Resolve-SecurityModulePath -RequestedPath $SecurityModulePath -ModuleName $SecurityModuleName -InstallRoot $SecurityModuleInstallRoot
         }
+        $entries.Add((New-LogEntry -Kind "security_module_setup" -Data @{
+            moduleName = $SecurityModuleName
+            modulePath = $resolvedSecurityModulePath
+            installRoot = [string]$setupResult.InstallRoot
+            registryRoot = $SecurityRegistryRoot
+            registryValue = [string]$setupResult.RegistryValue
+            downloaded = [bool]$setupResult.Downloaded
+        })) | Out-Null
+
+        $registryEntry = Ensure-SecurityModuleRegistry -ModuleName $SecurityModuleName -ModulePath $resolvedSecurityModulePath -RegistryRoot $SecurityRegistryRoot
+        $entries.Add((New-LogEntry -Kind "security_module_registry" -Data @{
+            moduleName = $SecurityModuleName
+            modulePath = $resolvedSecurityModulePath
+            registryRoot = $SecurityRegistryRoot
+            registryValue = $registryEntry.$SecurityModuleName
+        })) | Out-Null
 
         $hwp = Get-HancomComObject
         $entries.Add((New-LogEntry -Kind "com" -Data @{ message = "Created HWPFrame.HwpObject" })) | Out-Null
@@ -464,13 +566,14 @@ function Invoke-HancomSmokeValidation {
             $entries.Add((New-LogEntry -Kind "messagebox_mode_error" -Data @{ message = $_.Exception.Message })) | Out-Null
         }
 
-        if (-not $SkipSecurityModuleRegistration) {
-            $registerResult = $hwp.RegisterModule("FilePathCheckDLL", $SecurityModuleName)
-            $entries.Add((New-LogEntry -Kind "register_module" -Data @{
-                moduleType = "FilePathCheckDLL"
-                moduleName = $SecurityModuleName
-                result = [string]$registerResult
-            })) | Out-Null
+        $registerResult = $hwp.RegisterModule("FilePathCheckDLL", $SecurityModuleName)
+        $entries.Add((New-LogEntry -Kind "register_module" -Data @{
+            moduleType = "FilePathCheckDLL"
+            moduleName = $SecurityModuleName
+            result = [string]$registerResult
+        })) | Out-Null
+        if (-not (Test-TruthyResult -Value $registerResult)) {
+            throw "Hancom RegisterModule(FilePathCheckDLL, $SecurityModuleName) failed."
         }
 
         $openResult = $hwp.Open($resolvedInput, "", "")
@@ -517,4 +620,4 @@ if ([string]::IsNullOrWhiteSpace($OutputPath)) {
 }
 
  $AllowButtons = Resolve-AllowButtons -Buttons $AllowButtons
-Invoke-HancomSmokeValidation -InputPath $InputPath -OutputPath $OutputPath -TimeoutSeconds $TimeoutSeconds -PollMilliseconds $PollMilliseconds -LogPath $LogPath -AllowButtons $AllowButtons -SecurityModuleName $SecurityModuleName -SecurityModulePath $SecurityModulePath -SecurityRegistryRoot $SecurityRegistryRoot -SkipSecurityModuleRegistration:$SkipSecurityModuleRegistration -AllowExistingHwpProcesses:$AllowExistingHwpProcesses
+Invoke-HancomSmokeValidation -InputPath $InputPath -OutputPath $OutputPath -TimeoutSeconds $TimeoutSeconds -PollMilliseconds $PollMilliseconds -LogPath $LogPath -AllowButtons $AllowButtons -SecurityModuleName $SecurityModuleName -SecurityModulePath $SecurityModulePath -SecurityModuleInstallRoot $SecurityModuleInstallRoot -SecurityRegistryRoot $SecurityRegistryRoot -SkipSecurityModuleRegistration:$SkipSecurityModuleRegistration -AllowExistingHwpProcesses:$AllowExistingHwpProcesses
