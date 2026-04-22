@@ -1,71 +1,63 @@
 # jakal-hwpx
 
-Read, edit, validate, and convert HWPX and native HWP documents in Python.
+파이썬에서 HWPX와 HWP 문서를 읽고, 수정하고, 검증하고, 변환하는 라이브러리입니다.
 
-`jakal-hwpx` gives you three working surfaces:
+이 프로젝트는 한컴 GUI를 그대로 흉내 내는 편집기가 아닙니다. 대신 코드로 문서를 만들고, 구조화된 내용을 바꾸고, 저장 전후를 검증하는 데 초점을 둡니다. 템플릿 생성, 대량 치환, 표/필드/머리말/꼬리말 수정 같은 자동화 작업에 잘 맞습니다.
 
-- `HwpxDocument` for direct HWPX authoring and editing
-- `HwpDocument` for native HWP read/write and object-level editing
-- `HancomDocument` for a common HWP/HWPX bridge model
+## 목차
 
-Normal use is pure Python. An installed Hancom application is optional and only used for smoke validation scripts.
+- [설치](#설치)
+- [빠른 시작](#빠른-시작)
+- [이 라이브러리로 할 수 있는 일](#이-라이브러리로-할-수-있는-일)
+- [어떤 객체를 쓰면 되는가](#어떤-객체를-쓰면-되는가)
+- [지원 범위](#지원-범위)
+- [주요 API](#주요-api)
+- [예제](#예제)
+- [검증과 테스트](#검증과-테스트)
+- [추가 문서](#추가-문서)
+- [라이선스](#라이선스)
 
-## Table of contents
+## 설치
 
-- [Installation](#installation)
-- [Quick start](#quick-start)
-- [What it is](#what-it-is)
-- [Why use it](#why-use-it)
-- [Main entry points](#main-entry-points)
-- [Support matrix](#support-matrix)
-- [API overview](#api-overview)
-- [Examples](#examples)
-- [Testing and validation](#testing-and-validation)
-- [Further reading](#further-reading)
-- [License](#license)
+요구 사항:
 
-## Installation
+- Python 3.11 이상
+- Git LFS 불필요
 
-Requirements:
-
-- Python 3.11 or newer
-- No Git LFS setup
-
-Install from PyPI:
+PyPI에서 설치:
 
 ```bash
 python -m pip install --upgrade pip
 python -m pip install jakal-hwpx
 ```
 
-Install from a local checkout:
+로컬 체크아웃에서 설치:
 
 ```bash
 python -m pip install --upgrade pip
 python -m pip install .
 ```
 
-Install with development dependencies:
+개발 의존성까지 설치:
 
 ```bash
 python -m pip install -e .[dev]
 ```
 
-Package name: `jakal-hwpx`  
-Import path: `jakal_hwpx`
+패키지 이름은 `jakal-hwpx`, import 경로는 `jakal_hwpx`입니다.
 
-## Quick start
+## 빠른 시작
 
-Use `HancomDocument` when you want one editing model that can write both formats:
+새 문서를 만들고 HWPX와 HWP 둘 다 저장하려면 `HancomDocument`가 가장 단순합니다.
 
 ```python
 from jakal_hwpx import HancomDocument
 
 doc = HancomDocument.blank()
-doc.metadata.title = "Quarterly report"
+doc.metadata.title = "분기 보고서"
 
-doc.append_header("Internal")
-doc.append_paragraph("Revenue summary")
+doc.append_header("사내 배포용")
+doc.append_paragraph("매출 요약")
 doc.append_table(rows=2, cols=2, cell_texts=[["Q1", "Q2"], ["120", "135"]])
 doc.append_equation("x+y", width=3200, height=1800)
 
@@ -73,7 +65,7 @@ doc.write_to_hwpx("build/report.hwpx")
 doc.write_to_hwp("build/report.hwp")
 ```
 
-If you are only working with HWPX, `HwpxDocument` is the simplest path:
+HWPX만 직접 만질 거라면 `HwpxDocument`가 가장 짧습니다.
 
 ```python
 from jakal_hwpx import HwpxDocument
@@ -84,96 +76,119 @@ doc.append_paragraph("Hello HWPX")
 doc.save("build/hello.hwpx")
 ```
 
-## What it is
+기존 HWP를 바로 수정하려면 `HwpDocument`를 쓰면 됩니다.
 
-`jakal-hwpx` is a document editing library for Hancom formats. It covers direct HWPX editing, native HWP editing, and pure-Python bridge workflows between the two.
+```python
+from jakal_hwpx import HwpDocument
 
-The project is not trying to mimic Hancom's GUI. The focus is programmatic editing: generating documents, changing structured content, preserving supported controls through round trips, and validating the result before you save it.
+doc = HwpDocument.open("input.hwp")
+doc.append_paragraph("추가 문단")
+doc.append_hyperlink("https://example.com", text="Example")
+doc.strict_validate()
+doc.save("build/edited.hwp")
+```
 
-The stable compatibility target is the top-level `jakal_hwpx` import surface. Internal module paths such as `jakal_hwpx.document` or `jakal_hwpx.parts` are implementation details and may move.
+## 이 라이브러리로 할 수 있는 일
 
-## Why use it
+- HWPX 문서를 직접 열고 수정하고 저장
+- HWP 문서를 순수 Python으로 열고 수정하고 저장
+- HWP와 HWPX를 `HancomDocument` 기준으로 오가며 같은 편집 모델로 다루기
+- 문단, 스타일, 표, 그림, 필드, 각주/미주, 머리말/꼬리말, 섹션 설정 같은 구조화된 요소 수정
+- 저장 전후에 엄격 검증과 왕복 테스트로 결과 확인
+- 필요하면 저수준 API로 내려가 HWP binary record를 직접 조사
 
-- You can edit HWPX directly without unpacking ZIP parts by hand.
-- You can read and write native HWP without depending on COM automation.
-- You can move between HWP and HWPX through `HancomDocument` when you want one editing model.
-- You get validation on both sides: strict HWPX package checks and strict HWP structure checks.
-- You can drop to lower-level APIs when you need typed record access instead of high-level editing helpers.
+이 라이브러리는 특히 이런 작업에 잘 맞습니다.
 
-## Main entry points
+- 문서 템플릿 생성
+- 필드 채우기
+- 대량 텍스트 치환
+- 표/도형/그림 데이터 갱신
+- 문서 포맷 변환 자동화
+- 저장 후 깨지지 않는지 확인하는 배치 처리
 
-| Entry point | Best for | Notes |
+## 어떤 객체를 쓰면 되는가
+
+처음 고를 때는 아래 표만 보면 됩니다.
+
+| 객체 | 언제 쓰면 좋은가 | 설명 |
 |---|---|---|
-| `HwpxDocument` | Direct HWPX authoring and editing | Fastest path when your input and output are both HWPX |
-| `HwpDocument` | Native HWP editing | Object wrappers for paragraphs, tables, fields, shapes, notes, section settings, and more |
-| `HancomDocument` | HWP/HWPX bridge workflows | Common IR for `read_hwp()`, `read_hwpx()`, `write_to_hwp()`, and `write_to_hwpx()` |
-| `HwpBinaryDocument` | Low-level native HWP work | Typed record access, section/docinfo models, stream-level reencode work |
+| `HancomDocument` | HWP와 HWPX를 같은 코드로 다루고 싶을 때 | 가장 권장되는 공통 편집 모델 |
+| `HwpxDocument` | 입력과 출력이 둘 다 HWPX일 때 | 가장 넓은 직접 편집 범위 |
+| `HwpDocument` | 기존 HWP를 직접 수정하거나 HWP로 저장할 때 | HWP 전용 객체 API |
+| `HwpHwpxBridge` | HWP/HWPX 사이를 오가며 한쪽 결과물을 재료로 다른 쪽을 만들 때 | 문서 전환을 묶는 도우미 객체 |
+| `HwpBinaryDocument` | binary record, stream, docinfo를 직접 봐야 할 때 | 가장 저수준 API |
 
-## Support matrix
+짧게 말하면:
 
-### Workflow support
+- 처음 시작: `HancomDocument`
+- HWPX만 편집: `HwpxDocument`
+- HWP 직접 편집: `HwpDocument`
+- reverse engineering이나 디버깅: `HwpBinaryDocument`
 
-| Flow | Current level | Best fit | Notes |
-|---|---|---|---|
-| `HWPX -> HWPX` | Excellent | Direct editing and generation | Broadest authoring surface |
-| `HWP -> HWP` | Strong | Native HWP editing and reencode | Most conservative path for existing HWP files |
-| `HWP -> HWPX` | Strong | Lifting native HWP into richer XML | Good semantic coverage with less normalization pressure |
-| `HWPX -> HWP` | Good | Generating native HWP from supported HWPX content | Most normalization happens here |
+## 지원 범위
 
-### Control-family support
+### 문서 흐름별 지원 수준
 
-Status legend:
+| 흐름 | 현재 수준 | 설명 |
+|---|---|---|
+| `HWPX -> HWPX` | 매우 좋음 | 가장 넓게 지원되는 직접 편집 경로 |
+| `HWP -> HWP` | 강함 | HWP 편집과 재인코드 안정성이 높음 |
+| `HWP -> HWPX` | 강함 | HWP를 더 풍부한 XML 구조로 올리는 경로 |
+| `HWPX -> HWP` | 좋음 | 지원된 편집 범위 기준으로 안정적이지만 정규화가 가장 많음 |
 
-- `Full`: high-level edit surface is in place and covered in roundtrip tests
-- `Strong`: supported and exercised, but with more native-format constraints
-- `Partial`: typed access or wrappers exist, but the edit surface is narrower
+### 컨트롤 패밀리별 지원 수준
 
-| Control family | `HWPX -> HWPX` | `HWP -> HWP` | `HWP -> HWPX` | `HWPX -> HWP` |
-|---|---|---:|---:|---:|
-| Paragraphs and styles | Full | Strong | Strong | Strong |
-| Header and footer | Full | Strong | Strong | Strong |
-| Fields, bookmarks, hyperlinks | Full | Strong | Strong | Strong |
-| Notes, auto numbers, page numbers | Full | Strong | Strong | Strong |
-| Section settings and page border fill | Full | Strong | Strong | Strong |
-| Tables | Full | Strong | Strong | Strong |
-| Pictures | Full | Strong | Strong | Strong |
-| Shapes and `connectLine` | Full | Strong | Strong | Strong |
-| Equations | Full | Strong | Strong | Strong |
-| OLE | Full | Strong | Strong | Strong |
-| Charts | Partial | Partial | Partial | Partial |
-| Form objects | Partial | Partial | Partial | Partial |
-| Memo and comment controls | Partial | Partial | Partial | Partial |
+표의 의미:
 
-### What "good" means here
+- `높음`: 고수준 수정 API가 있고 왕복 테스트가 붙어 있음
+- `중상`: 잘 되지만 포맷 제약이나 변환 정규화가 더 큼
+- `부분`: typed access나 wrapper는 있지만 수정 범위가 상대적으로 좁음
 
-This library is already useful for document automation. It is not a drop-in replacement for Hancom's GUI editor.
+| 항목 | `HWPX -> HWPX` | `HWP -> HWP` | `HWP -> HWPX` | `HWPX -> HWP` |
+|---|---:|---:|---:|---:|
+| 문단, 텍스트, 스타일 | 높음 | 높음 | 높음 | 높음 |
+| 머리말, 꼬리말 | 높음 | 높음 | 높음 | 중상 |
+| 필드, 북마크, 하이퍼링크 | 높음 | 높음 | 높음 | 높음 |
+| 각주, 미주, 자동번호, 페이지번호 | 높음 | 높음 | 높음 | 중상 |
+| 섹션 설정, page border fill, visibility | 높음 | 높음 | 높음 | 중상 |
+| 표 | 높음 | 중상 | 높음 | 중상 |
+| 그림 | 높음 | 중상 | 높음 | 중상 |
+| 도형, `connectLine` | 높음 | 중상 | 높음 | 중상 |
+| 수식 | 높음 | 중상 | 높음 | 중상 |
+| OLE | 높음 | 중상 | 높음 | 중상 |
+| 차트 | 부분 | 부분 | 부분 | 부분 |
+| form object | 부분 | 부분 | 부분 | 부분 |
+| memo/comment | 부분 | 부분 | 부분 | 부분 |
 
-If your job is:
+### 안정성에 대해
 
-- generate templates
-- fill fields
-- edit paragraphs
-- update tables
-- change section settings
-- preserve supported controls through save/reopen cycles
+이 프로젝트는 한컴 GUI보다 "자동화 자유도" 쪽이 강합니다. 즉, 사용자가 마우스로 아무 데나 들어가서 편집하는 범용 GUI 편집기 역할보다는, 코드로 반복 작업을 처리하고 저장 후 안정성을 확인하는 데 더 잘 맞습니다.
 
-then `jakal-hwpx` is in good shape.
+무변경 `HWP -> HWP` 재인코드 쪽은 lossless audit이 붙어 있고, 최근 기준으로 corpus 64건이 byte-identical입니다. 지원된 control 계열을 수정하고 다시 여는 경로도 회귀 테스트로 계속 잡고 있습니다.
 
-If your job is:
+## 주요 API
 
-- arbitrary WYSIWYG editing
-- every edge-case object Hancom can open
-- pixel-perfect behavior across rare vendor-specific controls
+### `HancomDocument`
 
-Hancom still has more freedom.
+가장 권장되는 공통 편집 모델입니다.
 
-## API overview
+주요 메서드:
+
+- `HancomDocument.blank()`
+- `HancomDocument.read_hwpx(path)`
+- `HancomDocument.read_hwp(path)`
+- `append_paragraph()`
+- `append_table()`, `append_picture()`, `append_shape()`, `append_equation()`, `append_ole()`
+- `append_field()`, `append_hyperlink()`, `append_bookmark()`, `append_note()`
+- `append_header()`, `append_footer()`
+- `write_to_hwpx(path)`
+- `write_to_hwp(path)`
 
 ### `HwpxDocument`
 
-Main direct-edit entry point for HWPX.
+HWPX를 직접 편집할 때 쓰는 주력 객체입니다.
 
-Common operations:
+주요 메서드:
 
 - `HwpxDocument.open(path)`
 - `HwpxDocument.blank()`
@@ -187,9 +202,9 @@ Common operations:
 
 ### `HwpDocument`
 
-Main native HWP editing surface.
+HWP 편집에 쓰는 주력 객체입니다.
 
-Common operations:
+주요 메서드:
 
 - `HwpDocument.open(path)`
 - `HwpDocument.blank()`
@@ -197,59 +212,64 @@ Common operations:
 - `append_table()`, `append_picture()`, `append_shape()`, `append_equation()`, `append_ole()`
 - `append_field()`, `append_hyperlink()`, `append_bookmark()`, `append_note()`
 - `append_header()`, `append_footer()`, `append_auto_number()`
-- `section(index)` and object wrappers such as `tables()`, `pictures()`, `fields()`, `notes()`
+- `tables()`, `pictures()`, `fields()`, `notes()`, `section(index)`
 - `strict_lint_errors()`, `strict_validate()`
-- `save(path)` for both `.hwp` and `.hwpx`
+- `save(path)`
 
-### `HancomDocument`
+### `HwpHwpxBridge`
 
-Common IR for HWP/HWPX bridge workflows.
+이미 가진 문서를 기준으로 HWP/HWPX/HancomDocument를 오가며 저장할 때 편리한 도우미 객체입니다.
 
-Common operations:
+주요 메서드:
 
-- `HancomDocument.blank()`
-- `HancomDocument.read_hwpx(path)`
-- `HancomDocument.read_hwp(path)`
-- `append_paragraph()`
-- `append_table()`, `append_picture()`, `append_shape()`, `append_equation()`, `append_ole()`
-- `append_field()`, `append_hyperlink()`, `append_bookmark()`, `append_note()`
-- `append_header()`, `append_footer()`
-- `write_to_hwpx(path)`
-- `write_to_hwp(path)`
+- `HwpHwpxBridge.open(path)`
+- `HwpHwpxBridge.from_hwp(source)`
+- `HwpHwpxBridge.from_hwpx(source)`
+- `hancom_document()`
+- `hwp_document()`
+- `hwpx_document()`
+- `save_hwp(path)`
+- `save_hwpx(path)`
+- `save(path)`
 
 ### `HwpBinaryDocument`
 
-Low-level native HWP entry point.
+가장 저수준의 HWP API입니다.
 
-Use it when you need typed record trees, `DocInfoModel`, `SectionModel`, or stream-level reencode work instead of high-level document editing.
+다음 상황에서 씁니다.
 
-## Examples
+- binary stream을 직접 보고 싶을 때
+- `DocInfoModel`, `SectionModel`을 다뤄야 할 때
+- reencode나 probe 작업을 할 때
+- 지원 매핑을 더 넓히기 위해 record tree를 조사할 때
 
-### Edit an existing HWPX file
+## 예제
+
+### HWPX 열고 수정 후 저장
 
 ```python
 from jakal_hwpx import HwpxDocument
 
 doc = HwpxDocument.open("input.hwpx")
-doc.replace_text("Draft", "Final")
-doc.append_paragraph("Approved for distribution")
+doc.replace_text("초안", "최종")
+doc.append_paragraph("승인 완료")
 doc.strict_validate()
 doc.save("build/edited.hwpx")
 ```
 
-### Edit an existing HWP file
+### HWP 열고 수정 후 저장
 
 ```python
 from jakal_hwpx import HwpDocument
 
 doc = HwpDocument.open("input.hwp")
-doc.append_paragraph("Bridge paragraph")
+doc.append_paragraph("추가 문단")
 doc.append_hyperlink("https://example.com", text="Example")
 doc.strict_validate()
 doc.save("build/edited.hwp")
 ```
 
-### Convert HWP to HWPX
+### HWP를 HWPX로 변환
 
 ```python
 from jakal_hwpx import HancomDocument
@@ -258,7 +278,7 @@ doc = HancomDocument.read_hwp("input.hwp")
 doc.write_to_hwpx("build/exported.hwpx")
 ```
 
-### Convert HWPX to HWP
+### HWPX를 HWP로 변환
 
 ```python
 from jakal_hwpx import HancomDocument
@@ -267,7 +287,17 @@ doc = HancomDocument.read_hwpx("input.hwpx")
 doc.write_to_hwp("build/exported.hwp")
 ```
 
-### Inspect native HWP records
+### bridge 도우미로 포맷 전환
+
+```python
+from jakal_hwpx import HwpHwpxBridge
+
+bridge = HwpHwpxBridge.open("input.hwp")
+bridge.save_hwpx("build/bridge.hwpx")
+bridge.save_hwp("build/bridge-copy.hwp")
+```
+
+### HWP record 살펴보기
 
 ```python
 from jakal_hwpx import HwpBinaryDocument
@@ -278,22 +308,22 @@ print(doc.docinfo_model().id_mappings_record().named_counts())
 print(doc.section_model(0).controls())
 ```
 
-## Testing and validation
+## 검증과 테스트
 
-Run the core test suite:
+기본 테스트:
 
 ```bash
 python -m pip install -e .[dev]
 python -m pytest -q
 ```
 
-Run the stability and release checks:
+release gate와 안정성 검사:
 
 ```bash
 python scripts/check_release.py
 ```
 
-Optional Hancom-based smoke validation on Windows:
+선택적 Hancom smoke validation:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File scripts/setup_hancom_security_module.ps1 -DownloadIfMissing
@@ -301,28 +331,30 @@ powershell -ExecutionPolicy Bypass -File scripts/run_hancom_smoke_validation.ps1
 powershell -ExecutionPolicy Bypass -File scripts/run_hancom_corpus_smoke_validation.ps1
 ```
 
-## Further reading
+일반적인 사용에선 pure Python 경로가 기본입니다. Hancom 쪽은 "정말 한컴에서 열어도 괜찮은지"를 추가로 확인할 때 쓰면 됩니다.
 
-- [HWPX_MODULE.md](./HWPX_MODULE.md) for package structure and API notes
-- [STABILITY_CONTRACT.md](./STABILITY_CONTRACT.md) for release criteria and non-goals
-- [scripts/check_release.py](./scripts/check_release.py) for the release gate
-- [scripts/audit_hwp_lossless_roundtrip.py](./scripts/audit_hwp_lossless_roundtrip.py) for HWP reencode audits
-- [scripts/run_bridge_stability_lab.py](./scripts/run_bridge_stability_lab.py) for bridge matrix runs
-- [examples/SHOWCASE.md](./examples/SHOWCASE.md) for generated document examples
-- [RELEASING.md](./RELEASING.md) for packaging and release steps
-- [THIRD_PARTY_NOTICES.md](./THIRD_PARTY_NOTICES.md) for sample document notices
+## 추가 문서
 
-Advanced tools are also exported at the top level:
+- [HWPX_MODULE.md](./HWPX_MODULE.md): 어떤 객체를 언제 써야 하는지 정리한 모듈 선택 가이드
+- [STABILITY_CONTRACT.md](./STABILITY_CONTRACT.md): 지원 범위와 release gate 기준
+- [scripts/check_release.py](./scripts/check_release.py): release gate 스크립트
+- [scripts/audit_hwp_lossless_roundtrip.py](./scripts/audit_hwp_lossless_roundtrip.py): HWP lossless reencode audit
+- [scripts/run_bridge_stability_lab.py](./scripts/run_bridge_stability_lab.py): HWP/HWPX bridge stability matrix
+- [examples/SHOWCASE.md](./examples/SHOWCASE.md): 생성 예시 모음
+- [RELEASING.md](./RELEASING.md): 배포 절차
+- [THIRD_PARTY_NOTICES.md](./THIRD_PARTY_NOTICES.md): 샘플 문서와 재배포 관련 고지
+
+고급 도구도 루트 import에서 바로 쓸 수 있습니다.
 
 - `build_hwp_pure_profile()`
 - `append_feature_from_profile()`
 - `run_template_lab()`
-- donor-scanning helpers from `hwp_collection`
+- `hwp_collection` donor scanning 도구
 
-Those are useful when you need template-backed native HWP authoring or corpus analysis, but they are not the main path for day-to-day document editing.
+이 도구들은 corpus 분석이나 template-backed HWP 작업에 유용하지만, 일반적인 앱 코드의 기본 진입점은 아닙니다.
 
-## License
+## 라이선스
 
-The project source code is licensed under [MIT](./LICENSE).
+프로젝트 소스 코드는 [MIT](./LICENSE) 라이선스를 따릅니다.
 
-Sample documents and generated outputs may have separate rights. Check [THIRD_PARTY_NOTICES.md](./THIRD_PARTY_NOTICES.md) before redistributing them.
+샘플 문서와 생성 결과물은 별도 권리를 가질 수 있습니다. 재배포 전에는 [THIRD_PARTY_NOTICES.md](./THIRD_PARTY_NOTICES.md)를 확인하세요.
