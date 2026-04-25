@@ -1155,6 +1155,30 @@ def test_hwp_strict_lint_reports_binary_and_control_subtree_issues(tmp_path: Pat
         document.strict_validate()
 
 
+def test_hwp_strict_lint_reports_docinfo_count_and_paragraph_references() -> None:
+    document = HwpDocument.blank()
+    docinfo_model = document.docinfo_model()
+    id_mappings = docinfo_model.id_mappings_record()
+    id_mappings.set_count(9, 0)
+    document.binary_document().replace_docinfo_model(docinfo_model)
+
+    section_model = document.section_model(0)
+    first_paragraph = section_model.paragraphs()[0]
+    first_paragraph.header.para_shape_id = len(document.docinfo_model().para_shape_records()) + 1
+    first_paragraph.header.style_id = len(document.docinfo_model().style_records()) + 1
+    document.binary_document().replace_section_model(0, section_model)
+
+    issues = document.strict_lint_errors()
+    issue_codes = {issue.code for issue in issues}
+    issue_messages = "\n".join(issue.message for issue in issues)
+
+    assert "docinfo_mapping" in issue_codes
+    assert "docinfo_reference" in issue_codes
+    assert "id_mappings.char_shapes=0 is smaller than actual char_shapes record count" in issue_messages
+    assert "Paragraph references missing para shape id" in issue_messages
+    assert "Paragraph references missing style id" in issue_messages
+
+
 def test_hwp_picture_ole_curve_container_and_table_richer_setters_roundtrip(tmp_path: Path) -> None:
     document = HwpDocument.blank()
     image_bytes = document.binary_document().read_stream("BinData/BIN0001.bmp", decompress=False)

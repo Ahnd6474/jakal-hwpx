@@ -494,6 +494,39 @@ def test_hancom_document_bridges_form_memo_and_chart_through_hwpx() -> None:
     assert restored_from_hwp.sections[0].settings.memo_shape_id == "0"
 
 
+def test_hancom_document_outputs_pass_strict_lint_for_both_formats(tmp_path: Path) -> None:
+    document = HancomDocument.blank()
+    document.metadata.title = "Strict parity"
+    document.append_header("internal")
+    document.append_paragraph("body")
+    document.append_table(rows=2, cols=2, cell_texts=[["A", "B"], ["1", "2"]])
+    document.append_bookmark("anchor")
+    document.append_cross_reference("anchor", display_text="see anchor")
+    document.append_form("Approval", form_type="INPUT", name="approval", value="pending", placeholder="status")
+    document.append_memo("review", author="QA", memo_id="memo-1", anchor_id="anchor-1", order=1, visible=True)
+    document.append_chart("Revenue", categories=["Q1"], series=[{"name": "Sales", "values": [10]}])
+
+    hwpx_path = tmp_path / "strict_parity.hwpx"
+    hwp_path = tmp_path / "strict_parity.hwp"
+    document.write_to_hwpx(hwpx_path)
+    document.write_to_hwp(hwp_path)
+
+    hwpx_document = HwpxDocument.open(hwpx_path)
+    hwp_document = HwpDocument.open(hwp_path)
+
+    assert hwpx_document.strict_lint_errors() == []
+    assert hwp_document.strict_lint_errors() == []
+
+    from_hwpx = HancomDocument.read_hwpx(hwpx_path)
+    from_hwp = HancomDocument.read_hwp(hwp_path)
+
+    assert [type(block).__name__ for block in from_hwpx.sections[0].blocks] == [
+        type(block).__name__ for block in from_hwp.sections[0].blocks
+    ]
+    assert any(isinstance(block, Chart) for block in from_hwp.sections[0].blocks)
+    assert any(isinstance(block, Form) for block in from_hwpx.sections[0].blocks)
+
+
 def test_hancom_document_pairs_hwpx_memo_carriers_by_text_before_index() -> None:
     source = HwpxDocument.blank()
     source.append_memo("Memo A", paragraph_index=0)

@@ -5,6 +5,7 @@ import zipfile
 from pathlib import Path
 
 import pytest
+from lxml import etree
 
 from jakal_hwpx import (
     BinaryDataPart,
@@ -17,6 +18,7 @@ from jakal_hwpx import (
     SectionPart,
     ValidationIssue,
 )
+from jakal_hwpx.namespaces import NS, qname
 
 
 HEAD_NS = {"hh": "http://www.hancom.co.kr/hwpml/2011/head", "hc": "http://www.hancom.co.kr/hwpml/2011/core"}
@@ -941,6 +943,33 @@ def test_strict_lint_reports_llm_prone_hwpx_package_issues() -> None:
 
     with pytest.raises(HwpxValidationError):
         document.strict_validate()
+
+
+def test_validation_reports_duplicate_manifest_href() -> None:
+    document = HwpxDocument.blank()
+    document.add_part("BinData/shared.bin", b"payload")
+    document.content_hpf.ensure_manifest_item("shared_a", "BinData/shared.bin", "application/octet-stream")
+    manifest = document.content_hpf.root_element.xpath("./opf:manifest", namespaces=NS)[0]
+    duplicate = etree.SubElement(manifest, qname("opf", "item"))
+    duplicate.set("id", "shared_b")
+    duplicate.set("href", "BinData/shared.bin")
+    duplicate.set("media-type", "application/octet-stream")
+
+    issues = document.validation_errors()
+    issue_messages = "\n".join(issue.message for issue in issues)
+
+    assert "Duplicate content.hpf manifest href: BinData/shared.bin" in issue_messages
+
+
+def test_strict_lint_reports_chart_part_missing_from_manifest() -> None:
+    document = HwpxDocument.blank()
+    chart = document.append_chart("Revenue", categories=["Q1"], series=[{"name": "Sales", "values": [10]}])
+    document.content_hpf.remove_manifest_item(href=chart.chart_part_path)
+
+    issues = document.strict_lint_errors()
+    issue_messages = "\n".join(issue.message for issue in issues)
+
+    assert f"Chart part is not declared in content.hpf manifest: {chart.chart_part_path}" in issue_messages
 
 
 def test_strict_lint_reports_missing_chart_fallback_rotation_info() -> None:

@@ -1457,6 +1457,8 @@ class HwpxDocument:
                 pretty_print=False,
             ),
         )
+        chart_manifest_id = self.content_hpf.next_manifest_id(PurePosixPath(chart_path).stem or "chart")
+        self.content_hpf.ensure_manifest_item(chart_manifest_id, chart_path, "application/xml")
 
         chart = etree.Element(qname("hp", "chart"))
         chart.set("id", chart_control_id)
@@ -2769,6 +2771,7 @@ class HwpxDocument:
 
         if isinstance(content_hpf, ContentHpfPart):
             manifest_ids: set[str] = set()
+            manifest_hrefs: dict[str, str] = {}
             for item in content_hpf.manifest_items():
                 item_id = item.get("id")
                 href = item.get("href")
@@ -2799,7 +2802,19 @@ class HwpxDocument:
                         )
                     )
                     continue
-                if _normalize_path(href) not in self._parts:
+                normalized_href = _normalize_path(href)
+                if normalized_href in manifest_hrefs:
+                    errors.append(
+                        _issue(
+                            "manifest_item",
+                            f"Duplicate content.hpf manifest href: {normalized_href}",
+                            part_path="Contents/content.hpf",
+                            context=f"ids={manifest_hrefs[normalized_href]},{item_id or ''}",
+                        )
+                    )
+                elif item_id:
+                    manifest_hrefs[normalized_href] = item_id
+                if normalized_href not in self._parts:
                     errors.append(
                         _issue(
                             "manifest_reference",
@@ -3552,6 +3567,11 @@ class HwpxDocument:
             for path, part in self._parts.items()
             if path.startswith("Chart/") and path.endswith(".xml")
         }
+        manifest_hrefs = {
+            _normalize_path(item.get("href") or "")
+            for item in self.content_hpf.manifest_items()
+            if item.get("href")
+        }
         for chart_path in sorted(chart_part_paths - referenced_chart_parts):
             errors.append(
                 _issue(
@@ -3569,6 +3589,14 @@ class HwpxDocument:
                     _issue(
                         "chart_closure",
                         f"Chart part must be XML: {chart_path}",
+                        part_path=chart_path,
+                    )
+                )
+            if chart_path not in manifest_hrefs:
+                errors.append(
+                    _issue(
+                        "chart_closure",
+                        f"Chart part is not declared in content.hpf manifest: {chart_path}",
                         part_path=chart_path,
                     )
                 )

@@ -128,6 +128,7 @@ _HWP_STRICT_LINT_HINTS = {
     "binary_reference": "Re-add the missing embedded binary or update the picture/OLE control to point at an existing BinData id.",
     "control_subtree": "Recreate the object with the public append/setter API, or restore the missing child record before saving.",
     "docinfo_mapping": "Repair DocInfo id mappings before saving. This usually means recreating the referenced memo/BinData entry through the HWP API.",
+    "docinfo_reference": "Repair the paragraph header or restore the missing DocInfo record before saving.",
     "metadata_schema": "Use the semantic setter API instead of editing JAKAL metadata text directly; values must keep their documented type.",
     "payload_sanity": "The native HWP payload is truncated or malformed. Recreate that control or replace it from a known-good source document.",
 }
@@ -1037,6 +1038,29 @@ class HwpDocument:
                 )
 
         id_mappings = docinfo.id_mappings_record()
+        count_specs = [
+            (8, "border_fills", len(docinfo.border_fill_records())),
+            (9, "char_shapes", len(docinfo.char_shape_records())),
+            (10, "tab_defs", len(docinfo.tab_def_records())),
+            (11, "numberings", len(docinfo.numbering_records())),
+            (12, "bullets", len(docinfo.bullet_records())),
+            (13, "para_shapes", len(docinfo.para_shape_records())),
+            (14, "styles", len(docinfo.style_records())),
+            (15, "memo_shapes", len(docinfo.memo_shape_records())),
+            (16, "track_changes", len(docinfo.track_change_records())),
+            (17, "track_change_authors", len(docinfo.track_change_author_records())),
+        ]
+        for count_index, count_name, actual_count in count_specs:
+            declared_count = id_mappings.get_count(count_index)
+            if declared_count < actual_count:
+                errors.append(
+                    _issue(
+                        "docinfo_mapping",
+                        f"DocInfo id_mappings.{count_name}={declared_count} is smaller than actual {count_name} record count {actual_count}.",
+                        context="DocInfo",
+                    )
+                )
+
         max_bindata_id = max([0, *docinfo_bindata.keys(), *bindata_streams.keys()])
         if id_mappings.bin_data_count < max_bindata_id:
             errors.append(
@@ -1058,6 +1082,8 @@ class HwpDocument:
                 )
             )
 
+        para_shape_count = len(docinfo.para_shape_records())
+        style_count = len(docinfo.style_records())
         for section_index, section in enumerate(self.sections()):
             section_model = self.section_model(section_index)
             memo_shape_id = self.binary_document().section_definition_settings(section_index).get("memo_shape_id")
@@ -1081,6 +1107,26 @@ class HwpDocument:
                         )
                     )
             for paragraph in section_model.paragraphs():
+                if paragraph.header.para_shape_id >= para_shape_count:
+                    errors.append(
+                        _issue(
+                            "docinfo_reference",
+                            f"Paragraph references missing para shape id {paragraph.header.para_shape_id}.",
+                            section_index=section_index,
+                            paragraph_index=paragraph.index,
+                            context="ParagraphHeader",
+                        )
+                    )
+                if paragraph.header.style_id >= style_count:
+                    errors.append(
+                        _issue(
+                            "docinfo_reference",
+                            f"Paragraph references missing style id {paragraph.header.style_id}.",
+                            section_index=section_index,
+                            paragraph_index=paragraph.index,
+                            context="ParagraphHeader",
+                        )
+                    )
                 for control_node in paragraph.control_nodes():
                     control_id = _control_id(control_node)
                     context = f"control[{control_id or 'UNKNOWN'}]"
