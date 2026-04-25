@@ -13,7 +13,8 @@ param(
     [string]$SecurityModuleInstallRoot = "",
     [string]$SecurityRegistryRoot = "HKCU:\SOFTWARE\HNC\HwpAutomation\Modules",
     [switch]$SkipSecurityModuleRegistration,
-    [switch]$AllowExistingHwpProcesses
+    [switch]$AllowExistingHwpProcesses,
+    [switch]$ReuseExistingHwpObject
 )
 
 Set-StrictMode -Version Latest
@@ -233,12 +234,23 @@ function Ensure-SecurityModuleRegistry {
 }
 
 function Get-HancomComObject {
-    try {
-        return [System.Runtime.InteropServices.Marshal]::GetActiveObject("HWPFrame.HwpObject")
+    param([switch]$ReuseExisting)
+
+    if ($ReuseExisting) {
+        try {
+            return [pscustomobject]@{
+                Object = [System.Runtime.InteropServices.Marshal]::GetActiveObject("HWPFrame.HwpObject")
+                Reused = $true
+            }
+        }
+        catch {
+        }
     }
-    catch {
+
+    return [pscustomobject]@{
+        Object = New-Object -ComObject HWPFrame.HwpObject
+        Reused = $false
     }
-    return New-Object -ComObject HWPFrame.HwpObject
 }
 
 function Test-TruthyResult {
@@ -533,6 +545,9 @@ function Invoke-HancomSmokeValidation {
         }
     }
 
+    $hwp = $null
+    $reusedHwpObject = $false
+
     try {
         $setupResult = Invoke-SecurityModuleSetup -ModuleName $SecurityModuleName -ModulePath $SecurityModulePath -InstallRoot $SecurityModuleInstallRoot -RegistryRoot $SecurityRegistryRoot
         $resolvedSecurityModulePath = [string]$setupResult.ModulePath
@@ -556,8 +571,13 @@ function Invoke-HancomSmokeValidation {
             registryValue = $registryEntry.$SecurityModuleName
         })) | Out-Null
 
-        $hwp = Get-HancomComObject
-        $entries.Add((New-LogEntry -Kind "com" -Data @{ message = "Created HWPFrame.HwpObject" })) | Out-Null
+        $comSession = Get-HancomComObject -ReuseExisting:$ReuseExistingHwpObject
+        $hwp = $comSession.Object
+        $reusedHwpObject = [bool]$comSession.Reused
+        $entries.Add((New-LogEntry -Kind "com" -Data @{
+            message = "Created HWPFrame.HwpObject"
+            reused = $reusedHwpObject
+        })) | Out-Null
 
         try {
             $hwp.SetMessageBoxMode(0x00010000) | Out-Null
@@ -582,14 +602,29 @@ function Invoke-HancomSmokeValidation {
         $saveResult = $hwp.SaveAs($resolvedOutput, $OutputFormat, "")
         $entries.Add((New-LogEntry -Kind "saveas" -Data @{ path = $resolvedOutput; format = $OutputFormat; result = [string]$saveResult })) | Out-Null
 
-        $hwp.Quit()
-        $entries.Add((New-LogEntry -Kind "quit" -Data @{ result = "ok" })) | Out-Null
     }
     catch {
         $entries.Add((New-LogEntry -Kind "error" -Data @{ message = $_.Exception.Message })) | Out-Null
         throw
     }
     finally {
+        if ($hwp) {
+            if (-not $reusedHwpObject) {
+                try {
+                    $hwp.Quit()
+                    $entries.Add((New-LogEntry -Kind "quit" -Data @{ result = "ok" })) | Out-Null
+                }
+                catch {
+                    $entries.Add((New-LogEntry -Kind "quit_error" -Data @{ message = $_.Exception.Message })) | Out-Null
+                }
+            }
+            try {
+                [void][System.Runtime.InteropServices.Marshal]::FinalReleaseComObject($hwp)
+            }
+            catch {
+            }
+        }
+
         if ($clicker -and -not $clicker.HasExited) {
             Stop-Process -Id $clicker.Id -Force -ErrorAction SilentlyContinue
         }

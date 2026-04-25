@@ -44,3 +44,4 @@ __pycache__/
 *.py[cod]
 *.pyc.*
 .coverage
+math debug sample/

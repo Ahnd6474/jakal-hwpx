@@ -79,6 +79,24 @@ def test_explicit_bridge_can_open_hwpx_and_convert_back_to_hwp(
     assert conversions == []
 
 
+def test_bridge_open_detects_hwp_content_even_when_extension_is_hwpx(sample_hwp_path: Path, tmp_path: Path) -> None:
+    mislabeled_path = tmp_path / "mislabeled_binary.hwpx"
+    mislabeled_path.write_bytes(sample_hwp_path.read_bytes())
+
+    bridge = HwpHwpxBridge.open(mislabeled_path)
+
+    assert isinstance(bridge.hwp_document(), HwpDocument)
+
+
+def test_bridge_open_detects_hwpx_content_even_when_extension_is_hwp(sample_hwpx_path: Path, tmp_path: Path) -> None:
+    mislabeled_path = tmp_path / "mislabeled_zip.hwp"
+    mislabeled_path.write_bytes(sample_hwpx_path.read_bytes())
+
+    bridge = HwpHwpxBridge.open(mislabeled_path)
+
+    assert isinstance(bridge.hwpx_document(), HwpxDocument)
+
+
 def test_hwpx_document_exposes_reverse_bridge_helpers(
     sample_hwp_path: Path,
     sample_hwpx_path: Path,

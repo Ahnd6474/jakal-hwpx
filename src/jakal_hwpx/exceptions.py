@@ -37,6 +37,7 @@ class ValidationIssue:
     line: int | None = None
     column: int | None = None
     context: str | None = None
+    hint: str | None = None
 
     def __post_init__(self) -> None:
         if self.code is None:
@@ -84,6 +85,7 @@ class ValidationIssue:
             "line": self.line,
             "column": self.column,
             "context": self.context,
+            "hint": self.hint,
         }
         if include_none:
             return payload
@@ -92,9 +94,10 @@ class ValidationIssue:
     def __str__(self) -> str:
         prefix = f"[{self.code or self.kind}] " if (self.code or self.kind) else ""
         location = self.location()
+        suffix = f" Hint: {self.hint}" if self.hint else ""
         if location:
-            return f"{prefix}{location}: {self.message}"
-        return f"{prefix}{self.message}"
+            return f"{prefix}{location}: {self.message}{suffix}"
+        return f"{prefix}{self.message}{suffix}"
 
     def __repr__(self) -> str:
         return str(self)

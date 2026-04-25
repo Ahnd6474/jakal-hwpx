@@ -3,11 +3,149 @@ from __future__ import annotations
 from collections import Counter
 from copy import deepcopy
 from dataclasses import dataclass
+import json
 
 from lxml import etree
 
 from .exceptions import ValidationIssue
 from .namespaces import NS, qname
+
+
+_FORM_TAG_BY_TYPE = {
+    "CHECKBOX": "checkBtn",
+    "RADIOBUTTON": "radioBtn",
+    "BUTTON": "btn",
+    "INPUT": "edit",
+    "EDIT": "edit",
+    "COMBOBOX": "comboBox",
+    "LISTBOX": "listBox",
+    "SCROLLBAR": "scrollBar",
+}
+_FORM_TYPE_BY_TAG = {
+    "checkBtn": "CHECKBOX",
+    "radioBtn": "RADIOBUTTON",
+    "btn": "BUTTON",
+    "edit": "INPUT",
+    "comboBox": "COMBOBOX",
+    "listBox": "LISTBOX",
+    "scrollBar": "SCROLLBAR",
+}
+_BUTTON_FORM_TAGS = {"checkBtn", "radioBtn", "btn"}
+_LIST_FORM_TAGS = {"comboBox", "listBox"}
+_FORM_METADATA_COMMAND_PREFIX = "JAKAL_FORM_META:"
+_CHART_METADATA_URI = "urn:jakal-hwpx:chart-metadata"
+_HANCOM_CHART_STYLE_URI = "CC8EB2C9-7E31-499d-B8F2-F6CE61031016"
+_CHART_NS = {
+    "c": NS["c"],
+    "a": NS["a"],
+    "r": NS["r"],
+    "c14": NS["c14"],
+    "ho": NS["ho"],
+    "mc": NS["mc"],
+    "jakalchart": NS["jakalchart"],
+}
+_CHART_TYPE_ELEMENT_BY_NAME = {
+    "BAR": "barChart",
+    "COLUMN": "barChart",
+    "LINE": "lineChart",
+    "PIE": "pieChart",
+    "DOUGHNUT": "doughnutChart",
+    "AREA": "areaChart",
+}
+_CHART_TYPE_NAME_BY_ELEMENT = {
+    "barChart": "COLUMN",
+    "lineChart": "LINE",
+    "pieChart": "PIE",
+    "doughnutChart": "DOUGHNUT",
+    "areaChart": "AREA",
+}
+
+
+def _chart_qname(prefix: str, local_name: str) -> str:
+    return f"{{{_CHART_NS[prefix]}}}{local_name}"
+
+
+def _build_chart_text_properties(*, font_size: int | None = None) -> etree._Element:
+    tx_pr = etree.Element(_chart_qname("c", "txPr"))
+    body_pr = etree.SubElement(tx_pr, _chart_qname("a", "bodyPr"))
+    body_pr.set("rot", "0")
+    body_pr.set("vert", "horz")
+    body_pr.set("wrap", "none")
+    body_pr.set("lIns", "0")
+    body_pr.set("tIns", "0")
+    body_pr.set("rIns", "0")
+    body_pr.set("bIns", "0")
+    body_pr.set("anchor", "ctr")
+    body_pr.set("anchorCtr", "1")
+    paragraph = etree.SubElement(tx_pr, _chart_qname("a", "p"))
+    paragraph_pr = etree.SubElement(paragraph, _chart_qname("a", "pPr"))
+    paragraph_pr.set("algn", "l")
+    default_run_pr = etree.SubElement(paragraph_pr, _chart_qname("a", "defRPr"))
+    if font_size is not None:
+        default_run_pr.set("sz", str(font_size))
+    default_run_pr.set("b", "0")
+    default_run_pr.set("i", "0")
+    default_run_pr.set("u", "none")
+    etree.SubElement(paragraph, _chart_qname("a", "endParaRPr"))
+    return tx_pr
+
+
+def _ensure_chart_style_block(root: etree._Element) -> None:
+    if root.find(_chart_qname("mc", "AlternateContent")) is not None:
+        return
+    alternate_content = etree.Element(_chart_qname("mc", "AlternateContent"))
+    choice = etree.SubElement(alternate_content, _chart_qname("mc", "Choice"))
+    choice.set("Requires", "c14")
+    style_2010 = etree.SubElement(choice, _chart_qname("c14", "style"))
+    style_2010.set("val", "102")
+    fallback = etree.SubElement(alternate_content, _chart_qname("mc", "Fallback"))
+    style = etree.SubElement(fallback, _chart_qname("c", "style"))
+    style.set("val", "2")
+    insert_index = 2 if len(root) >= 2 else len(root)
+    root.insert(insert_index, alternate_content)
+
+
+def _ensure_chart_root_text_properties(root: etree._Element) -> None:
+    if root.find(_chart_qname("c", "txPr")) is None:
+        root.append(_build_chart_text_properties(font_size=1000))
+
+
+def _ensure_chart_hancom_extension(root: etree._Element) -> None:
+    ext_list = root.find(_chart_qname("c", "extLst"))
+    if ext_list is None:
+        ext_list = etree.SubElement(root, _chart_qname("c", "extLst"))
+    for candidate in ext_list.findall(_chart_qname("c", "ext")):
+        if candidate.get("uri") == _HANCOM_CHART_STYLE_URI:
+            return
+    ext = etree.Element(_chart_qname("c", "ext"))
+    ext.set("uri", _HANCOM_CHART_STYLE_URI)
+    style = etree.SubElement(ext, _chart_qname("ho", "hncChartStyle"))
+    style.set("layoutIndex", "-1")
+    style.set("colorIndex", "0")
+    style.set("styleIndex", "0")
+    ext_list.insert(0, ext)
+
+
+def _ensure_chart_plot_area_style(plot_area: etree._Element) -> None:
+    if plot_area.find(_chart_qname("c", "spPr")) is not None:
+        return
+    sp_pr = etree.SubElement(plot_area, _chart_qname("c", "spPr"))
+    etree.SubElement(sp_pr, _chart_qname("a", "noFill"))
+    line = etree.SubElement(sp_pr, _chart_qname("a", "ln"))
+    line.set("w", "9525")
+    line.set("cap", "flat")
+    line.set("cmpd", "sng")
+    line.set("algn", "ctr")
+    etree.SubElement(line, _chart_qname("a", "noFill"))
+    dash = etree.SubElement(line, _chart_qname("a", "prstDash"))
+    dash.set("val", "solid")
+    etree.SubElement(line, _chart_qname("a", "round"))
+    head_end = etree.SubElement(line, _chart_qname("a", "headEnd"))
+    head_end.set("w", "med")
+    head_end.set("len", "med")
+    tail_end = etree.SubElement(line, _chart_qname("a", "tailEnd"))
+    tail_end.set("w", "med")
+    tail_end.set("len", "med")
 
 
 def _text_nodes(element: etree._Element) -> list[etree._Element]:
@@ -234,6 +372,406 @@ def _set_line_style(
         outlineStyle=outline_style,
         alpha=alpha,
     )
+
+
+def _chart_part_root(chart_part) -> etree._Element:
+    return chart_part._root
+
+
+def _chart_metadata_from_root(root: etree._Element) -> dict[str, object]:
+    values = root.xpath(
+        "./c:extLst/c:ext[@uri=$uri]/jakalchart:metadata/text()",
+        namespaces=_CHART_NS,
+        uri=_CHART_METADATA_URI,
+    )
+    if not values:
+        return {}
+    try:
+        decoded = json.loads(values[0])
+    except json.JSONDecodeError:
+        return {}
+    return decoded if isinstance(decoded, dict) else {}
+
+
+def _set_chart_metadata(root: etree._Element, metadata: dict[str, object]) -> None:
+    ext_list = root.find(_chart_qname("c", "extLst"))
+    ext = None
+    if ext_list is not None:
+        for candidate in ext_list.findall(_chart_qname("c", "ext")):
+            if candidate.get("uri") == _CHART_METADATA_URI:
+                ext = candidate
+                break
+    if not metadata:
+        if ext is not None and ext_list is not None:
+            ext_list.remove(ext)
+            if len(ext_list) == 0:
+                root.remove(ext_list)
+        return
+    if ext_list is None:
+        ext_list = etree.SubElement(root, _chart_qname("c", "extLst"))
+    if ext is None:
+        ext = etree.SubElement(ext_list, _chart_qname("c", "ext"))
+        ext.set("uri", _CHART_METADATA_URI)
+    nodes = ext.findall(_chart_qname("jakalchart", "metadata"))
+    metadata_node = nodes[0] if nodes else etree.SubElement(ext, _chart_qname("jakalchart", "metadata"))
+    metadata_node.text = json.dumps(metadata, ensure_ascii=False, separators=(",", ":"), sort_keys=True)
+
+
+def _chart_title_from_root(root: etree._Element) -> str:
+    values = root.xpath(
+        ".//c:chart/c:title//a:t/text() | .//c:chart/c:title//c:v/text()",
+        namespaces=_CHART_NS,
+    )
+    return "".join(values)
+
+
+def _set_chart_title(root: etree._Element, title: str) -> None:
+    chart = root.find(_chart_qname("c", "chart"))
+    if chart is None:
+        chart = etree.SubElement(root, _chart_qname("c", "chart"))
+    title_node = chart.find(_chart_qname("c", "title"))
+    if title_node is not None:
+        chart.remove(title_node)
+    auto_title = chart.find(_chart_qname("c", "autoTitleDeleted"))
+    if title:
+        title_node = etree.Element(_chart_qname("c", "title"))
+        tx_node = etree.SubElement(title_node, _chart_qname("c", "tx"))
+        rich = etree.SubElement(tx_node, _chart_qname("c", "rich"))
+        etree.SubElement(rich, _chart_qname("a", "bodyPr"))
+        etree.SubElement(rich, _chart_qname("a", "lstStyle"))
+        paragraph = etree.SubElement(rich, _chart_qname("a", "p"))
+        run = etree.SubElement(paragraph, _chart_qname("a", "r"))
+        etree.SubElement(run, _chart_qname("a", "t")).text = title
+        etree.SubElement(title_node, _chart_qname("c", "layout"))
+        overlay = etree.SubElement(title_node, _chart_qname("c", "overlay"))
+        overlay.set("val", "0")
+        title_node.append(_build_chart_text_properties())
+        insert_index = list(chart).index(auto_title) if auto_title is not None else 0
+        chart.insert(insert_index, title_node)
+    if auto_title is None:
+        auto_title = etree.SubElement(chart, _chart_qname("c", "autoTitleDeleted"))
+    auto_title.set("val", "0" if title else "1")
+
+
+def _chart_type_from_root(root: etree._Element) -> str:
+    metadata = _chart_metadata_from_root(root)
+    metadata_type = metadata.get("chartType")
+    if isinstance(metadata_type, str) and metadata_type:
+        return metadata_type
+    plot_area = root.find(".//" + _chart_qname("c", "plotArea"))
+    if plot_area is None:
+        return "BAR"
+    for child in plot_area:
+        local_name = etree.QName(child).localname
+        if local_name not in _CHART_TYPE_NAME_BY_ELEMENT:
+            continue
+        if local_name == "barChart":
+            bar_dir = child.find(_chart_qname("c", "barDir"))
+            if bar_dir is not None and bar_dir.get("val") == "bar":
+                return "BAR"
+        return _CHART_TYPE_NAME_BY_ELEMENT[local_name]
+    return "BAR"
+
+
+def _chart_data_ref_from_root(root: etree._Element) -> str | None:
+    formulas = root.xpath(
+        ".//c:plotArea//c:ser[1]/c:cat/c:strRef/c:f/text()"
+        " | .//c:plotArea//c:ser[1]/c:val/c:numRef/c:f/text()"
+        " | .//c:plotArea//c:ser[1]/c:xVal/c:numRef/c:f/text()"
+        " | .//c:plotArea//c:ser[1]/c:yVal/c:numRef/c:f/text()",
+        namespaces=_CHART_NS,
+    )
+    for formula in formulas:
+        anchor = _chart_sheet_anchor_from_formula(str(formula))
+        if anchor:
+            return anchor
+    return None
+
+
+def _chart_categories_from_root(root: etree._Element) -> list[str]:
+    values = root.xpath(
+        ".//c:plotArea//c:ser[1]/c:cat//c:pt/c:v/text()",
+        namespaces=_CHART_NS,
+    )
+    return [str(value) for value in values]
+
+
+def _chart_series_from_root(root: etree._Element) -> list[dict[str, object]]:
+    series_values: list[dict[str, object]] = []
+    for node in root.xpath(".//c:plotArea//c:ser", namespaces=_CHART_NS):
+        name_values = node.xpath("./c:tx//c:v/text()", namespaces=_CHART_NS)
+        point_values: list[object] = []
+        for value in node.xpath("./c:val//c:pt/c:v/text()", namespaces=_CHART_NS):
+            try:
+                numeric = float(value)
+                point_values.append(int(numeric) if numeric.is_integer() else numeric)
+            except ValueError:
+                point_values.append(value)
+        series_values.append(
+            {
+                "name": name_values[0] if name_values else "",
+                "values": point_values,
+            }
+        )
+    return series_values
+
+
+def _set_chart_legend_visible(root: etree._Element, visible: bool) -> None:
+    chart = root.find(_chart_qname("c", "chart"))
+    if chart is None:
+        chart = etree.SubElement(root, _chart_qname("c", "chart"))
+    legend = chart.find(_chart_qname("c", "legend"))
+    if visible:
+        if legend is None:
+            legend = etree.SubElement(chart, _chart_qname("c", "legend"))
+            legend_pos = etree.SubElement(legend, _chart_qname("c", "legendPos"))
+            legend_pos.set("val", "r")
+            etree.SubElement(legend, _chart_qname("c", "layout"))
+            overlay = etree.SubElement(legend, _chart_qname("c", "overlay"))
+            overlay.set("val", "0")
+    elif legend is not None:
+        chart.remove(legend)
+
+
+def _chart_sheet_anchor_from_formula(formula: str) -> str | None:
+    normalized = formula.strip()
+    if "!" not in normalized:
+        return None
+    sheet_name, _ = normalized.split("!", 1)
+    sheet_name = sheet_name.strip()
+    if sheet_name.startswith("'") and sheet_name.endswith("'") and len(sheet_name) >= 2:
+        sheet_name = sheet_name[1:-1].replace("''", "'")
+    return sheet_name or None
+
+
+def _chart_formula_sheet_name(data_ref: str) -> str:
+    return "'" + data_ref.replace("'", "''") + "'"
+
+
+def _chart_formula_column_name(index: int) -> str:
+    if index < 0:
+        raise ValueError("chart formula column index must be non-negative")
+    value = index + 1
+    column_name = ""
+    while value > 0:
+        value, remainder = divmod(value - 1, 26)
+        column_name = chr(ord("A") + remainder) + column_name
+    return column_name
+
+
+def _chart_formula_range(data_ref: str, *, column_index: int, point_count: int) -> str:
+    end_row = max(point_count, 1) + 1
+    column_name = _chart_formula_column_name(column_index)
+    return f"{_chart_formula_sheet_name(data_ref)}!${column_name}$2:${column_name}${end_row}"
+
+
+def _build_chart_series_node(
+    *,
+    chart_type: str,
+    categories: list[str],
+    data_ref: str | None,
+    series_index: int,
+    series: dict[str, object],
+) -> etree._Element:
+    series_node = etree.Element(_chart_qname("c", "ser"))
+    idx_node = etree.SubElement(series_node, _chart_qname("c", "idx"))
+    idx_node.set("val", str(series_index))
+    order_node = etree.SubElement(series_node, _chart_qname("c", "order"))
+    order_node.set("val", str(series_index))
+
+    name = str(series.get("name", ""))
+    if name:
+        tx_node = etree.SubElement(series_node, _chart_qname("c", "tx"))
+        etree.SubElement(tx_node, _chart_qname("c", "v")).text = name
+
+    if chart_type not in {"PIE", "DOUGHNUT"}:
+        invert = etree.SubElement(series_node, _chart_qname("c", "invertIfNegative"))
+        invert.set("val", "0")
+
+    if categories:
+        cat_node = etree.SubElement(series_node, _chart_qname("c", "cat"))
+        if data_ref:
+            category_ref = etree.SubElement(cat_node, _chart_qname("c", "strRef"))
+            etree.SubElement(category_ref, _chart_qname("c", "f")).text = _chart_formula_range(
+                data_ref,
+                column_index=0,
+                point_count=len(categories),
+            )
+            literal = etree.SubElement(category_ref, _chart_qname("c", "strCache"))
+        else:
+            literal = etree.SubElement(cat_node, _chart_qname("c", "strLit"))
+        point_count = etree.SubElement(literal, _chart_qname("c", "ptCount"))
+        point_count.set("val", str(len(categories)))
+        for index, category in enumerate(categories):
+            point = etree.SubElement(literal, _chart_qname("c", "pt"))
+            point.set("idx", str(index))
+            etree.SubElement(point, _chart_qname("c", "v")).text = str(category)
+
+    values = series.get("values", [])
+    if isinstance(values, list):
+        val_node = etree.SubElement(series_node, _chart_qname("c", "val"))
+        if data_ref:
+            value_ref = etree.SubElement(val_node, _chart_qname("c", "numRef"))
+            etree.SubElement(value_ref, _chart_qname("c", "f")).text = _chart_formula_range(
+                data_ref,
+                column_index=series_index + 1,
+                point_count=len(values),
+            )
+            literal = etree.SubElement(value_ref, _chart_qname("c", "numCache"))
+        else:
+            literal = etree.SubElement(val_node, _chart_qname("c", "numLit"))
+        format_code = etree.SubElement(literal, _chart_qname("c", "formatCode"))
+        format_code.text = "General"
+        point_count = etree.SubElement(literal, _chart_qname("c", "ptCount"))
+        point_count.set("val", str(len(values)))
+        for index, value in enumerate(values):
+            point = etree.SubElement(literal, _chart_qname("c", "pt"))
+            point.set("idx", str(index))
+            etree.SubElement(point, _chart_qname("c", "v")).text = str(value)
+    return series_node
+
+
+def _build_chart_part_root(
+    *,
+    title: str,
+    chart_type: str,
+    categories: list[str],
+    series: list[dict[str, object]],
+    data_ref: str | None = None,
+    legend_visible: bool,
+    metadata: dict[str, object] | None = None,
+) -> etree._Element:
+    normalized_chart_type = str(chart_type or "BAR").upper()
+    element_name = _CHART_TYPE_ELEMENT_BY_NAME.get(normalized_chart_type, "barChart")
+    root = etree.Element(_chart_qname("c", "chartSpace"), nsmap=_CHART_NS)
+
+    date1904 = etree.SubElement(root, _chart_qname("c", "date1904"))
+    date1904.set("val", "0")
+    rounded = etree.SubElement(root, _chart_qname("c", "roundedCorners"))
+    rounded.set("val", "0")
+    _ensure_chart_style_block(root)
+
+    chart = etree.SubElement(root, _chart_qname("c", "chart"))
+    _set_chart_title(root, title)
+    plot_area = etree.SubElement(chart, _chart_qname("c", "plotArea"))
+    etree.SubElement(plot_area, _chart_qname("c", "layout"))
+
+    chart_node = etree.SubElement(plot_area, _chart_qname("c", element_name))
+    if element_name == "barChart":
+        bar_dir = etree.SubElement(chart_node, _chart_qname("c", "barDir"))
+        bar_dir.set("val", "bar" if normalized_chart_type == "BAR" else "col")
+        grouping = etree.SubElement(chart_node, _chart_qname("c", "grouping"))
+        grouping.set("val", "clustered")
+    elif element_name == "lineChart":
+        grouping = etree.SubElement(chart_node, _chart_qname("c", "grouping"))
+        grouping.set("val", "standard")
+    elif element_name == "areaChart":
+        grouping = etree.SubElement(chart_node, _chart_qname("c", "grouping"))
+        grouping.set("val", "standard")
+
+    vary_colors = etree.SubElement(chart_node, _chart_qname("c", "varyColors"))
+    vary_colors.set("val", "1" if normalized_chart_type in {"PIE", "DOUGHNUT"} else "0")
+    for index, value in enumerate(series):
+        chart_node.append(
+            _build_chart_series_node(
+                chart_type=normalized_chart_type,
+                categories=list(categories),
+                data_ref=data_ref,
+                series_index=index,
+                series=value,
+            )
+        )
+
+    if element_name == "barChart":
+        gap_width = etree.SubElement(chart_node, _chart_qname("c", "gapWidth"))
+        gap_width.set("val", "150")
+        overlap = etree.SubElement(chart_node, _chart_qname("c", "overlap"))
+        overlap.set("val", "0")
+
+    if normalized_chart_type == "PIE":
+        first_slice = etree.SubElement(chart_node, _chart_qname("c", "firstSliceAng"))
+        first_slice.set("val", "0")
+    elif normalized_chart_type == "DOUGHNUT":
+        hole_size = etree.SubElement(chart_node, _chart_qname("c", "holeSize"))
+        hole_size.set("val", "50")
+
+    if normalized_chart_type not in {"PIE", "DOUGHNUT"}:
+        for axis_id in ("1", "2"):
+            axis = etree.SubElement(chart_node, _chart_qname("c", "axId"))
+            axis.set("val", axis_id)
+
+        cat_axis = etree.SubElement(plot_area, _chart_qname("c", "catAx"))
+        cat_axis_id = etree.SubElement(cat_axis, _chart_qname("c", "axId"))
+        cat_axis_id.set("val", "1")
+        scaling = etree.SubElement(cat_axis, _chart_qname("c", "scaling"))
+        orientation = etree.SubElement(scaling, _chart_qname("c", "orientation"))
+        orientation.set("val", "minMax")
+        axis_pos = etree.SubElement(cat_axis, _chart_qname("c", "axPos"))
+        axis_pos.set("val", "b")
+        cross_axis = etree.SubElement(cat_axis, _chart_qname("c", "crossAx"))
+        cross_axis.set("val", "2")
+        delete_axis = etree.SubElement(cat_axis, _chart_qname("c", "delete"))
+        delete_axis.set("val", "0")
+        major_tick = etree.SubElement(cat_axis, _chart_qname("c", "majorTickMark"))
+        major_tick.set("val", "out")
+        minor_tick = etree.SubElement(cat_axis, _chart_qname("c", "minorTickMark"))
+        minor_tick.set("val", "none")
+        tick_label = etree.SubElement(cat_axis, _chart_qname("c", "tickLblPos"))
+        tick_label.set("val", "nextTo")
+        crosses = etree.SubElement(cat_axis, _chart_qname("c", "crosses"))
+        crosses.set("val", "autoZero")
+        auto = etree.SubElement(cat_axis, _chart_qname("c", "auto"))
+        auto.set("val", "1")
+        label_align = etree.SubElement(cat_axis, _chart_qname("c", "lblAlgn"))
+        label_align.set("val", "ctr")
+        label_offset = etree.SubElement(cat_axis, _chart_qname("c", "lblOffset"))
+        label_offset.set("val", "100")
+        tick_mark_skip = etree.SubElement(cat_axis, _chart_qname("c", "tickMarkSkip"))
+        tick_mark_skip.set("val", "1")
+        no_multi_level = etree.SubElement(cat_axis, _chart_qname("c", "noMultiLvlLbl"))
+        no_multi_level.set("val", "0")
+
+        value_axis = etree.SubElement(plot_area, _chart_qname("c", "valAx"))
+        value_axis_id = etree.SubElement(value_axis, _chart_qname("c", "axId"))
+        value_axis_id.set("val", "2")
+        scaling = etree.SubElement(value_axis, _chart_qname("c", "scaling"))
+        orientation = etree.SubElement(scaling, _chart_qname("c", "orientation"))
+        orientation.set("val", "minMax")
+        axis_pos = etree.SubElement(value_axis, _chart_qname("c", "axPos"))
+        axis_pos.set("val", "l")
+        cross_axis = etree.SubElement(value_axis, _chart_qname("c", "crossAx"))
+        cross_axis.set("val", "1")
+        delete_axis = etree.SubElement(value_axis, _chart_qname("c", "delete"))
+        delete_axis.set("val", "0")
+        etree.SubElement(value_axis, _chart_qname("c", "majorGridlines"))
+        number_format = etree.SubElement(value_axis, _chart_qname("c", "numFmt"))
+        number_format.set("formatCode", "General")
+        number_format.set("sourceLinked", "1")
+        major_tick = etree.SubElement(value_axis, _chart_qname("c", "majorTickMark"))
+        major_tick.set("val", "out")
+        minor_tick = etree.SubElement(value_axis, _chart_qname("c", "minorTickMark"))
+        minor_tick.set("val", "none")
+        tick_label = etree.SubElement(value_axis, _chart_qname("c", "tickLblPos"))
+        tick_label.set("val", "nextTo")
+        crosses = etree.SubElement(value_axis, _chart_qname("c", "crosses"))
+        crosses.set("val", "autoZero")
+        cross_between = etree.SubElement(value_axis, _chart_qname("c", "crossBetween"))
+        cross_between.set("val", "between")
+
+    _ensure_chart_plot_area_style(plot_area)
+
+    _set_chart_legend_visible(root, legend_visible)
+    plot_vis_only = etree.SubElement(chart, _chart_qname("c", "plotVisOnly"))
+    plot_vis_only.set("val", "0")
+    display_blanks = etree.SubElement(chart, _chart_qname("c", "dispBlanksAs"))
+    display_blanks.set("val", "gap")
+    _ensure_chart_root_text_properties(root)
+    _ensure_chart_hancom_extension(root)
+
+    stored_metadata = {key: value for key, value in (metadata or {}).items() if value not in (None, "", {}, [])}
+    if stored_metadata:
+        _set_chart_metadata(root, stored_metadata)
+    return root
 
 
 def _fill_style(element: etree._Element) -> dict[str, str]:
@@ -596,6 +1134,134 @@ def _set_text(element: etree._Element, text: str) -> None:
     paragraph = _ensure_first_paragraph(element)
     _replace_paragraph_text_preserving_controls(paragraph, text)
     _invalidate_paragraph_layout(element)
+
+
+def _form_command_metadata(element: etree._Element) -> dict[str, object]:
+    command = element.get("command", "")
+    if not command.startswith(_FORM_METADATA_COMMAND_PREFIX):
+        return {}
+    try:
+        payload = json.loads(command[len(_FORM_METADATA_COMMAND_PREFIX) :])
+    except json.JSONDecodeError:
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def _write_form_command_metadata(
+    element: etree._Element,
+    *,
+    updates: dict[str, object | None] | None = None,
+) -> None:
+    command = element.get("command", "")
+    if command and not command.startswith(_FORM_METADATA_COMMAND_PREFIX):
+        return
+    metadata = dict(_form_command_metadata(element))
+    for key, value in (updates or {}).items():
+        if value is None or value == "":
+            metadata.pop(key, None)
+        else:
+            metadata[str(key)] = value
+    if metadata:
+        element.set(
+            "command",
+            _FORM_METADATA_COMMAND_PREFIX + json.dumps(metadata, ensure_ascii=False, separators=(",", ":"), sort_keys=True),
+        )
+    else:
+        element.set("command", "")
+
+
+def _form_list_item_values(element: etree._Element) -> list[str]:
+    values: list[str] = []
+    for item in element.xpath("./hp:listItem", namespaces=NS):
+        values.append(item.get("displayText") or item.get("value") or "")
+    return values
+
+
+def _set_form_list_items(element: etree._Element, values: list[str]) -> None:
+    for item in list(element.xpath("./hp:listItem", namespaces=NS)):
+        element.remove(item)
+    for value in values:
+        item = etree.SubElement(element, qname("hp", "listItem"))
+        item.set("displayText", "")
+        item.set("value", value)
+
+
+def _form_caption_text(element: etree._Element) -> str | None:
+    caption = _first_node(element, "./hp:caption")
+    if caption is None:
+        return None
+    text = _extract_text(caption)
+    return text if text else None
+
+
+def _set_form_caption_text(
+    element: etree._Element,
+    value: str | None,
+    *,
+    char_pr_id: str | None = None,
+) -> None:
+    caption = _first_node(element, "./hp:caption")
+    if not value:
+        if caption is not None:
+            element.remove(caption)
+        return
+
+    if caption is None:
+        caption = etree.Element(qname("hp", "caption"))
+        element.insert(0, caption)
+    _set_optional_attributes(caption, side="LEFT", fullSz=False, width=-1, gap=850, lastWidth=0)
+
+    sub_list = _first_node(caption, "./hp:subList")
+    if sub_list is None:
+        sub_list = etree.SubElement(caption, qname("hp", "subList"))
+    _set_optional_attributes(
+        sub_list,
+        id="",
+        textDirection="HORIZONTAL",
+        lineWrap="BREAK",
+        vertAlign="TOP",
+        linkListIDRef="0",
+        linkListNextIDRef="0",
+        textWidth="0",
+        textHeight="0",
+        hasTextRef=False,
+        hasNumRef=False,
+    )
+
+    paragraph = _first_node(sub_list, "./hp:p")
+    if paragraph is None:
+        paragraph = etree.SubElement(sub_list, qname("hp", "p"))
+    _set_optional_attributes(
+        paragraph,
+        id="0",
+        paraPrIDRef="0",
+        styleIDRef="0",
+        pageBreak="0",
+        columnBreak="0",
+        merged="0",
+    )
+
+    run = _first_node(paragraph, "./hp:run")
+    if run is None:
+        run = etree.SubElement(paragraph, qname("hp", "run"))
+    run.set("charPrIDRef", char_pr_id or run.get("charPrIDRef") or "0")
+
+    text_node = _first_form_text_node(run)
+    if text_node is None:
+        text_node = _first_node(run, "./hp:t")
+    if text_node is None:
+        text_node = etree.SubElement(run, qname("hp", "t"))
+    text_node.text = value
+
+    for extra_paragraph in list(sub_list.xpath("./hp:p[position()>1]", namespaces=NS)):
+        sub_list.remove(extra_paragraph)
+    for extra_run in list(paragraph.xpath("./hp:run[position()>1]", namespaces=NS)):
+        paragraph.remove(extra_run)
+
+
+def _first_form_text_node(element: etree._Element) -> etree._Element | None:
+    nodes = element.xpath("./hp:text", namespaces=NS)
+    return nodes[0] if nodes else None
 
 
 @dataclass
@@ -1400,6 +2066,108 @@ class CharacterStyleXml:
         self.header_part.mark_modified()
 
 
+def _optional_int_attribute(element: etree._Element, name: str) -> int | None:
+    value = element.get(name)
+    if value in (None, ""):
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+@dataclass
+class MemoShapeXml:
+    header_part: object
+    element: etree._Element
+
+    @property
+    def memo_shape_id(self) -> str | None:
+        return self.element.get("id")
+
+    @property
+    def width(self) -> int | None:
+        return _optional_int_attribute(self.element, "width")
+
+    @property
+    def line_width(self) -> int | None:
+        return _optional_int_attribute(self.element, "lineWidth")
+
+    @property
+    def line_type(self) -> str | None:
+        return self.element.get("lineType")
+
+    @property
+    def line_color(self) -> str | None:
+        return self.element.get("lineColor")
+
+    @property
+    def fill_color(self) -> str | None:
+        return self.element.get("fillColor")
+
+    @property
+    def active_color(self) -> str | None:
+        return self.element.get("activeColor")
+
+    @property
+    def memo_type(self) -> str | None:
+        return self.element.get("memoType")
+
+    def configure(
+        self,
+        *,
+        memo_shape_id: int | str | None = None,
+        width: int | str | None = None,
+        line_width: int | str | None = None,
+        line_type: str | None = None,
+        line_color: str | None = None,
+        fill_color: str | None = None,
+        active_color: str | None = None,
+        memo_type: str | None = None,
+    ) -> None:
+        _set_optional_attributes(
+            self.element,
+            id=memo_shape_id,
+            width=width,
+            lineWidth=line_width,
+            lineType=line_type,
+            lineColor=line_color,
+            fillColor=fill_color,
+            activeColor=active_color,
+            memoType=memo_type,
+        )
+        self.header_part.mark_modified()
+
+    def set_width(self, value: int | str) -> None:
+        self.element.set("width", str(value))
+        self.header_part.mark_modified()
+
+    def set_line_width(self, value: int | str) -> None:
+        self.element.set("lineWidth", str(value))
+        self.header_part.mark_modified()
+
+    def set_line_style(
+        self,
+        *,
+        line_type: str | None = None,
+        line_color: str | None = None,
+        fill_color: str | None = None,
+        active_color: str | None = None,
+    ) -> None:
+        _set_optional_attributes(
+            self.element,
+            lineType=line_type,
+            lineColor=line_color,
+            fillColor=fill_color,
+            activeColor=active_color,
+        )
+        self.header_part.mark_modified()
+
+    def set_memo_type(self, value: str) -> None:
+        self.element.set("memoType", value)
+        self.header_part.mark_modified()
+
+
 @dataclass
 class SectionSettingsXml:
     section: object
@@ -1419,6 +2187,10 @@ class SectionSettingsXml:
     def landscape(self) -> str | None:
         nodes = self.element.xpath("./hp:pagePr/@landscape", namespaces=NS)
         return nodes[0] if nodes else None
+
+    @property
+    def memo_shape_id(self) -> str | None:
+        return self.element.get("memoShapeIDRef")
 
     def set_page_size(self, *, width: int | None = None, height: int | None = None, landscape: str | None = None) -> None:
         page_pr_nodes = self.element.xpath("./hp:pagePr", namespaces=NS)
@@ -1546,6 +2318,10 @@ class SectionSettingsXml:
         )
         self.section.mark_modified()
 
+    def set_memo_shape_id(self, value: int | str | None) -> None:
+        self.element.set("memoShapeIDRef", "0" if value is None else str(value))
+        self.section.mark_modified()
+
 
 @dataclass
 class NoteXml:
@@ -1587,6 +2363,234 @@ class NoteXml:
 
     def set_number(self, value: int | str) -> None:
         self.element.set("number", str(value))
+        self.section.mark_modified()
+
+
+@dataclass
+class MemoXml:
+    document: object
+    section: object
+    element: etree._Element
+
+    @property
+    def text(self) -> str:
+        return _extract_text(self.element)
+
+    def set_text(self, text: str) -> None:
+        paragraphs, signatures = _capture_protected_paragraph_signatures(self.element)
+        self.section.mark_modified()
+        _set_text(self.element, text)
+        self.document._track_control_preservation_targets(
+            paragraphs,
+            signatures,
+            issues=[
+                ValidationIssue(
+                    kind="control_preservation",
+                    message="",
+                    part_path=self.section.path,
+                    section_index=self.section.section_index(),
+                    paragraph_index=index,
+                    context="hiddenComment",
+                )
+                for index, _ in enumerate(paragraphs)
+            ],
+        )
+
+
+@dataclass
+class FormXml:
+    document: object
+    section: object
+    element: etree._Element
+
+    @property
+    def kind(self) -> str:
+        return etree.QName(self.element).localname
+
+    @property
+    def form_type(self) -> str:
+        return _FORM_TYPE_BY_TAG.get(self.kind, self.kind.upper())
+
+    @property
+    def name(self) -> str | None:
+        return self.element.get("name")
+
+    @property
+    def label(self) -> str:
+        if self.kind in _BUTTON_FORM_TAGS:
+            return self.element.get("caption", "")
+        caption_label = _form_caption_text(self.element)
+        if caption_label:
+            return caption_label
+        metadata = _form_command_metadata(self.element)
+        label = metadata.get("label")
+        if isinstance(label, str):
+            return label
+        if self.kind == "edit":
+            text_node = _first_form_text_node(self.element)
+            return text_node.text or "" if text_node is not None else ""
+        if self.kind in _LIST_FORM_TAGS:
+            selected = self.element.get("selectedValue", "")
+            if selected:
+                return selected
+            values = _form_list_item_values(self.element)
+            return values[0] if values else ""
+        return ""
+
+    @property
+    def value(self) -> str | None:
+        if self.kind in {"checkBtn", "radioBtn", "scrollBar"}:
+            return self.element.get("value")
+        if self.kind == "edit":
+            text_node = _first_form_text_node(self.element)
+            return text_node.text if text_node is not None else None
+        if self.kind in _LIST_FORM_TAGS:
+            selected = self.element.get("selectedValue")
+            if selected not in (None, ""):
+                return selected
+            values = _form_list_item_values(self.element)
+            return values[0] if values else None
+        return None
+
+    @property
+    def checked(self) -> bool:
+        value = (self.value or "").strip().upper()
+        return self.kind in {"checkBtn", "radioBtn"} and value not in {"", "0", "FALSE", "NO", "OFF", "UNCHECKED"}
+
+    @property
+    def items(self) -> list[str]:
+        metadata = _form_command_metadata(self.element)
+        if "items" in metadata and isinstance(metadata["items"], list):
+            return [str(value) for value in metadata["items"]]
+        return _form_list_item_values(self.element) if self.kind in _LIST_FORM_TAGS else []
+
+    @property
+    def editable(self) -> bool:
+        return self.element.get("editable", "0") == "1"
+
+    @property
+    def locked(self) -> bool:
+        return self.element.get("enabled", "1") != "1"
+
+    @property
+    def placeholder(self) -> str | None:
+        metadata = _form_command_metadata(self.element)
+        value = metadata.get("placeholder")
+        return value if isinstance(value, str) and value else None
+
+    def layout(self) -> dict[str, str]:
+        return _graphic_layout(self.element)
+
+    def size(self) -> dict[str, int]:
+        return _graphic_size(self.element)
+
+    def out_margins(self) -> dict[str, int]:
+        return _margin_values(self.element, "./hp:outMargin")
+
+    def set_name(self, value: str | None) -> None:
+        self.element.set("name", value or "")
+        self.section.mark_modified()
+
+    def set_label(self, value: str) -> None:
+        if self.kind in _BUTTON_FORM_TAGS:
+            self.element.set("caption", value)
+        else:
+            form_char_pr = _first_node(self.element, "./hp:formCharPr")
+            _set_form_caption_text(self.element, value or None, char_pr_id=None if form_char_pr is None else form_char_pr.get("charPrIDRef"))
+            _write_form_command_metadata(self.element, updates={"label": None})
+        self.section.mark_modified()
+
+    def set_value(self, value: str | None) -> None:
+        if self.kind in {"checkBtn", "radioBtn", "scrollBar"}:
+            self.element.set("value", value or "")
+        elif self.kind == "edit":
+            text_node = _first_form_text_node(self.element)
+            if text_node is None:
+                text_node = etree.SubElement(self.element, qname("hp", "text"))
+            text_node.text = value or ""
+        elif self.kind in _LIST_FORM_TAGS:
+            self.element.set("selectedValue", value or "")
+            if value and not self.items:
+                _set_form_list_items(self.element, [value])
+        self.section.mark_modified()
+
+    def set_checked(self, value: bool) -> None:
+        if self.kind in {"checkBtn", "radioBtn"}:
+            self.element.set("value", "CHECKED" if value else "UNCHECKED")
+            self.section.mark_modified()
+
+    def set_items(self, values: list[str]) -> None:
+        if self.kind in _LIST_FORM_TAGS:
+            _set_form_list_items(self.element, list(values))
+            if values and not self.element.get("selectedValue"):
+                self.element.set("selectedValue", values[0])
+            self.section.mark_modified()
+
+    def set_editable(self, value: bool) -> None:
+        self.element.set("editable", "1" if value else "0")
+        self.section.mark_modified()
+
+    def set_locked(self, value: bool) -> None:
+        self.element.set("enabled", "0" if value else "1")
+        self.section.mark_modified()
+
+    def set_placeholder(self, value: str | None) -> None:
+        _write_form_command_metadata(self.element, updates={"placeholder": value})
+        self.section.mark_modified()
+
+    def set_size(
+        self,
+        *,
+        width: int | str | None = None,
+        height: int | str | None = None,
+    ) -> None:
+        _set_graphic_size(self.element, width=width, height=height)
+        self.section.mark_modified()
+
+    def set_layout(
+        self,
+        *,
+        text_wrap: str | None = None,
+        text_flow: str | None = None,
+        treat_as_char: bool | None = None,
+        affect_line_spacing: bool | None = None,
+        flow_with_text: bool | None = None,
+        allow_overlap: bool | None = None,
+        hold_anchor_and_so: bool | None = None,
+        vert_rel_to: str | None = None,
+        horz_rel_to: str | None = None,
+        vert_align: str | None = None,
+        horz_align: str | None = None,
+        vert_offset: int | str | None = None,
+        horz_offset: int | str | None = None,
+    ) -> None:
+        _set_graphic_layout(
+            self.element,
+            text_wrap=text_wrap,
+            text_flow=text_flow,
+            treat_as_char=treat_as_char,
+            affect_line_spacing=affect_line_spacing,
+            flow_with_text=flow_with_text,
+            allow_overlap=allow_overlap,
+            hold_anchor_and_so=hold_anchor_and_so,
+            vert_rel_to=vert_rel_to,
+            horz_rel_to=horz_rel_to,
+            vert_align=vert_align,
+            horz_align=horz_align,
+            vert_offset=vert_offset,
+            horz_offset=horz_offset,
+        )
+        self.section.mark_modified()
+
+    def set_out_margins(
+        self,
+        *,
+        left: int | str | None = None,
+        right: int | str | None = None,
+        top: int | str | None = None,
+        bottom: int | str | None = None,
+    ) -> None:
+        _set_margin_values(self.element, "./hp:outMargin", left=left, right=right, top=top, bottom=bottom)
         self.section.mark_modified()
 
 
@@ -2162,6 +3166,268 @@ class ShapeXml:
 
 
 @dataclass
+class ChartXml:
+    document: object
+    section: object
+    element: etree._Element
+
+    @property
+    def chart_part_path(self) -> str:
+        return self.element.get("chartIDRef", "")
+
+    def _chart_part(self):
+        return self.document.get_part(self.chart_part_path, expected_type=object)
+
+    def _chart_root(self) -> etree._Element:
+        return _chart_part_root(self.document.get_part(self.chart_part_path))
+
+    def _fallback_ole_element(self) -> etree._Element | None:
+        case = self.element.getparent()
+        if case is None or etree.QName(case).localname != "case":
+            return None
+        switch = case.getparent()
+        if switch is None or etree.QName(switch).localname != "switch":
+            return None
+        return _first_node(switch, "./hp:default/hp:ole")
+
+    def _chart_metadata(self) -> dict[str, object]:
+        if not self.chart_part_path:
+            return {}
+        return _chart_metadata_from_root(self._chart_root())
+
+    def _rebuild_chart_part(self, **overrides: object) -> None:
+        root = self._chart_root()
+        metadata = _chart_metadata_from_root(root)
+        state = {
+            "title": self.title,
+            "chart_type": self.chart_type,
+            "categories": self.categories,
+            "series": self.series,
+            "data_ref": self.data_ref,
+            "legend_visible": self.legend_visible,
+            "metadata": metadata,
+        }
+        state.update(overrides)
+        part = self.document.get_part(self.chart_part_path)
+        part._root = _build_chart_part_root(
+            title=str(state["title"]),
+            chart_type=str(state["chart_type"]),
+            categories=[str(value) for value in state["categories"]],
+            series=[dict(value) for value in state["series"]],
+            data_ref=str(state["data_ref"]) if state["data_ref"] not in (None, "") else None,
+            legend_visible=bool(state["legend_visible"]),
+            metadata=dict(state["metadata"]),
+        )
+        part.mark_modified()
+
+    @property
+    def title(self) -> str:
+        return _chart_title_from_root(self._chart_root())
+
+    @property
+    def chart_type(self) -> str:
+        return _chart_type_from_root(self._chart_root())
+
+    @property
+    def categories(self) -> list[str]:
+        return _chart_categories_from_root(self._chart_root())
+
+    @property
+    def series(self) -> list[dict[str, object]]:
+        return _chart_series_from_root(self._chart_root())
+
+    @property
+    def data_ref(self) -> str | None:
+        native_value = _chart_data_ref_from_root(self._chart_root())
+        if native_value not in (None, ""):
+            return native_value
+        value = self._chart_metadata().get("dataRef")
+        return str(value) if value not in (None, "") else None
+
+    @property
+    def shape_comment(self) -> str:
+        nodes = self.element.xpath("./hp:shapeComment", namespaces=NS)
+        if nodes:
+            return nodes[0].text or ""
+        value = self._chart_metadata().get("shapeComment")
+        return str(value) if value not in (None, "") else ""
+
+    @property
+    def legend_visible(self) -> bool:
+        return bool(self._chart_root().xpath("boolean(.//c:chart/c:legend)", namespaces=_CHART_NS))
+
+    def layout(self) -> dict[str, str]:
+        return _graphic_layout(self.element)
+
+    def size(self) -> dict[str, int]:
+        return _graphic_size(self.element)
+
+    def out_margins(self) -> dict[str, int]:
+        return _margin_values(self.element, "./hp:outMargin")
+
+    def rotation(self) -> dict[str, str]:
+        metadata = self._chart_metadata().get("rotation")
+        metadata_rotation: dict[str, str] = {}
+        if isinstance(metadata, dict):
+            metadata_rotation.update({str(key): str(value) for key, value in metadata.items() if value not in (None, "")})
+        fallback_ole = self._fallback_ole_element()
+        native_rotation: dict[str, str] = {}
+        if fallback_ole is not None:
+            native_rotation.update({key: value for key, value in _graphic_rotation(fallback_ole).items() if value not in (None, "")})
+        if metadata_rotation and native_rotation:
+            differs = any(
+                metadata_rotation.get(key) not in (None, "") and metadata_rotation.get(key) != native_rotation.get(key)
+                for key in set(metadata_rotation) | set(native_rotation)
+            )
+            metadata_is_non_default = any(
+                metadata_rotation.get(key) not in (None, "", "0")
+                for key in ("angle", "centerX", "centerY", "rotateimage")
+            )
+            if differs and native_rotation.get("angle", "0") == "0" and metadata_is_non_default:
+                return metadata_rotation
+        rotation: dict[str, str] = {}
+        rotation.update(metadata_rotation)
+        rotation.update(native_rotation)
+        return rotation
+
+    def set_title(self, value: str) -> None:
+        self._rebuild_chart_part(title=value)
+
+    def set_chart_type(self, value: str) -> None:
+        metadata = self._chart_metadata()
+        metadata["chartType"] = value
+        self._rebuild_chart_part(chart_type=value, metadata=metadata)
+
+    def set_categories(self, values: list[str]) -> None:
+        self._rebuild_chart_part(categories=[str(value) for value in values])
+
+    def set_series(self, values: list[dict[str, object]]) -> None:
+        self._rebuild_chart_part(series=[dict(value) for value in values])
+
+    def set_data_ref(self, value: str | None) -> None:
+        metadata = self._chart_metadata()
+        metadata.pop("dataRef", None)
+        self._rebuild_chart_part(
+            data_ref=None if value in (None, "") else str(value),
+            metadata=metadata,
+        )
+
+    def set_shape_comment(self, value: str | None) -> None:
+        nodes = self.element.xpath("./hp:shapeComment", namespaces=NS)
+        if value in (None, ""):
+            for node in nodes:
+                self.element.remove(node)
+        elif nodes:
+            nodes[0].text = str(value)
+        else:
+            node = etree.SubElement(self.element, qname("hp", "shapeComment"))
+            node.text = str(value)
+        metadata = self._chart_metadata()
+        metadata.pop("shapeComment", None)
+        self._rebuild_chart_part(metadata=metadata)
+        self.section.mark_modified()
+
+    def set_legend_visible(self, value: bool) -> None:
+        self._rebuild_chart_part(legend_visible=value)
+
+    def set_layout(
+        self,
+        *,
+        text_wrap: str | None = None,
+        text_flow: str | None = None,
+        treat_as_char: bool | None = None,
+        affect_line_spacing: bool | None = None,
+        flow_with_text: bool | None = None,
+        allow_overlap: bool | None = None,
+        hold_anchor_and_so: bool | None = None,
+        vert_rel_to: str | None = None,
+        horz_rel_to: str | None = None,
+        vert_align: str | None = None,
+        horz_align: str | None = None,
+        vert_offset: int | str | None = None,
+        horz_offset: int | str | None = None,
+    ) -> None:
+        _set_graphic_layout(
+            self.element,
+            text_wrap=text_wrap,
+            text_flow=text_flow,
+            treat_as_char=treat_as_char,
+            affect_line_spacing=affect_line_spacing,
+            flow_with_text=flow_with_text,
+            allow_overlap=allow_overlap,
+            hold_anchor_and_so=hold_anchor_and_so,
+            vert_rel_to=vert_rel_to,
+            horz_rel_to=horz_rel_to,
+            vert_align=vert_align,
+            horz_align=horz_align,
+            vert_offset=vert_offset,
+            horz_offset=horz_offset,
+        )
+        self.section.mark_modified()
+
+    def set_size(
+        self,
+        *,
+        width: int | str | None = None,
+        height: int | str | None = None,
+    ) -> None:
+        _set_graphic_size(self.element, width=width, height=height)
+        self.section.mark_modified()
+
+    def set_out_margins(
+        self,
+        *,
+        left: int | str | None = None,
+        right: int | str | None = None,
+        top: int | str | None = None,
+        bottom: int | str | None = None,
+    ) -> None:
+        _set_margin_values(self.element, "./hp:outMargin", left=left, right=right, top=top, bottom=bottom)
+        self.section.mark_modified()
+
+    def set_rotation(
+        self,
+        *,
+        angle: int | str | None = None,
+        center_x: int | str | None = None,
+        center_y: int | str | None = None,
+        rotate_image: bool | None = None,
+    ) -> None:
+        fallback_ole = self._fallback_ole_element()
+        if fallback_ole is not None:
+            _set_graphic_rotation(
+                fallback_ole,
+                angle=angle,
+                center_x=center_x,
+                center_y=center_y,
+                rotate_image=rotate_image,
+            )
+            metadata = self._chart_metadata()
+            if "rotation" in metadata:
+                metadata.pop("rotation", None)
+                self._rebuild_chart_part(metadata=metadata)
+            self.section.mark_modified()
+            return
+
+        metadata = self._chart_metadata()
+        current = metadata.get("rotation")
+        rotation = dict(current) if isinstance(current, dict) else {}
+        updates = {
+            "angle": angle,
+            "centerX": center_x,
+            "centerY": center_y,
+            "rotateimage": "1" if rotate_image else ("0" if rotate_image is False else None),
+        }
+        for key, value in updates.items():
+            if value is None:
+                continue
+            rotation[key] = str(value)
+        metadata["rotation"] = rotation
+        self._rebuild_chart_part(metadata=metadata)
+        self.section.mark_modified()
+
+
+@dataclass
 class OleXml(ShapeXml):
     @property
     def binary_item_id(self) -> str | None:
@@ -2240,11 +3506,14 @@ Picture = PictureXml
 StyleDefinition = StyleDefinitionXml
 ParagraphStyle = ParagraphStyleXml
 CharacterStyle = CharacterStyleXml
+MemoShape = MemoShapeXml
 SectionSettings = SectionSettingsXml
 Note = NoteXml
+Memo = MemoXml
 Bookmark = BookmarkXml
 Field = FieldXml
 AutoNumber = AutoNumberXml
 Equation = EquationXml
 ShapeObject = ShapeXml
+ChartObject = ChartXml
 OleObject = OleXml

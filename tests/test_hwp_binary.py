@@ -602,14 +602,17 @@ def test_record_node_from_record_maps_form_memo_list_and_chart_records() -> None
 
     assert isinstance(form_node, FormObjectRecord)
     assert form_node.fields()["utf16_text"] == "FORM"
+    assert form_node.fields()["label"] == "FORM"
     assert form_node.fields()["raw_payload"] == "FORM".encode("utf-16-le")
 
     assert isinstance(memo_node, MemoListRecord)
     assert memo_node.fields()["utf16_text"] == "MEMO"
+    assert memo_node.fields()["text"] == "MEMO"
     assert memo_node.fields()["raw_payload"] == "MEMO".encode("utf-16-le")
 
     assert isinstance(chart_node, ChartDataRecord)
     assert chart_node.fields()["utf16_text"] == "CHART"
+    assert chart_node.fields()["title"] == "CHART"
     assert chart_node.fields()["raw_payload"] == "CHART".encode("utf-16-le")
 
 

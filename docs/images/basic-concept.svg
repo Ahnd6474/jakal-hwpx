@@ -1,0 +1,28 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="920" height="260" viewBox="0 0 920 260" role="img" aria-labelledby="title desc">
+  <title id="title">HancomDocument 기본 사용 흐름</title>
+  <desc id="desc">HWP와 HWPX 문서를 HancomDocument로 읽고 같은 편집 모델에서 수정한 뒤 HWP 또는 HWPX로 저장하는 흐름</desc>
+  <rect width="920" height="260" fill="#f8fafc"/>
+  <rect x="24" y="24" width="872" height="212" rx="18" fill="#ffffff" stroke="#d7dde8"/>
+  <text x="460" y="58" text-anchor="middle" font-family="Arial, sans-serif" font-size="22" font-weight="700" fill="#111827">문서는 하나의 편집 모델로 다룹니다</text>
+  <g font-family="Arial, sans-serif">
+    <rect x="70" y="88" width="150" height="52" rx="10" fill="#e8f3ff" stroke="#8bb7e0"/>
+    <text x="145" y="120" text-anchor="middle" font-size="17" font-weight="700" fill="#153e75">HWPX 입력</text>
+    <rect x="70" y="156" width="150" height="52" rx="10" fill="#fff4df" stroke="#e0aa54"/>
+    <text x="145" y="188" text-anchor="middle" font-size="17" font-weight="700" fill="#7a4a09">HWP 입력</text>
+    <path d="M226 114 H346" fill="none" stroke="#6b7280" stroke-width="3"/>
+    <path d="M226 182 H346" fill="none" stroke="#6b7280" stroke-width="3"/>
+    <path d="M340 106 L356 114 L340 122 Z" fill="#6b7280"/>
+    <path d="M340 174 L356 182 L340 190 Z" fill="#6b7280"/>
+    <rect x="360" y="93" width="200" height="110" rx="14" fill="#eefbea" stroke="#80b36a"/>
+    <text x="460" y="134" text-anchor="middle" font-size="22" font-weight="700" fill="#24552a">HancomDocument</text>
+    <text x="460" y="164" text-anchor="middle" font-size="15" fill="#36543a">문단, 표, 그림, 필드 편집</text>
+    <path d="M566 114 H694" fill="none" stroke="#6b7280" stroke-width="3"/>
+    <path d="M566 182 H694" fill="none" stroke="#6b7280" stroke-width="3"/>
+    <path d="M688 106 L704 114 L688 122 Z" fill="#6b7280"/>
+    <path d="M688 174 L704 182 L688 190 Z" fill="#6b7280"/>
+    <rect x="708" y="88" width="150" height="52" rx="10" fill="#e8f3ff" stroke="#8bb7e0"/>
+    <text x="783" y="120" text-anchor="middle" font-size="17" font-weight="700" fill="#153e75">HWPX 출력</text>
+    <rect x="708" y="156" width="150" height="52" rx="10" fill="#fff4df" stroke="#e0aa54"/>
+    <text x="783" y="188" text-anchor="middle" font-size="17" font-weight="700" fill="#7a4a09">HWP 출력</text>
+  </g>
+</svg>

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import io
+import json
 import mimetypes
 import os
 import re
@@ -19,14 +20,20 @@ from .elements import (
     _invalidate_paragraph_layout,
     _missing_preserved_tokens,
     _preserved_structure_signature,
+    _build_chart_part_root,
+    _set_form_caption_text,
     _set_graphic_layout,
     _set_margin_values,
     AutoNumberXml,
     BookmarkXml,
     CharacterStyleXml,
+    ChartXml,
     EquationXml,
     FieldXml,
+    FormXml,
     HeaderFooterXml,
+    MemoXml,
+    MemoShapeXml,
     NoteXml,
     OleXml,
     ParagraphStyleXml,
@@ -58,6 +65,12 @@ from .xmlnode import HwpxXmlNode
 
 def _normalize_path(path: str) -> str:
     return PurePosixPath(path).as_posix()
+
+
+def _bool_like_literal_is_valid(value: str | None) -> bool:
+    if value is None:
+        return True
+    return value.strip().lower() in {"0", "1", "false", "true", "no", "yes", "n", "y", "off", "on"}
 
 
 def _issue(
@@ -124,9 +137,46 @@ _GRAPHIC_CONTROL_TAGS = (
     "ole",
 )
 
+_FORM_TAG_BY_TYPE = {
+    "CHECKBOX": "checkBtn",
+    "RADIOBUTTON": "radioBtn",
+    "BUTTON": "btn",
+    "INPUT": "edit",
+    "EDIT": "edit",
+    "COMBOBOX": "comboBox",
+    "LISTBOX": "listBox",
+    "SCROLLBAR": "scrollBar",
+}
+_FORM_TAGS = tuple(_FORM_TAG_BY_TYPE.values())
+_FORM_METADATA_COMMAND_PREFIX = "JAKAL_FORM_META:"
+_MEMO_CARRIER_FIELD_TYPE = "JAKAL_MEMO"
+_BUTTON_FORM_TAGS = {"checkBtn", "radioBtn", "btn"}
+_DEFAULT_CHART_FALLBACK_OLE_FIXTURE = "tests/fixtures/charts/chart_01_single_column.hwpx"
+_DEFAULT_CHART_FALLBACK_OLE_BYTES: bytes | None = None
+
 
 def _graphic_attribute_xpath(attribute: str) -> str:
     return " | ".join(f".//hp:{tag}/@{attribute}" for tag in _GRAPHIC_CONTROL_TAGS)
+
+
+def _is_chart_fallback_ole(node: etree._Element) -> bool:
+    return bool(node.xpath("ancestor::hp:default[parent::hp:switch[hp:case/hp:chart]]", namespaces=NS))
+
+
+def _default_chart_fallback_ole_bytes() -> bytes:
+    global _DEFAULT_CHART_FALLBACK_OLE_BYTES
+    if _DEFAULT_CHART_FALLBACK_OLE_BYTES is not None:
+        return _DEFAULT_CHART_FALLBACK_OLE_BYTES
+
+    candidate = Path(__file__).resolve().parents[2] / ".codex-temp" / "HwpForge" / _DEFAULT_CHART_FALLBACK_OLE_FIXTURE
+    if candidate.exists():
+        with zipfile.ZipFile(candidate) as archive:
+            _DEFAULT_CHART_FALLBACK_OLE_BYTES = archive.read("BinData/ole1.ole")
+            return _DEFAULT_CHART_FALLBACK_OLE_BYTES
+
+    # Fallback stub: enough to keep the package structurally valid when the probe fixture is absent.
+    _DEFAULT_CHART_FALLBACK_OLE_BYTES = bytes.fromhex("d0cf11e0a1b11ae1") + (b"\x00" * 504)
+    return _DEFAULT_CHART_FALLBACK_OLE_BYTES
 
 
 def _expected_binary_media_type(path: str) -> str | None:
@@ -631,6 +681,8 @@ class HwpxDocument:
         values: list[OleXml] = []
         for section in sections:
             for node in section.root_element.xpath(".//hp:ole", namespaces=NS):
+                if _is_chart_fallback_ole(node):
+                    continue
                 values.append(OleXml(self, section, node))
         return values
 
@@ -649,6 +701,31 @@ class HwpxDocument:
                 for node in section.root_element.xpath(tag, namespaces=NS):
                     notes.append(NoteXml(self, section, node))
         return notes
+
+    def memos(self, section_index: int | None = None) -> list[MemoXml]:
+        sections = self.sections if section_index is None else [self.sections[section_index]]
+        values: list[MemoXml] = []
+        for section in sections:
+            for node in section.root_element.xpath(".//hp:hiddenComment", namespaces=NS):
+                values.append(MemoXml(self, section, node))
+        return values
+
+    def forms(self, section_index: int | None = None) -> list[FormXml]:
+        sections = self.sections if section_index is None else [self.sections[section_index]]
+        values: list[FormXml] = []
+        xpath = " | ".join(f".//hp:{tag}" for tag in _FORM_TAGS)
+        for section in sections:
+            for node in section.root_element.xpath(xpath, namespaces=NS):
+                values.append(FormXml(self, section, node))
+        return values
+
+    def charts(self, section_index: int | None = None) -> list[ChartXml]:
+        sections = self.sections if section_index is None else [self.sections[section_index]]
+        values: list[ChartXml] = []
+        for section in sections:
+            for node in section.root_element.xpath(".//hp:chart", namespaces=NS):
+                values.append(ChartXml(self, section, node))
+        return values
 
     def bookmarks(self, section_index: int | None = None) -> list[BookmarkXml]:
         sections = self.sections if section_index is None else [self.sections[section_index]]
@@ -714,6 +791,8 @@ class HwpxDocument:
             for tag in shape_tags:
                 for node in section.root_element.xpath(f".//{tag}", namespaces=NS):
                     if etree.QName(node).localname == "ole":
+                        if _is_chart_fallback_ole(node):
+                            continue
                         values.append(OleXml(self, section, node))
                     else:
                         values.append(ShapeXml(self, section, node))
@@ -727,6 +806,9 @@ class HwpxDocument:
 
     def character_styles(self) -> list[CharacterStyleXml]:
         return [CharacterStyleXml(self.header, node) for node in self.header.root_element.xpath(".//hh:charPr", namespaces=NS)]
+
+    def memo_shapes(self) -> list[MemoShapeXml]:
+        return [MemoShapeXml(self.header, node) for node in self.header.root_element.xpath(".//hh:memoPr", namespaces=NS)]
 
     def get_style(self, style_id: str) -> StyleDefinitionXml:
         for style in self.styles():
@@ -745,6 +827,12 @@ class HwpxDocument:
             if style.style_id == style_id:
                 return style
         raise KeyError(style_id)
+
+    def get_memo_shape(self, memo_shape_id: str) -> MemoShapeXml:
+        for memo_shape in self.memo_shapes():
+            if memo_shape.memo_shape_id == memo_shape_id:
+                return memo_shape
+        raise KeyError(memo_shape_id)
 
     def get_document_text(self, section_separator: str = "\n\n") -> str:
         return section_separator.join(section.extract_text() for section in self.sections)
@@ -1113,6 +1201,366 @@ class HwpxDocument:
             paragraph_index=paragraph_index,
             char_pr_id=char_pr_id,
         )
+
+    def append_form(
+        self,
+        label: str = "",
+        *,
+        form_type: str = "INPUT",
+        name: str | None = None,
+        value: str | None = None,
+        checked: bool = False,
+        items: list[str] | None = None,
+        editable: bool = True,
+        locked: bool = False,
+        placeholder: str | None = None,
+        section_index: int = 0,
+        paragraph_index: int | None = None,
+        char_pr_id: str | None = None,
+    ) -> FormXml:
+        self._ensure_editable_sections()
+        normalized_form_type = form_type.strip().upper()
+        tag = _FORM_TAG_BY_TYPE.get(normalized_form_type)
+        if tag is None:
+            raise ValueError(f"Unsupported HWPX form_type: {form_type}")
+
+        form = etree.Element(qname("hp", tag))
+        form.set("name", name or "")
+        form.set("foreColor", "#000000")
+        form.set("backColor", "#7FFFFFFF")
+        form.set("groupName", "")
+        form.set("tabStop", "1")
+        form.set("editable", "1" if editable else "0")
+        form.set("tabOrder", "1")
+        form.set("enabled", "0" if locked else "1")
+        form.set("borderTypeIDRef", "0")
+        form.set("drawFrame", "1")
+        form.set("printable", "1")
+        form.set("command", "")
+
+        extra_metadata: dict[str, object] = {}
+        if tag == "checkBtn":
+            form.set("caption", label)
+            form.set("value", value or ("CHECKED" if checked else "UNCHECKED"))
+            form.set("radioGroupName", "")
+            form.set("triState", "0")
+            form.set("backStyle", "TRANSPARENT")
+        elif tag == "radioBtn":
+            form.set("caption", label)
+            form.set("value", value or ("CHECKED" if checked else "UNCHECKED"))
+            form.set("radioGroupName", name or "")
+            form.set("triState", "0")
+            form.set("backStyle", "TRANSPARENT")
+        elif tag == "btn":
+            form.set("caption", label)
+            form.set("radioGroupName", "")
+            form.set("triState", "0")
+        elif tag == "edit":
+            form.set("multiLine", "0")
+            form.set("passwordChar", "")
+            form.set("maxLength", "32")
+            form.set("scrollBars", "NONE")
+            form.set("tabKeyBehavior", "NEXT_OBJECT")
+            form.set("numOnly", "0")
+            form.set("readOnly", "0")
+            form.set("alignText", "LEFT")
+            text_node = etree.SubElement(form, qname("hp", "text"))
+            text_node.text = value or ""
+        elif tag == "comboBox":
+            form.set("listBoxRows", "4")
+            form.set("listBoxWidth", "2400")
+            form.set("editEnable", "1" if editable else "0")
+            form.set("selectedValue", value or "")
+            for item_value in items or ([value] if value else []):
+                item = etree.SubElement(form, qname("hp", "listItem"))
+                item.set("displayText", "")
+                item.set("value", item_value or "")
+        elif tag == "listBox":
+            form.set("itemHeight", "300")
+            form.set("topIdx", "4294967295")
+            form.set("selectedValue", value or "")
+            for item_value in items or ([value] if value else []):
+                item = etree.SubElement(form, qname("hp", "listItem"))
+                item.set("displayText", "")
+                item.set("value", item_value or "")
+        elif tag == "scrollBar":
+            form.set("delay", "0")
+            form.set("largeChange", "10")
+            form.set("smallChange", "1")
+            form.set("min", "0")
+            form.set("max", "100")
+            form.set("page", "10")
+            form.set("value", value or "0")
+            form.set("type", "HORIZONTAL")
+
+        if tag != "scrollBar":
+            form_char_pr = etree.SubElement(form, qname("hp", "formCharPr"))
+            form_char_pr.set("charPrIDRef", char_pr_id or "0")
+            form_char_pr.set("followContext", "0")
+            form_char_pr.set("autoSz", "0")
+            form_char_pr.set("wordWrap", "0")
+        elif label:
+            _set_form_caption_text(form, label, char_pr_id=char_pr_id or "0")
+
+        size = etree.SubElement(form, qname("hp", "sz"))
+        if tag == "btn":
+            size.set("width", "3200")
+            size.set("height", "1400")
+        elif tag == "edit":
+            size.set("width", "4200")
+            size.set("height", "1400")
+        elif tag == "listBox":
+            size.set("width", "4200")
+            size.set("height", "1800")
+        elif tag == "scrollBar":
+            size.set("width", "4200")
+            size.set("height", "900")
+        else:
+            size.set("width", "2400" if tag in {"checkBtn", "radioBtn"} else "4200")
+            size.set("height", "1200" if tag in {"checkBtn", "radioBtn"} else "1400")
+        size.set("widthRelTo", "ABSOLUTE")
+        size.set("heightRelTo", "ABSOLUTE")
+        size.set("protect", "0")
+
+        pos = etree.SubElement(form, qname("hp", "pos"))
+        pos.set("treatAsChar", "1")
+        pos.set("affectLSpacing", "0")
+        pos.set("flowWithText", "1")
+        pos.set("allowOverlap", "0")
+        pos.set("holdAnchorAndSO", "0")
+        pos.set("vertRelTo", "PARA")
+        pos.set("horzRelTo", "COLUMN")
+        pos.set("vertAlign", "TOP")
+        pos.set("horzAlign", "LEFT")
+        pos.set("vertOffset", "0")
+        pos.set("horzOffset", "0")
+
+        out_margin = etree.SubElement(form, qname("hp", "outMargin"))
+        out_margin.set("left", "0")
+        out_margin.set("right", "0")
+        out_margin.set("top", "0")
+        out_margin.set("bottom", "0")
+
+        if label and tag not in _BUTTON_FORM_TAGS and tag != "scrollBar":
+            _set_form_caption_text(form, label, char_pr_id=char_pr_id or "0")
+
+        if placeholder:
+            extra_metadata["placeholder"] = placeholder
+        if items and tag not in {"comboBox", "listBox"}:
+            extra_metadata["items"] = list(items)
+        if extra_metadata:
+            form.set(
+                "command",
+                _FORM_METADATA_COMMAND_PREFIX + json.dumps(extra_metadata, ensure_ascii=False, separators=(",", ":"), sort_keys=True),
+            )
+
+        section = self._append_run_child(section_index, paragraph_index, form, char_pr_id=char_pr_id)
+        return FormXml(self, section, form)
+
+    def append_memo(
+        self,
+        text: str = "",
+        *,
+        section_index: int = 0,
+        paragraph_index: int | None = None,
+        char_pr_id: str | None = None,
+    ) -> MemoXml:
+        self._ensure_editable_sections()
+        memo = etree.Element(qname("hp", "hiddenComment"))
+        memo.append(self._build_sublist_with_text(text, char_pr_id=char_pr_id, vertical_align="TOP"))
+        section = self._append_control(section_index, paragraph_index, memo, char_pr_id=char_pr_id)
+        return MemoXml(self, section, memo)
+
+    def append_memo_shape(
+        self,
+        *,
+        memo_shape_id: int | str | None = None,
+        width: int | str = 12000,
+        line_width: int | str = 12,
+        line_type: str = "SOLID",
+        line_color: str = "#808080",
+        fill_color: str = "#FFF2CC",
+        active_color: str = "#FFC000",
+        memo_type: str = "NOMAL",
+    ) -> MemoShapeXml:
+        resolved_id = str(memo_shape_id) if memo_shape_id is not None else self._next_header_numeric_id(".//hh:memoPr/@id")
+        memo_shape = etree.Element(qname("hh", "memoPr"))
+        memo_shape.set("id", resolved_id)
+        memo_shape.set("width", str(width))
+        memo_shape.set("lineWidth", str(line_width))
+        memo_shape.set("lineType", line_type)
+        memo_shape.set("lineColor", line_color)
+        memo_shape.set("fillColor", fill_color)
+        memo_shape.set("activeColor", active_color)
+        memo_shape.set("memoType", memo_type)
+
+        parent = self._ensure_header_collection(".//hh:memoProperties", "memoProperties")
+        parent.append(memo_shape)
+        parent.set("itemCnt", str(len(parent.xpath("./hh:memoPr", namespaces=NS))))
+        self.header.mark_modified()
+        return MemoShapeXml(self.header, memo_shape)
+
+    def append_chart(
+        self,
+        title: str = "",
+        *,
+        chart_type: str = "BAR",
+        categories: list[str] | None = None,
+        series: list[dict[str, object]] | None = None,
+        data_ref: str | None = None,
+        legend_visible: bool = True,
+        width: int = 12000,
+        height: int = 3200,
+        shape_comment: str | None = None,
+        section_index: int = 0,
+        paragraph_index: int | None = None,
+        char_pr_id: str | None = None,
+        text_wrap: str = "TOP_AND_BOTTOM",
+        text_flow: str = "BOTH_SIDES",
+        treat_as_char: bool = True,
+        affect_line_spacing: bool = False,
+        flow_with_text: bool = True,
+        allow_overlap: bool = False,
+        hold_anchor_and_so: bool = False,
+        vert_rel_to: str = "PARA",
+        horz_rel_to: str = "COLUMN",
+        vert_align: str = "TOP",
+        horz_align: str = "LEFT",
+        vert_offset: int = 0,
+        horz_offset: int = 0,
+        out_margin_left: int = 0,
+        out_margin_right: int = 0,
+        out_margin_top: int = 0,
+        out_margin_bottom: int = 0,
+    ) -> ChartXml:
+        self._ensure_editable_sections()
+
+        chart_path = self._next_chart_part_path()
+        chart_control_id = self._next_control_number(".//hp:chart/@id | .//hp:ole/@id")
+        chart_z_order = self._next_control_number(".//hp:chart/@zOrder | .//hp:ole/@zOrder")
+        metadata: dict[str, object] = {"chartType": str(chart_type or "BAR").upper()}
+        chart_part = self.add_part(
+            chart_path,
+            etree.tostring(
+                _build_chart_part_root(
+                    title=title,
+                    chart_type=str(chart_type or "BAR").upper(),
+                    categories=[str(value) for value in (categories or [])],
+                    series=[dict(value) for value in (series or [])],
+                    data_ref=None if data_ref in (None, "") else str(data_ref),
+                    legend_visible=legend_visible,
+                    metadata=metadata,
+                ),
+                encoding="UTF-8",
+                xml_declaration=True,
+                standalone=True,
+                pretty_print=False,
+            ),
+        )
+
+        chart = etree.Element(qname("hp", "chart"))
+        chart.set("id", chart_control_id)
+        chart.set("zOrder", chart_z_order)
+        chart.set("numberingType", "PICTURE")
+        chart.set("textWrap", text_wrap)
+        chart.set("textFlow", text_flow)
+        chart.set("lock", "0")
+        chart.set("dropcapstyle", "None")
+        chart.set("chartIDRef", chart_path)
+        if shape_comment:
+            comment = etree.SubElement(chart, qname("hp", "shapeComment"))
+            comment.text = shape_comment
+
+        size = etree.SubElement(chart, qname("hp", "sz"))
+        size.set("width", str(width))
+        size.set("widthRelTo", "ABSOLUTE")
+        size.set("height", str(height))
+        size.set("heightRelTo", "ABSOLUTE")
+        size.set("protect", "0")
+
+        position = etree.SubElement(chart, qname("hp", "pos"))
+        position.set("treatAsChar", "1" if treat_as_char else "0")
+        position.set("affectLSpacing", "0")
+        position.set("flowWithText", "1")
+        position.set("allowOverlap", "0")
+        position.set("holdAnchorAndSO", "0")
+        position.set("vertRelTo", "PARA")
+        position.set("horzRelTo", "COLUMN")
+        position.set("vertAlign", "TOP")
+        position.set("horzAlign", "LEFT")
+        position.set("vertOffset", "0")
+        position.set("horzOffset", "0")
+        _set_graphic_layout(
+            chart,
+            text_wrap=text_wrap,
+            text_flow=text_flow,
+            treat_as_char=treat_as_char,
+            affect_line_spacing=affect_line_spacing,
+            flow_with_text=flow_with_text,
+            allow_overlap=allow_overlap,
+            hold_anchor_and_so=hold_anchor_and_so,
+            vert_rel_to=vert_rel_to,
+            horz_rel_to=horz_rel_to,
+            vert_align=vert_align,
+            horz_align=horz_align,
+            vert_offset=vert_offset,
+            horz_offset=horz_offset,
+        )
+
+        out_margin = etree.SubElement(chart, qname("hp", "outMargin"))
+        out_margin.set("left", "0")
+        out_margin.set("right", "0")
+        out_margin.set("top", "0")
+        out_margin.set("bottom", "0")
+        _set_margin_values(
+            chart,
+            "./hp:outMargin",
+            left=out_margin_left,
+            right=out_margin_right,
+            top=out_margin_top,
+            bottom=out_margin_bottom,
+        )
+
+        switch = etree.Element(qname("hp", "switch"))
+        case = etree.SubElement(switch, qname("hp", "case"))
+        case.set(qname("hp", "required-namespace"), NS["ooxmlchart"])
+        case.append(chart)
+        default = etree.SubElement(switch, qname("hp", "default"))
+        default.append(
+            self._build_chart_fallback_ole(
+                control_id=chart_control_id,
+                z_order=chart_z_order,
+                width=width,
+                height=height,
+                text_wrap=text_wrap,
+                text_flow=text_flow,
+                treat_as_char=treat_as_char,
+                affect_line_spacing=affect_line_spacing,
+                flow_with_text=flow_with_text,
+                allow_overlap=allow_overlap,
+                hold_anchor_and_so=hold_anchor_and_so,
+                vert_rel_to=vert_rel_to,
+                horz_rel_to=horz_rel_to,
+                vert_align=vert_align,
+                horz_align=horz_align,
+                vert_offset=vert_offset,
+                horz_offset=horz_offset,
+                out_margin_left=out_margin_left,
+                out_margin_right=out_margin_right,
+                out_margin_top=out_margin_top,
+                out_margin_bottom=out_margin_bottom,
+            )
+        )
+
+        paragraph = self._resolve_paragraph_for_insert(section_index=section_index, paragraph_index=paragraph_index)
+        run = self._append_run(paragraph, char_pr_id=char_pr_id)
+        run.append(switch)
+        etree.SubElement(run, qname("hp", "t"))
+
+        section = self.sections[section_index]
+        section.mark_modified()
+        chart_part.mark_modified()
+        return ChartXml(self, section, chart)
 
     def append_auto_number(
         self,
@@ -2551,6 +2999,30 @@ class HwpxDocument:
                 if field.field_id in field_id_map:
                     errors.append(_issue("field_reference", f"duplicate fieldid: {field.field_id}"))
                 field_id_map[field.field_id] = field.control_id or ""
+            if (field.field_type or "").upper() == _MEMO_CARRIER_FIELD_TYPE:
+                parameters = field.parameter_map()
+                if not _bool_like_literal_is_valid(parameters.get("Visible")):
+                    errors.append(
+                        _issue(
+                            "metadata_schema",
+                            "JAKAL_MEMO carrier Visible parameter must be a bool-like literal.",
+                            part_path=getattr(field.section, "path", None),
+                            xpath=".//hp:fieldBegin[@type='JAKAL_MEMO']",
+                        )
+                    )
+                order_value = parameters.get("Order")
+                if order_value not in (None, ""):
+                    try:
+                        int(order_value)
+                    except (TypeError, ValueError):
+                        errors.append(
+                            _issue(
+                                "metadata_schema",
+                                "JAKAL_MEMO carrier Order parameter must be an integer.",
+                                part_path=getattr(field.section, "path", None),
+                                xpath=".//hp:fieldBegin[@type='JAKAL_MEMO']",
+                            )
+                        )
 
         for section_index, section in enumerate(self.sections):
             for paragraph_index, paragraph in enumerate(section.root_element.xpath("./hp:p", namespaces=NS)):
@@ -2610,6 +3082,37 @@ class HwpxDocument:
                                 section_index=section_index,
                             )
                         )
+            for binary_ref in section.root_element.xpath(".//hp:ole/@binaryItemIDRef", namespaces=NS):
+                if binary_ref not in manifest_ids:
+                    errors.append(
+                        _issue(
+                            "binary_reference",
+                            f"ole references unknown manifest id {binary_ref}",
+                            part_path=section.path,
+                            section_index=section_index,
+                        )
+                    )
+            for chart in self.charts(section_index=section_index):
+                chart_ref = chart.chart_part_path
+                if not chart_ref:
+                    errors.append(
+                        _issue(
+                            "chart_reference",
+                            "chart is missing chartIDRef",
+                            part_path=section.path,
+                            section_index=section_index,
+                        )
+                    )
+                    continue
+                if _normalize_path(chart_ref) not in self._parts:
+                    errors.append(
+                        _issue(
+                            "chart_reference",
+                            f"chart references missing chart part: {chart_ref}",
+                            part_path=section.path,
+                            section_index=section_index,
+                        )
+                    )
             for field_end in section.root_element.xpath(".//hp:fieldEnd", namespaces=NS):
                 begin_id = field_end.get("beginIDRef")
                 field_id = field_end.get("fieldid")
@@ -2693,7 +3196,46 @@ class HwpxDocument:
             style_ids = {style.style_id for style in self.styles() if style.style_id is not None}
             para_pr_ids = {style.style_id for style in self.paragraph_styles() if style.style_id is not None}
             char_pr_ids = {style.style_id for style in self.character_styles() if style.style_id is not None}
+            memo_shape_ids = {memo_shape.memo_shape_id for memo_shape in self.memo_shapes() if memo_shape.memo_shape_id is not None}
+            memo_properties_nodes = self.header.root_element.xpath(".//hh:memoProperties", namespaces=NS)
+            for memo_properties in memo_properties_nodes:
+                memo_pr_nodes = memo_properties.xpath("./hh:memoPr", namespaces=NS)
+                expected_item_count = memo_properties.get("itemCnt")
+                if expected_item_count not in (None, "", str(len(memo_pr_nodes))):
+                    errors.append(
+                        _issue(
+                            "memo_reference",
+                            f"memoProperties itemCnt={expected_item_count} does not match memoPr count={len(memo_pr_nodes)}",
+                            part_path="Contents/header.xml",
+                        )
+                    )
+                seen_memo_shape_ids: set[str] = set()
+                for memo_pr in memo_pr_nodes:
+                    memo_shape_id = memo_pr.get("id")
+                    if not memo_shape_id:
+                        continue
+                    if memo_shape_id in seen_memo_shape_ids:
+                        errors.append(
+                            _issue(
+                                "memo_reference",
+                                f"Duplicate hh:memoPr id: {memo_shape_id}",
+                                part_path="Contents/header.xml",
+                            )
+                        )
+                    seen_memo_shape_ids.add(memo_shape_id)
             for section_index, section in enumerate(self.sections):
+                sec_pr_nodes = section.root_element.xpath("./hp:p[1]//hp:secPr[1]", namespaces=NS)
+                if sec_pr_nodes:
+                    memo_shape_id = sec_pr_nodes[0].get("memoShapeIDRef")
+                    if memo_shape_id not in (None, "", "0") and memo_shape_id not in memo_shape_ids:
+                        errors.append(
+                            _issue(
+                                "memo_reference",
+                                f"memoShapeIDRef points to unknown hh:memoPr id {memo_shape_id}",
+                                part_path=section.path,
+                                section_index=section_index,
+                            )
+                        )
                 paragraphs = section.root_element.xpath(".//hp:p", namespaces=NS)
                 for paragraph_index, paragraph in enumerate(paragraphs):
                     if style_ids and not paragraph.get("styleIDRef"):
@@ -2726,6 +3268,204 @@ class HwpxDocument:
                                     section_index=section_index,
                                     paragraph_index=paragraph_index,
                                     context=f"run[{run_index}]",
+                                )
+                            )
+                    form_nodes = paragraph.xpath(" | ".join(f".//hp:{tag}" for tag in _FORM_TAGS), namespaces=NS)
+                    for form_index, form in enumerate(form_nodes):
+                        kind = etree.QName(form).localname
+                        command = form.get("command", "")
+                        if command.startswith(_FORM_METADATA_COMMAND_PREFIX):
+                            payload_text = command[len(_FORM_METADATA_COMMAND_PREFIX) :]
+                            try:
+                                payload = json.loads(payload_text)
+                            except json.JSONDecodeError as exc:
+                                errors.append(
+                                    _issue(
+                                        "metadata_schema",
+                                        f"{kind} command metadata must be valid JSON: {exc}",
+                                        part_path=section.path,
+                                        section_index=section_index,
+                                        paragraph_index=paragraph_index,
+                                        context=f"form[{form_index}]",
+                                    )
+                                )
+                                payload = None
+                            if payload is not None and not isinstance(payload, dict):
+                                errors.append(
+                                    _issue(
+                                        "metadata_schema",
+                                        f"{kind} command metadata must decode to a JSON object.",
+                                        part_path=section.path,
+                                        section_index=section_index,
+                                        paragraph_index=paragraph_index,
+                                        context=f"form[{form_index}]",
+                                    )
+                                )
+                            elif isinstance(payload, dict):
+                                if "placeholder" in payload and not isinstance(payload["placeholder"], str):
+                                    errors.append(
+                                        _issue(
+                                            "metadata_schema",
+                                            f"{kind} placeholder metadata must be a string.",
+                                            part_path=section.path,
+                                            section_index=section_index,
+                                            paragraph_index=paragraph_index,
+                                            context=f"form[{form_index}]",
+                                        )
+                                    )
+                                if "items" in payload and not isinstance(payload["items"], list):
+                                    errors.append(
+                                        _issue(
+                                            "metadata_schema",
+                                            f"{kind} items metadata must be a list.",
+                                            part_path=section.path,
+                                            section_index=section_index,
+                                            paragraph_index=paragraph_index,
+                                            context=f"form[{form_index}]",
+                                        )
+                                    )
+                                elif isinstance(payload.get("items"), list) and any(
+                                    not isinstance(item, str) for item in payload["items"]
+                                ):
+                                    errors.append(
+                                        _issue(
+                                            "metadata_schema",
+                                            f"{kind} items metadata entries must be strings.",
+                                            part_path=section.path,
+                                            section_index=section_index,
+                                            paragraph_index=paragraph_index,
+                                            context=f"form[{form_index}]",
+                                        )
+                                    )
+                                if "label" in payload and not isinstance(payload["label"], str):
+                                    errors.append(
+                                        _issue(
+                                            "metadata_schema",
+                                            f"{kind} label metadata must be a string.",
+                                            part_path=section.path,
+                                            section_index=section_index,
+                                            paragraph_index=paragraph_index,
+                                            context=f"form[{form_index}]",
+                                        )
+                                    )
+                        for required_xpath, label in (
+                            ("./hp:sz", "hp:sz"),
+                            ("./hp:pos", "hp:pos"),
+                            ("./hp:outMargin", "hp:outMargin"),
+                        ):
+                            if not form.xpath(required_xpath, namespaces=NS):
+                                errors.append(
+                                    _issue(
+                                        "control_subtree",
+                                        f"{kind} is missing {label}",
+                                        part_path=section.path,
+                                        section_index=section_index,
+                                        paragraph_index=paragraph_index,
+                                        context=f"form[{form_index}]",
+                                    )
+                                )
+                        if form.xpath("./hp:caption", namespaces=NS) and not form.xpath("./hp:caption/hp:subList", namespaces=NS):
+                            errors.append(
+                                _issue(
+                                    "control_subtree",
+                                    f"{kind} caption is missing hp:subList",
+                                    part_path=section.path,
+                                    section_index=section_index,
+                                    paragraph_index=paragraph_index,
+                                    context=f"form[{form_index}]",
+                                )
+                            )
+                        if kind != "scrollBar" and not form.xpath("./hp:formCharPr", namespaces=NS):
+                            errors.append(
+                                _issue(
+                                    "control_subtree",
+                                    f"{kind} is missing hp:formCharPr",
+                                    part_path=section.path,
+                                    section_index=section_index,
+                                    paragraph_index=paragraph_index,
+                                    context=f"form[{form_index}]",
+                                )
+                            )
+                        if kind == "edit" and not form.xpath("./hp:text", namespaces=NS):
+                            errors.append(
+                                _issue(
+                                    "control_subtree",
+                                    "edit is missing hp:text",
+                                    part_path=section.path,
+                                    section_index=section_index,
+                                    paragraph_index=paragraph_index,
+                                    context=f"form[{form_index}]",
+                                )
+                            )
+                    memo_nodes = paragraph.xpath(".//hp:hiddenComment", namespaces=NS)
+                    for memo_index, memo in enumerate(memo_nodes):
+                        if not memo.xpath("./hp:subList", namespaces=NS):
+                            errors.append(
+                                _issue(
+                                    "control_subtree",
+                                    "hiddenComment is missing hp:subList",
+                                    part_path=section.path,
+                                    section_index=section_index,
+                                    paragraph_index=paragraph_index,
+                                    context=f"memo[{memo_index}]",
+                                )
+                            )
+                    chart_nodes = paragraph.xpath(".//hp:chart", namespaces=NS)
+                    for chart_index, chart in enumerate(chart_nodes):
+                        for required_xpath, label in (
+                            ("./hp:sz", "hp:sz"),
+                            ("./hp:pos", "hp:pos"),
+                            ("./hp:outMargin", "hp:outMargin"),
+                        ):
+                            if not chart.xpath(required_xpath, namespaces=NS):
+                                errors.append(
+                                    _issue(
+                                        "control_subtree",
+                                        f"chart is missing {label}",
+                                        part_path=section.path,
+                                        section_index=section_index,
+                                        paragraph_index=paragraph_index,
+                                        context=f"chart[{chart_index}]",
+                                    )
+                                )
+                        case = chart.getparent()
+                        switch = case.getparent() if case is not None else None
+                        if (
+                            case is None
+                            or etree.QName(case).localname != "case"
+                            or switch is None
+                            or etree.QName(switch).localname != "switch"
+                        ):
+                            errors.append(
+                                _issue(
+                                    "chart_closure",
+                                    "native hp:chart control must be wrapped by hp:switch/hp:case",
+                                    part_path=section.path,
+                                    section_index=section_index,
+                                    paragraph_index=paragraph_index,
+                                    context=f"chart[{chart_index}]",
+                                )
+                            )
+                        elif not switch.xpath("./hp:default/hp:ole", namespaces=NS):
+                            errors.append(
+                                _issue(
+                                    "chart_closure",
+                                    "native hp:chart control is missing hp:default/hp:ole fallback",
+                                    part_path=section.path,
+                                    section_index=section_index,
+                                    paragraph_index=paragraph_index,
+                                    context=f"chart[{chart_index}]",
+                                )
+                            )
+                        elif not switch.xpath("./hp:default/hp:ole/hp:rotationInfo", namespaces=NS):
+                            errors.append(
+                                _issue(
+                                    "chart_closure",
+                                    "native hp:chart fallback hp:ole is missing hp:rotationInfo",
+                                    part_path=section.path,
+                                    section_index=section_index,
+                                    paragraph_index=paragraph_index,
+                                    context=f"chart[{chart_index}]",
                                 )
                             )
 
@@ -2802,12 +3542,58 @@ class HwpxDocument:
                     )
                 )
 
+        referenced_chart_parts = {
+            _normalize_path(chart.chart_part_path)
+            for chart in self.charts()
+            if chart.chart_part_path
+        }
+        chart_part_paths = {
+            path
+            for path, part in self._parts.items()
+            if path.startswith("Chart/") and path.endswith(".xml")
+        }
+        for chart_path in sorted(chart_part_paths - referenced_chart_parts):
+            errors.append(
+                _issue(
+                    "chart_closure",
+                    f"Chart part is not referenced by any native hp:chart control: {chart_path}",
+                    part_path=chart_path,
+                )
+            )
+        for chart_path in sorted(referenced_chart_parts):
+            part = self._parts.get(chart_path)
+            if part is None:
+                continue
+            if not isinstance(part, XmlPart):
+                errors.append(
+                    _issue(
+                        "chart_closure",
+                        f"Chart part must be XML: {chart_path}",
+                        part_path=chart_path,
+                    )
+                )
+
         return errors
 
     def strict_validate(self) -> None:
         errors = self.strict_lint_errors()
         if errors:
             raise HwpxValidationError(errors)
+
+    def strict_lint_report(self, *, include_none: bool = False) -> list[dict[str, object]]:
+        return [issue.to_dict(include_none=include_none) for issue in self.strict_lint_errors()]
+
+    def format_strict_lint_errors(self) -> str:
+        issues = self.strict_lint_errors()
+        if not issues:
+            return ""
+        lines: list[str] = []
+        for index, issue in enumerate(issues, start=1):
+            location = issue.location() or "document"
+            lines.append(f"{index}. [{issue.code or issue.kind}] {location}: {issue.message}")
+            if issue.hint:
+                lines.append(f"   Hint: {issue.hint}")
+        return "\n".join(lines)
 
     def _ensure_editable_sections(self) -> None:
         if self.sections:
@@ -2965,6 +3751,174 @@ class HwpxDocument:
         for key, value in entries.items():
             matrix.set(key, value)
         return matrix
+
+    def _build_chart_fallback_ole(
+        self,
+        *,
+        control_id: str,
+        z_order: str,
+        width: int,
+        height: int,
+        text_wrap: str,
+        text_flow: str,
+        treat_as_char: bool,
+        affect_line_spacing: bool,
+        flow_with_text: bool,
+        allow_overlap: bool,
+        hold_anchor_and_so: bool,
+        vert_rel_to: str,
+        horz_rel_to: str,
+        vert_align: str,
+        horz_align: str,
+        vert_offset: int,
+        horz_offset: int,
+        out_margin_left: int,
+        out_margin_right: int,
+        out_margin_top: int,
+        out_margin_bottom: int,
+    ) -> etree._Element:
+        manifest_id = self._next_chart_ole_manifest_id()
+        self.add_or_replace_binary(
+            f"{manifest_id}.ole",
+            _default_chart_fallback_ole_bytes(),
+            media_type="application/ole",
+            manifest_id=manifest_id,
+            is_embedded=False,
+        )
+
+        ole = etree.Element(qname("hp", "ole"))
+        ole.set("id", control_id)
+        ole.set("zOrder", z_order)
+        ole.set("numberingType", "PICTURE")
+        ole.set("textWrap", text_wrap)
+        ole.set("textFlow", text_flow)
+        ole.set("lock", "0")
+        ole.set("dropcapstyle", "None")
+        ole.set("href", "")
+        ole.set("groupLevel", "0")
+        ole.set("instid", "0")
+        ole.set("objectType", "UNKNOWN")
+        ole.set("binaryItemIDRef", manifest_id)
+        ole.set("hasMoniker", "0")
+        ole.set("drawAspect", "CONTENT")
+        ole.set("eqBaseLine", "0")
+
+        offset = etree.SubElement(ole, qname("hp", "offset"))
+        offset.set("x", "0")
+        offset.set("y", "0")
+
+        original_size = etree.SubElement(ole, qname("hp", "orgSz"))
+        original_size.set("width", "7200")
+        original_size.set("height", "7200")
+
+        current_size = etree.SubElement(ole, qname("hp", "curSz"))
+        current_size.set("width", "0")
+        current_size.set("height", "0")
+
+        flip = etree.SubElement(ole, qname("hp", "flip"))
+        flip.set("horizontal", "0")
+        flip.set("vertical", "0")
+
+        rotation = etree.SubElement(ole, qname("hp", "rotationInfo"))
+        rotation.set("angle", "0")
+        rotation.set("centerX", "0")
+        rotation.set("centerY", "0")
+        rotation.set("rotateimage", "1")
+
+        rendering = etree.SubElement(ole, qname("hp", "renderingInfo"))
+        self._append_identity_matrix(rendering, "transMatrix")
+        self._append_identity_matrix(rendering, "scaMatrix")
+        self._append_identity_matrix(rendering, "rotMatrix")
+
+        extent = etree.SubElement(ole, qname("hc", "extent"))
+        extent.set("x", "7200")
+        extent.set("y", "7200")
+
+        line_shape = etree.SubElement(ole, qname("hp", "lineShape"))
+        line_shape.set("color", "#000000")
+        line_shape.set("width", "0")
+        line_shape.set("style", "NONE")
+        line_shape.set("endCap", "ROUND")
+        line_shape.set("headStyle", "NORMAL")
+        line_shape.set("tailStyle", "NORMAL")
+        line_shape.set("headfill", "0")
+        line_shape.set("tailfill", "0")
+        line_shape.set("headSz", "SMALL_SMALL")
+        line_shape.set("tailSz", "SMALL_SMALL")
+        line_shape.set("outlineStyle", "NORMAL")
+        line_shape.set("alpha", "0")
+
+        size = etree.SubElement(ole, qname("hp", "sz"))
+        size.set("width", str(width))
+        size.set("widthRelTo", "ABSOLUTE")
+        size.set("height", str(height))
+        size.set("heightRelTo", "ABSOLUTE")
+        size.set("protect", "0")
+
+        position = etree.SubElement(ole, qname("hp", "pos"))
+        position.set("treatAsChar", "1" if treat_as_char else "0")
+        position.set("affectLSpacing", "0")
+        position.set("flowWithText", "1")
+        position.set("allowOverlap", "0")
+        position.set("holdAnchorAndSO", "0")
+        position.set("vertRelTo", "PARA")
+        position.set("horzRelTo", "COLUMN")
+        position.set("vertAlign", "TOP")
+        position.set("horzAlign", "LEFT")
+        position.set("vertOffset", "0")
+        position.set("horzOffset", "0")
+        _set_graphic_layout(
+            ole,
+            text_wrap=text_wrap,
+            text_flow=text_flow,
+            treat_as_char=treat_as_char,
+            affect_line_spacing=affect_line_spacing,
+            flow_with_text=flow_with_text,
+            allow_overlap=allow_overlap,
+            hold_anchor_and_so=hold_anchor_and_so,
+            vert_rel_to=vert_rel_to,
+            horz_rel_to=horz_rel_to,
+            vert_align=vert_align,
+            horz_align=horz_align,
+            vert_offset=vert_offset,
+            horz_offset=horz_offset,
+        )
+
+        out_margin = etree.SubElement(ole, qname("hp", "outMargin"))
+        out_margin.set("left", "0")
+        out_margin.set("right", "0")
+        out_margin.set("top", "0")
+        out_margin.set("bottom", "0")
+        _set_margin_values(
+            ole,
+            "./hp:outMargin",
+            left=out_margin_left,
+            right=out_margin_right,
+            top=out_margin_top,
+            bottom=out_margin_bottom,
+        )
+        return ole
+
+    def _next_chart_ole_manifest_id(self) -> str:
+        existing = {
+            item.get("id", "")
+            for item in self.content_hpf.manifest_items()
+            if (item.get("href") or "").startswith("BinData/") and item.get("id")
+        }
+        index = 1
+        while f"ole{index}" in existing:
+            index += 1
+        return f"ole{index}"
+
+    def _next_chart_part_path(self) -> str:
+        highest = 0
+        pattern = re.compile(r"^Chart/chart(\d+)\.xml$")
+        for path in self.list_part_paths():
+            match = pattern.match(path)
+            if match is None:
+                continue
+            highest = max(highest, int(match.group(1)))
+        return f"Chart/chart{highest + 1}.xml"
 
     def _next_control_number(self, expression: str) -> str:
         highest = 0

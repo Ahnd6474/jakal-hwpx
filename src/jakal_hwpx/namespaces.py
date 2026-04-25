@@ -1,11 +1,15 @@
 from __future__ import annotations
 
 NS = {
+    "a": "http://schemas.openxmlformats.org/drawingml/2006/main",
+    "c": "http://schemas.openxmlformats.org/drawingml/2006/chart",
+    "c14": "http://schemas.microsoft.com/office/drawing/2007/8/2/chart",
     "ha": "http://www.hancom.co.kr/hwpml/2011/app",
     "hc": "http://www.hancom.co.kr/hwpml/2011/core",
     "hh": "http://www.hancom.co.kr/hwpml/2011/head",
     "hhs": "http://www.hancom.co.kr/hwpml/2011/history",
     "hm": "http://www.hancom.co.kr/hwpml/2011/master-page",
+    "ho": "http://schemas.haansoft.com/office/8.0",
     "hp": "http://www.hancom.co.kr/hwpml/2011/paragraph",
     "hp10": "http://www.hancom.co.kr/hwpml/2016/paragraph",
     "hs": "http://www.hancom.co.kr/hwpml/2011/section",
@@ -15,10 +19,13 @@ NS = {
     "dc": "http://purl.org/dc/elements/1.1/",
     "epub": "http://www.idpf.org/2007/ops",
     "hwpunitchar": "http://www.hancom.co.kr/hwpml/2016/HwpUnitChar",
+    "jakalchart": "urn:jakal-hwpx:chart-metadata",
+    "mc": "http://schemas.openxmlformats.org/markup-compatibility/2006",
     "ocf": "urn:oasis:names:tc:opendocument:xmlns:container",
     "odf": "urn:oasis:names:tc:opendocument:xmlns:manifest:1.0",
     "ooxmlchart": "http://www.hancom.co.kr/hwpml/2016/ooxmlchart",
     "opf": "http://www.idpf.org/2007/opf/",
+    "r": "http://schemas.openxmlformats.org/officeDocument/2006/relationships",
 }
 
 SECTION_PATTERN = r"^Contents/section(\d+)\.xml$"

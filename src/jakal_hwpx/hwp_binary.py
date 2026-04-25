@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import copy
+import json
 import struct
 import zlib
 from collections.abc import Sequence
@@ -235,6 +236,8 @@ _DEFAULT_COMPLEX_SHAPE_COMPONENT_LINE_WIDTH = 120
 _DEFAULT_OLE_LINE_WIDTH = 0
 _HWP_FILLED_SHAPE_COMMON_PAYLOAD_SIZE = 32
 _SHAPE_NATIVE_METADATA_PREFIX = "JAKAL_SHAPE_META"
+_CONTROL_NATIVE_METADATA_PREFIX = "JAKAL_CTRL_META"
+_MEMO_SHAPE_NATIVE_METADATA_PREFIX = "JAKAL_MEMO_SHAPE_META"
 _HWP_COMPLEX_SHAPE_TEMPLATES = {
     "rect": {
         "ctrl": _DEFAULT_RECT_CTRL_HEADER,
@@ -524,7 +527,7 @@ def _build_shape_component_payload(
     return bytes(payload)
 
 
-def _build_shape_native_metadata_payload(**fields: object) -> bytes:
+def _build_prefixed_metadata_payload(prefix: str, **fields: object) -> bytes:
     serialized_fields: list[str] = []
     for name, value in fields.items():
         if value is None:
@@ -535,8 +538,20 @@ def _build_shape_native_metadata_payload(**fields: object) -> bytes:
             rendered = str(value)
         serialized_fields.append(f"{name}={rendered}")
     serialized = ";".join(serialized_fields)
-    text = f"{_SHAPE_NATIVE_METADATA_PREFIX};{serialized}" if serialized else _SHAPE_NATIVE_METADATA_PREFIX
+    text = f"{prefix};{serialized}" if serialized else prefix
     return text.encode("utf-16-le")
+
+
+def _build_shape_native_metadata_payload(**fields: object) -> bytes:
+    return _build_prefixed_metadata_payload(_SHAPE_NATIVE_METADATA_PREFIX, **fields)
+
+
+def _build_control_native_metadata_payload(**fields: object) -> bytes:
+    return _build_prefixed_metadata_payload(_CONTROL_NATIVE_METADATA_PREFIX, **fields)
+
+
+def _build_memo_shape_native_metadata_payload(**fields: object) -> bytes:
+    return _build_prefixed_metadata_payload(_MEMO_SHAPE_NATIVE_METADATA_PREFIX, **fields)
 
 
 def _graphic_control_out_margin_values(payload: bytes) -> tuple[int, int, int, int]:
@@ -1911,6 +1926,34 @@ def _parse_shape_native_metadata(payload: bytes) -> dict[str, str]:
     return metadata
 
 
+def _parse_control_native_metadata(payload: bytes) -> dict[str, str]:
+    if not payload:
+        return {}
+    text = payload.decode("utf-16-le", errors="ignore")
+    if not text.startswith(_CONTROL_NATIVE_METADATA_PREFIX):
+        return {}
+    metadata: dict[str, str] = {}
+    for field in text.split(";")[1:]:
+        key, separator, value = field.partition("=")
+        if separator and key:
+            metadata[key] = value
+    return metadata
+
+
+def _parse_memo_shape_native_metadata(payload: bytes) -> dict[str, str]:
+    if not payload:
+        return {}
+    text = payload.decode("utf-16-le", errors="ignore")
+    if not text.startswith(_MEMO_SHAPE_NATIVE_METADATA_PREFIX):
+        return {}
+    metadata: dict[str, str] = {}
+    for field in text.split(";")[1:]:
+        key, separator, value = field.partition("=")
+        if separator and key:
+            metadata[key] = value
+    return metadata
+
+
 def _metadata_prefixed_str_map(metadata: dict[str, str], prefix: str) -> dict[str, str]:
     result: dict[str, str] = {}
     for key, value in metadata.items():
@@ -1931,6 +1974,50 @@ def _metadata_prefixed_int_map(metadata: dict[str, str], prefix: str) -> dict[st
     return result
 
 
+def _control_native_metadata(control_node: "RecordNode") -> dict[str, str]:
+    metadata: dict[str, str] = {}
+    for child in control_node.children:
+        if child.tag_id != TAG_CTRL_DATA:
+            continue
+        metadata.update(_parse_control_native_metadata(child.payload))
+    return metadata
+
+
+def _update_control_native_metadata(
+    control_node: "RecordNode",
+    *,
+    updates: dict[str, object | None],
+    remove_prefixes: tuple[str, ...] = (),
+) -> None:
+    metadata = _control_native_metadata(control_node)
+    for prefix in remove_prefixes:
+        for key in [name for name in metadata if name.startswith(prefix)]:
+            metadata.pop(key, None)
+    for key, value in updates.items():
+        if value is None:
+            metadata.pop(key, None)
+        elif isinstance(value, bool):
+            metadata[key] = "1" if value else "0"
+        else:
+            metadata[key] = str(value)
+    metadata_nodes = [
+        child
+        for child in control_node.children
+        if child.tag_id == TAG_CTRL_DATA and _parse_control_native_metadata(child.payload)
+    ]
+    if not metadata:
+        for node in metadata_nodes:
+            control_node.children.remove(node)
+        return
+    payload = _build_control_native_metadata_payload(**metadata)
+    if metadata_nodes:
+        metadata_nodes[0].payload = payload
+        for node in metadata_nodes[1:]:
+            control_node.children.remove(node)
+        return
+    control_node.add_child(RecordNode(tag_id=TAG_CTRL_DATA, level=control_node.level + 1, payload=payload))
+
+
 def _parse_list_header_payload(payload: bytes) -> dict[str, object]:
     values = bytes(payload)
     result: dict[str, object] = {
@@ -1948,9 +2035,33 @@ def _parse_list_header_payload(payload: bytes) -> dict[str, object]:
 def _parse_memo_shape_payload(payload: bytes) -> dict[str, object]:
     values = bytes(payload)
     result: dict[str, object] = {
+        "raw_payload": values,
         "u16_values": _payload_u16_values(values),
         "u32_values": _payload_u32_values(values),
     }
+    metadata = _parse_memo_shape_native_metadata(values)
+    if metadata:
+        result.update(metadata)
+        if "width" in metadata:
+            try:
+                result["width"] = int(metadata["width"])
+            except ValueError:
+                pass
+        if "lineWidth" in metadata:
+            try:
+                result["line_width"] = int(metadata["lineWidth"])
+            except ValueError:
+                pass
+        if "lineType" in metadata:
+            result["line_type"] = metadata["lineType"]
+        if "lineColor" in metadata:
+            result["line_color"] = metadata["lineColor"]
+        if "fillColor" in metadata:
+            result["fill_color"] = metadata["fillColor"]
+        if "activeColor" in metadata:
+            result["active_color"] = metadata["activeColor"]
+        if "memoType" in metadata:
+            result["memo_type"] = metadata["memoType"]
     decoded = values.decode("utf-16-le", errors="ignore").replace("\x00", "")
     if decoded:
         result["utf16_text"] = decoded
@@ -1967,6 +2078,7 @@ def _parse_form_object_payload(payload: bytes) -> dict[str, object]:
     decoded = values.decode("utf-16-le", errors="ignore").replace("\x00", "")
     if decoded:
         result["utf16_text"] = decoded
+        result["label"] = decoded
     return result
 
 
@@ -1980,6 +2092,7 @@ def _parse_memo_list_payload(payload: bytes) -> dict[str, object]:
     decoded = values.decode("utf-16-le", errors="ignore").replace("\x00", "")
     if decoded:
         result["utf16_text"] = decoded
+        result["text"] = decoded
     return result
 
 
@@ -1993,6 +2106,7 @@ def _parse_chart_data_payload(payload: bytes) -> dict[str, object]:
     decoded = values.decode("utf-16-le", errors="ignore").replace("\x00", "")
     if decoded:
         result["utf16_text"] = decoded
+        result["title"] = decoded
     return result
 
 
@@ -5361,6 +5475,7 @@ class HwpBinaryDocument:
         if section_definition is None:
             return {}
         values = _parse_section_definition_payload(section_definition.payload)
+        metadata = _control_native_metadata(section_definition)
         page_hiding = _parse_page_hiding_payload(_find_paragraph_control_node(model, "pghd").payload) if _find_paragraph_control_node(model, "pghd") is not None else {}
         page_starts_on = "BOTH"
         page_starts_on_control = _find_paragraph_control_node(model, "pgct")
@@ -5395,6 +5510,7 @@ class HwpBinaryDocument:
                 "equation": str(values.get("equation", 0)),
             },
             "numbering_shape_id": str(values.get("numbering_shape_id", 0)),
+            "memo_shape_id": metadata.get("section.memoShapeId") or None,
         }
 
     def set_section_definition_settings(
@@ -5405,6 +5521,7 @@ class HwpBinaryDocument:
         grid: dict[str, int] | None = None,
         start_numbers: dict[str, str] | None = None,
         numbering_shape_id: int | None = None,
+        memo_shape_id: int | str | None = None,
     ) -> None:
         self.ensure_section_count(section_index + 1)
         model = self.section_model(section_index)
@@ -5418,6 +5535,11 @@ class HwpBinaryDocument:
             start_numbers=start_numbers,
             numbering_shape_id=numbering_shape_id,
         )
+        if memo_shape_id is not None:
+            _update_control_native_metadata(
+                section_definition,
+                updates={"section.memoShapeId": memo_shape_id},
+            )
         if visibility is not None:
             current = self.section_definition_settings(section_index)["visibility"]
             current.update({key: value for key, value in visibility.items() if value is not None})
@@ -5842,6 +5964,156 @@ class HwpBinaryDocument:
             section_index=section_index,
             paragraph_index=paragraph_index,
         )
+
+    def append_form(
+        self,
+        label: str = "",
+        *,
+        form_type: str = "INPUT",
+        name: str | None = None,
+        value: str | None = None,
+        checked: bool = False,
+        items: Sequence[str] | None = None,
+        editable: bool = True,
+        locked: bool = False,
+        placeholder: str | None = None,
+        section_index: int | None = None,
+        paragraph_index: int | None = None,
+    ) -> None:
+        target_section_index = self._resolve_append_section_index(None, section_index)
+        model = self.section_model(target_section_index)
+        use_synthetic_line_numbers = _section_uses_synthetic_line_number_layout(model)
+        if paragraph_index is None or paragraph_index < 0:
+            paragraph = model.append_paragraph("\r")
+        else:
+            paragraph = model.insert_paragraph(paragraph_index, "\r")
+        if use_synthetic_line_numbers:
+            _ensure_paragraph_line_seg(paragraph)
+        control_node = RecordNode(tag_id=TAG_CTRL_HEADER, level=1, payload=_build_control_id_payload("mrof"))
+        semantic_metadata = {
+            "form.type": str(form_type).upper(),
+            "form.name": name,
+            "form.value": value,
+            "form.checked": checked,
+            "form.editable": editable,
+            "form.locked": locked,
+            "form.placeholder": placeholder,
+            "form.label": label,
+        }
+        if items:
+            semantic_metadata["form.items"] = json.dumps(list(items), ensure_ascii=True, separators=(",", ":"))
+        if any(field is not None for field in semantic_metadata.values()):
+            control_node.add_child(
+                RecordNode(
+                    tag_id=TAG_CTRL_DATA,
+                    level=2,
+                    payload=_build_control_native_metadata_payload(**semantic_metadata),
+                )
+            )
+        control_node.add_child(RecordNode(tag_id=TAG_FORM_OBJECT, level=2, payload=str(label).encode("utf-16-le")))
+        paragraph.header.add_child(control_node)
+        self.replace_section_model(target_section_index, model)
+
+    def append_memo(
+        self,
+        text: str,
+        *,
+        author: str | None = None,
+        memo_id: str | None = None,
+        anchor_id: str | None = None,
+        order: int | None = None,
+        visible: bool = True,
+        section_index: int | None = None,
+        paragraph_index: int | None = None,
+    ) -> None:
+        target_section_index = self._resolve_append_section_index(None, section_index)
+        model = self.section_model(target_section_index)
+        use_synthetic_line_numbers = _section_uses_synthetic_line_number_layout(model)
+        if paragraph_index is None or paragraph_index < 0:
+            paragraph = model.append_paragraph("\r")
+        else:
+            paragraph = model.insert_paragraph(paragraph_index, "\r")
+        if use_synthetic_line_numbers:
+            _ensure_paragraph_line_seg(paragraph)
+        control_node = RecordNode(tag_id=TAG_CTRL_HEADER, level=1, payload=_build_control_id_payload("omem"))
+        semantic_metadata = {
+            "memo.author": author,
+            "memo.memoId": memo_id,
+            "memo.anchorId": anchor_id,
+            "memo.order": order,
+            "memo.visible": visible,
+        }
+        if any(field is not None for field in semantic_metadata.values()):
+            control_node.add_child(
+                RecordNode(
+                    tag_id=TAG_CTRL_DATA,
+                    level=2,
+                    payload=_build_control_native_metadata_payload(**semantic_metadata),
+                )
+            )
+        control_node.add_child(RecordNode(tag_id=TAG_MEMO_LIST, level=2, payload=str(text).encode("utf-16-le")))
+        paragraph.header.add_child(control_node)
+        self.replace_section_model(target_section_index, model)
+
+    def append_chart(
+        self,
+        title: str = "",
+        *,
+        chart_type: str = "BAR",
+        categories: Sequence[str] | None = None,
+        series: Sequence[dict[str, object]] | None = None,
+        data_ref: str | None = None,
+        legend_visible: bool = True,
+        width: int = DEFAULT_HWP_SHAPE_WIDTH,
+        height: int = DEFAULT_HWP_SHAPE_HEIGHT,
+        shape_comment: str | None = None,
+        section_index: int | None = None,
+        paragraph_index: int | None = None,
+    ) -> None:
+        target_section_index = self._resolve_append_section_index(None, section_index)
+        model = self.section_model(target_section_index)
+        use_synthetic_line_numbers = _section_uses_synthetic_line_number_layout(model)
+        paragraph = _insert_blank_like_paragraph(model, paragraph_index)
+        if use_synthetic_line_numbers:
+            _ensure_paragraph_line_seg(paragraph)
+        _append_control_marker_to_paragraph(paragraph, "gso ")
+        control_node = RecordNode(
+            tag_id=TAG_CTRL_HEADER,
+            level=1,
+            payload=_build_graphic_control_header_payload(
+                _shape_control_header_template("rect"),
+                "gso ",
+                width=width,
+                height=height,
+                description=shape_comment,
+            ),
+        )
+        semantic_metadata = {
+            "chart.title": title,
+            "chart.chartType": str(chart_type).upper(),
+            "chart.dataRef": data_ref,
+            "chart.legendVisible": legend_visible,
+        }
+        if categories:
+            semantic_metadata["chart.categories"] = json.dumps(list(categories), ensure_ascii=True, separators=(",", ":"))
+        if series:
+            semantic_metadata["chart.series"] = json.dumps(list(series), ensure_ascii=True, separators=(",", ":"))
+        control_node.add_child(
+            RecordNode(
+                tag_id=TAG_CTRL_DATA,
+                level=2,
+                payload=_build_shape_native_metadata_payload(**semantic_metadata),
+            )
+        )
+        shape_component = RecordNode(
+            tag_id=TAG_SHAPE_COMPONENT,
+            level=2,
+            payload=_build_shape_component_payload("rect", width, height),
+        )
+        shape_component.add_child(RecordNode(tag_id=TAG_CHART_DATA, level=3, payload=str(title).encode("utf-16-le")))
+        control_node.add_child(shape_component)
+        paragraph.header.add_child(control_node)
+        self.replace_section_model(target_section_index, model)
 
     def append_equation(
         self,

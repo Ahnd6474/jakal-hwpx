@@ -319,7 +319,9 @@ def main() -> int:
 
     output_root = Path(args.output_dir).expanduser().resolve() / args.profile
     output_root.mkdir(parents=True, exist_ok=True)
-    temp_root = REPO_ROOT / "tests" / "_release_tmp" / args.profile
+    configured_temp_root = os.environ.get("JAKAL_RELEASE_TEMP_ROOT")
+    temp_root_base = Path(configured_temp_root).expanduser().resolve() if configured_temp_root else REPO_ROOT / "tests" / "_release_tmp"
+    temp_root = temp_root_base / args.profile
     shutil.rmtree(temp_root, ignore_errors=True)
     temp_root.mkdir(parents=True, exist_ok=True)
 

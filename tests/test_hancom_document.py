@@ -7,13 +7,16 @@ import pytest
 from jakal_hwpx import (
     AutoNumber,
     Bookmark,
+    Chart,
     Equation,
     Field,
+    Form,
     HancomDocument,
     Hyperlink,
     HwpConnectLineShapeObject,
     HwpDocument,
     HwpxDocument,
+    Memo,
     Note,
     Ole,
     Paragraph,
@@ -27,6 +30,7 @@ from jakal_hwpx.namespaces import NS
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 HWP_SAMPLE_DIR = REPO_ROOT / "examples" / "samples" / "hwp"
+MATH_DEBUG_SAMPLE_DIR = REPO_ROOT / "math debug sample"
 
 
 @pytest.fixture(scope="session")
@@ -112,6 +116,73 @@ def test_hancom_document_can_read_hwpx_and_roundtrip_hwpx(sample_hwpx_path: Path
 
     reopened = HwpxDocument.open(output_path)
     assert reopened.get_document_text()
+
+
+def test_hancom_document_does_not_materialize_default_hwpx_memo_shape_in_hwp_bridge(tmp_path: Path) -> None:
+    source = HwpxDocument.blank()
+
+    document = HancomDocument.from_hwpx_document(source)
+    assert document.sections[0].settings.memo_shape_id is None
+
+    hwp_document = document.to_hwp_document()
+    assert hwp_document.docinfo_model().memo_shape_records() == []
+    assert hwp_document.binary_document().section_definition_settings(0).get("memo_shape_id") is None
+
+    roundtrip = HancomDocument.from_hwp_document(hwp_document).to_hwpx_document()
+    output_path = tmp_path / "blank_memo_shape_roundtrip.hwpx"
+    roundtrip.save(output_path)
+
+    reopened = HwpxDocument.open(output_path)
+    assert reopened.memo_shapes() == []
+    assert reopened.section_settings().memo_shape_id == "0"
+
+
+@pytest.mark.parametrize("sample_name", ["mock_exam_before.hwpx", "mock_exam_1_10 after.hwpx"])
+def test_math_debug_sample_preserves_equation_sizes_through_hwpx_bridge(tmp_path: Path, sample_name: str) -> None:
+    sample_path = MATH_DEBUG_SAMPLE_DIR / sample_name
+    source = HancomDocument.from_hwpx_document(HwpxDocument.open(sample_path))
+    before = [
+        (block.script, block.width, block.height)
+        for section in source.sections
+        for block in section.blocks
+        if isinstance(block, Equation)
+    ]
+
+    output_path = tmp_path / f"{sample_path.stem}_math_debug_roundtrip.hwpx"
+    source.to_hwpx_document().save(output_path)
+    restored = HancomDocument.from_hwpx_document(HwpxDocument.open(output_path))
+    after = [
+        (block.script, block.width, block.height)
+        for section in restored.sections
+        for block in section.blocks
+        if isinstance(block, Equation)
+    ]
+
+    assert after == before
+
+
+@pytest.mark.parametrize("sample_name", ["mock_exam_before.hwpx", "mock_exam_1_10 after.hwpx"])
+def test_math_debug_sample_preserves_equation_sizes_through_hwp_bridge(tmp_path: Path, sample_name: str) -> None:
+    sample_path = MATH_DEBUG_SAMPLE_DIR / sample_name
+    source = HancomDocument.from_hwpx_document(HwpxDocument.open(sample_path))
+    before = [
+        (block.script, block.width, block.height)
+        for section in source.sections
+        for block in section.blocks
+        if isinstance(block, Equation)
+    ]
+
+    hwp_path = tmp_path / f"{sample_path.stem}_math_debug_roundtrip.hwp"
+    source.to_hwp_document().save(hwp_path)
+    restored = HancomDocument.from_hwp_document(HwpDocument.open(hwp_path))
+    after = [
+        (block.script, block.width, block.height)
+        for section in restored.sections
+        for block in section.blocks
+        if isinstance(block, Equation)
+    ]
+
+    assert after == before
 
 
 def test_hancom_document_can_read_new_control_blocks_from_hwpx(tmp_path: Path) -> None:
@@ -205,6 +276,248 @@ def test_hancom_document_preserves_paragraph_style_refs_for_hwpx_roundtrip(tmp_p
     assert target.get("paraPrIDRef") == "31"
     run_ids = target.xpath("./hp:run/@charPrIDRef", namespaces=NS)
     assert run_ids and all(value == "32" for value in run_ids)
+
+
+def test_hancom_document_bridges_form_memo_and_chart_through_hwp() -> None:
+    document = HancomDocument.blank()
+    document.append_form(
+        "Consent",
+        form_type="CHECKBOX",
+        name="consent",
+        value="Y",
+        checked=True,
+        items=["Y", "N"],
+        editable=False,
+        locked=True,
+        placeholder="Choose",
+    )
+    document.append_memo(
+        "Review later",
+        author="Alice",
+        memo_id="memo-1",
+        anchor_id="anchor-1",
+        order=2,
+        visible=False,
+    )
+    chart = document.append_chart(
+        "Revenue",
+        chart_type="LINE",
+        categories=["Q1", "Q2"],
+        series=[{"name": "Sales", "values": [10, 20]}],
+        data_ref="dataset-1",
+        legend_visible=False,
+        width=3300,
+        height=2100,
+        shape_comment="chart-comment",
+    )
+    chart.layout = {"textWrap": "SQUARE", "textFlow": "LEFT_ONLY", "treatAsChar": "0"}
+    chart.out_margins = {"left": 1, "right": 2, "top": 3, "bottom": 4}
+    chart.rotation = {"angle": "15", "centerX": "123", "centerY": "456"}
+
+    hwp_document = document.to_hwp_document()
+
+    hwp_form = hwp_document.forms()[0]
+    assert hwp_form.label == "Consent"
+    assert hwp_form.form_type == "CHECKBOX"
+    assert hwp_form.name == "consent"
+    assert hwp_form.value == "Y"
+    assert hwp_form.checked is True
+    assert hwp_form.items == ["Y", "N"]
+    assert hwp_form.editable is False
+    assert hwp_form.locked is True
+    assert hwp_form.placeholder == "Choose"
+
+    hwp_memo = hwp_document.memos()[0]
+    assert hwp_memo.text == "Review later"
+    assert hwp_memo.author == "Alice"
+    assert hwp_memo.memo_id == "memo-1"
+    assert hwp_memo.anchor_id == "anchor-1"
+    assert hwp_memo.order == 2
+    assert hwp_memo.visible is False
+
+    hwp_chart = hwp_document.charts()[0]
+    assert hwp_chart.title == "Revenue"
+    assert hwp_chart.chart_type == "LINE"
+    assert hwp_chart.categories == ["Q1", "Q2"]
+    assert hwp_chart.series == [{"name": "Sales", "values": [10, 20]}]
+    assert hwp_chart.data_ref == "dataset-1"
+    assert hwp_chart.legend_visible is False
+    assert hwp_chart.shape_comment == "chart-comment"
+    assert hwp_chart.layout()["textWrap"] == "SQUARE"
+    assert hwp_chart.layout()["textFlow"] == "LEFT_ONLY"
+    assert hwp_chart.rotation()["angle"] == "15"
+
+    restored = HancomDocument.from_hwp_document(hwp_document)
+    restored_form = next(block for block in restored.sections[0].blocks if isinstance(block, Form))
+    restored_memo = next(block for block in restored.sections[0].blocks if isinstance(block, Memo))
+    restored_chart = next(block for block in restored.sections[0].blocks if isinstance(block, Chart))
+
+    assert restored_form.label == "Consent"
+    assert restored_form.checked is True
+    assert restored_form.items == ["Y", "N"]
+    assert restored_memo.author == "Alice"
+    assert restored_memo.visible is False
+    assert restored_chart.chart_type == "LINE"
+    assert restored_chart.categories == ["Q1", "Q2"]
+    assert restored_chart.series == [{"name": "Sales", "values": [10, 20]}]
+    assert restored_chart.shape_comment == "chart-comment"
+
+
+def test_hancom_document_bridges_form_memo_and_chart_through_hwpx() -> None:
+    document = HancomDocument.blank()
+    memo_shape = document.append_memo_shape_definition(
+        width=16384,
+        line_width=24,
+        line_type="DOT",
+        line_color="#112233",
+        fill_color="#FFF4CC",
+        active_color="#FFAA00",
+        memo_type="USER_INSERT",
+    )
+    document.sections[0].settings.set_memo_shape_id(memo_shape.memo_shape_id)
+    document.append_form(
+        "Approval",
+        form_type="INPUT",
+        name="approval",
+        value="pending",
+        checked=False,
+        items=["pending", "approved"],
+        editable=True,
+        locked=False,
+        placeholder="Type status",
+    )
+    document.append_memo(
+        "Check attachment",
+        author="Bob",
+        memo_id="memo-2",
+        anchor_id="anchor-2",
+        order=5,
+        visible=True,
+    )
+    chart = document.append_chart(
+        "Trend",
+        chart_type="BAR",
+        categories=["Jan", "Feb"],
+        series=[{"name": "Count", "values": [3, 4]}],
+        data_ref="dataset-2",
+        legend_visible=True,
+        width=3600,
+        height=2000,
+        shape_comment="chart-note",
+    )
+    chart.layout = {"textWrap": "SQUARE", "textFlow": "RIGHT_ONLY", "treatAsChar": "0"}
+    chart.out_margins = {"left": 6, "right": 7, "top": 8, "bottom": 9}
+    chart.rotation = {"angle": "25", "centerX": "222", "centerY": "333"}
+
+    hwpx_document = document.to_hwpx_document()
+    field_types = [field.field_type for field in hwpx_document.fields()]
+    assert "JAKAL_FORM" not in field_types
+    assert "JAKAL_MEMO" in field_types
+    assert [memo.text for memo in hwpx_document.memos()] == ["Check attachment"]
+    assert len(hwpx_document.memo_shapes()) == 1
+    assert hwpx_document.memo_shapes()[0].memo_shape_id == "0"
+    assert hwpx_document.memo_shapes()[0].memo_type == "USER_INSERT"
+    assert hwpx_document.section_settings().memo_shape_id == "0"
+    assert len(hwpx_document.charts()) == 1
+    assert hwpx_document.charts()[0].chart_type == "BAR"
+    assert hwpx_document.charts()[0].shape_comment == "chart-note"
+    assert hwpx_document.charts()[0].data_ref == "dataset-2"
+    assert hwpx_document.charts()[0].rotation()["angle"] == "25"
+    assert hwpx_document.charts()[0].rotation()["centerX"] == "222"
+    assert hwpx_document.charts()[0].rotation()["centerY"] == "333"
+    assert hwpx_document.oles() == []
+    assert hwpx_document.sections[0].root_element.xpath(".//hp:chart/hp:shapeComment[text()='chart-note']", namespaces=NS)
+    assert hwpx_document.sections[0].root_element.xpath(
+        ".//hp:switch[hp:case/hp:chart]/hp:default/hp:ole/hp:rotationInfo[@angle='25'][@centerX='222'][@centerY='333']",
+        namespaces=NS,
+    )
+    assert "Chart/chart1.xml" in hwpx_document.list_part_paths()
+    assert "BinData/ole1.ole" in hwpx_document.list_part_paths()
+    forms = hwpx_document.forms()
+    assert len(forms) == 1
+    assert forms[0].form_type == "INPUT"
+    assert forms[0].label == "Approval"
+    assert forms[0].value == "pending"
+    assert forms[0].placeholder == "Type status"
+    edit_nodes = hwpx_document.sections[0].root_element.xpath(".//hp:edit", namespaces=NS)
+    assert edit_nodes
+    assert edit_nodes[0].xpath("./hp:caption/hp:subList/hp:p/hp:run/hp:t[text()='Approval']", namespaces=NS)
+    assert "label" not in edit_nodes[0].get("command", "")
+
+    restored = HancomDocument.from_hwpx_document(hwpx_document)
+    restored_form = next(block for block in restored.sections[0].blocks if isinstance(block, Form))
+    restored_memo = next(block for block in restored.sections[0].blocks if isinstance(block, Memo))
+    restored_chart = next(block for block in restored.sections[0].blocks if isinstance(block, Chart))
+
+    assert restored_form.label == "Approval"
+    assert restored_form.form_type == "INPUT"
+    assert restored_form.name == "approval"
+    assert restored_form.value == "pending"
+    assert restored_form.items == ["pending", "approved"]
+    assert restored_form.placeholder == "Type status"
+    assert restored_memo.text == "Check attachment"
+    assert restored_memo.author == "Bob"
+    assert restored_memo.memo_id == "memo-2"
+    assert restored_memo.anchor_id == "anchor-2"
+    assert restored_memo.order == 5
+    assert restored_memo.visible is True
+    assert len(restored.memo_shape_definitions) == 1
+    assert restored.memo_shape_definitions[0].memo_type == "USER_INSERT"
+    assert restored.sections[0].settings.memo_shape_id == "0"
+    assert restored_chart.title == "Trend"
+    assert restored_chart.chart_type == "BAR"
+    assert restored_chart.categories == ["Jan", "Feb"]
+    assert restored_chart.series == [{"name": "Count", "values": [3, 4]}]
+    assert restored_chart.data_ref == "dataset-2"
+    assert restored_chart.legend_visible is True
+    assert restored_chart.shape_comment == "chart-note"
+    assert restored_chart.layout["textFlow"] == "RIGHT_ONLY"
+    assert restored_chart.rotation["angle"] == "25"
+    assert restored_chart.rotation["centerX"] == "222"
+    assert restored_chart.rotation["centerY"] == "333"
+
+    hwp_document = restored.to_hwp_document()
+    assert hwp_document.forms()[0].placeholder == "Type status"
+    assert hwp_document.memos()[0].text == "Check attachment"
+    assert hwp_document.charts()[0].chart_type == "BAR"
+    assert hwp_document.charts()[0].shape_comment == "chart-note"
+    assert hwp_document.charts()[0].rotation()["angle"] == "25"
+    assert hwp_document.binary_document().section_definition_settings(0)["memo_shape_id"] == "0"
+    memo_shape_records = hwp_document.docinfo_model().memo_shape_records()
+    assert len(memo_shape_records) == 1
+    assert memo_shape_records[0].fields()["memo_type"] == "USER_INSERT"
+
+    restored_from_hwp = HancomDocument.from_hwp_document(hwp_document)
+    assert len(restored_from_hwp.memo_shape_definitions) == 1
+    assert restored_from_hwp.memo_shape_definitions[0].memo_shape_id == "0"
+    assert restored_from_hwp.memo_shape_definitions[0].memo_type == "USER_INSERT"
+    assert restored_from_hwp.sections[0].settings.memo_shape_id == "0"
+
+
+def test_hancom_document_pairs_hwpx_memo_carriers_by_text_before_index() -> None:
+    source = HwpxDocument.blank()
+    source.append_memo("Memo A", paragraph_index=0)
+    source.append_memo("Memo B", paragraph_index=0)
+    source.append_field(
+        field_type="JAKAL_MEMO",
+        name="memo-b",
+        parameters={"Text": "Memo B", "Author": "Bob", "Order": "2", "Visible": "0"},
+        paragraph_index=0,
+    )
+    source.append_field(
+        field_type="JAKAL_MEMO",
+        name="memo-a",
+        parameters={"Text": "Memo A", "Author": "Alice", "Order": "1", "Visible": "1"},
+        paragraph_index=0,
+    )
+
+    document = HancomDocument.from_hwpx_document(source)
+    memos = [block for block in document.sections[0].blocks if isinstance(block, Memo)]
+
+    assert [(memo.text, memo.author, memo.memo_id, memo.order, memo.visible) for memo in memos] == [
+        ("Memo A", "Alice", "memo-a", 1, True),
+        ("Memo B", "Bob", "memo-b", 2, False),
+    ]
 
 
 def test_hancom_document_preserves_extended_style_fields_for_hwpx_roundtrip() -> None:

@@ -629,6 +629,139 @@ def test_hwp_form_memo_and_chart_wrappers_can_classify_and_expose_payloads() -> 
     assert chart.raw_payload == "CHART-TITLE".encode("utf-16-le")
 
 
+def test_hwp_form_memo_and_chart_objects_support_semantic_edit_roundtrip(tmp_path: Path) -> None:
+    document = HwpDocument.blank()
+    document.append_form(
+        "Accept terms",
+        form_type="CHECKBOX",
+        name="accept",
+        value="Y",
+        checked=True,
+        items=["Y", "N"],
+        editable=True,
+        locked=False,
+        placeholder="choose",
+    )
+    document.append_memo(
+        "Need review",
+        author="Kim",
+        memo_id="memo-1",
+        anchor_id="p-1",
+        order=3,
+        visible=False,
+    )
+    document.append_chart(
+        "Sales",
+        chart_type="BAR",
+        categories=["Q1", "Q2"],
+        series=[{"name": "Revenue", "values": [10, 20]}],
+        data_ref="Sheet1!A1:B3",
+        legend_visible=True,
+        width=9000,
+        height=4200,
+        shape_comment="chart comment",
+    )
+
+    form = document.forms()[-1]
+    memo = document.memos()[-1]
+    chart = document.charts()[-1]
+
+    assert form.label == "Accept terms"
+    assert form.form_type == "CHECKBOX"
+    assert form.name == "accept"
+    assert form.value == "Y"
+    assert form.checked is True
+    assert form.items == ["Y", "N"]
+    assert form.editable is True
+    assert form.locked is False
+    assert form.placeholder == "choose"
+
+    assert memo.text == "Need review"
+    assert memo.author == "Kim"
+    assert memo.memo_id == "memo-1"
+    assert memo.anchor_id == "p-1"
+    assert memo.order == 3
+    assert memo.visible is False
+
+    assert chart.title == "Sales"
+    assert chart.chart_type == "BAR"
+    assert chart.categories == ["Q1", "Q2"]
+    assert chart.series == [{"name": "Revenue", "values": [10, 20]}]
+    assert chart.data_ref == "Sheet1!A1:B3"
+    assert chart.legend_visible is True
+    assert chart.size() == {"width": 9000, "height": 4200}
+    assert chart.shape_comment == "chart comment"
+
+    form.set_label("Pick a value")
+    form.set_form_type("COMBO")
+    form.set_name("accept_state")
+    form.set_value("N")
+    form.set_checked(False)
+    form.set_items(["A", "B", "C"])
+    form.set_editable(False)
+    form.set_locked(True)
+    form.set_placeholder("pick one")
+
+    memo.set_text("Reviewed")
+    memo.set_author("Lee")
+    memo.set_memo_id("memo-2")
+    memo.set_anchor_id("p-2")
+    memo.set_order(9)
+    memo.set_visible(True)
+
+    chart.set_title("Revenue")
+    chart.set_chart_type("LINE")
+    chart.set_categories(["Jan", "Feb", "Mar"])
+    chart.set_series(
+        [
+            {"name": "Sales", "values": [1, 2, 3]},
+            {"name": "Cost", "values": [0, 1, 1]},
+        ]
+    )
+    chart.set_data_ref("Sheet1!A1:C4")
+    chart.set_legend_visible(False)
+    chart.set_size(width=9600, height=4800)
+
+    output_path = tmp_path / "semantic_controls.hwp"
+    document.save(output_path)
+    reopened = HwpDocument.open(output_path)
+
+    reopened_form = reopened.forms()[-1]
+    reopened_memo = reopened.memos()[-1]
+    reopened_chart = reopened.charts()[-1]
+
+    assert reopened_form.fields()["label"] == "Pick a value"
+    assert reopened_form.form_type == "COMBO"
+    assert reopened_form.name == "accept_state"
+    assert reopened_form.value == "N"
+    assert reopened_form.checked is False
+    assert reopened_form.items == ["A", "B", "C"]
+    assert reopened_form.editable is False
+    assert reopened_form.locked is True
+    assert reopened_form.placeholder == "pick one"
+    assert reopened_form.raw_payload == "Pick a value".encode("utf-16-le")
+
+    assert reopened_memo.fields()["text"] == "Reviewed"
+    assert reopened_memo.author == "Lee"
+    assert reopened_memo.memo_id == "memo-2"
+    assert reopened_memo.anchor_id == "p-2"
+    assert reopened_memo.order == 9
+    assert reopened_memo.visible is True
+    assert reopened_memo.raw_payload == "Reviewed".encode("utf-16-le")
+
+    assert reopened_chart.fields()["title"] == "Revenue"
+    assert reopened_chart.chart_type == "LINE"
+    assert reopened_chart.categories == ["Jan", "Feb", "Mar"]
+    assert reopened_chart.series == [
+        {"name": "Sales", "values": [1, 2, 3]},
+        {"name": "Cost", "values": [0, 1, 1]},
+    ]
+    assert reopened_chart.data_ref == "Sheet1!A1:C4"
+    assert reopened_chart.legend_visible is False
+    assert reopened_chart.size() == {"width": 9600, "height": 4800}
+    assert reopened_chart.raw_payload == "Revenue".encode("utf-16-le")
+
+
 def test_hwp_object_methods_can_modify_content_and_roundtrip(tmp_path: Path) -> None:
     document = HwpDocument.blank()
     image_bytes = document.binary_document().read_stream("BinData/BIN0001.bmp", decompress=False)
@@ -1006,12 +1139,17 @@ def test_hwp_strict_lint_reports_binary_and_control_subtree_issues(tmp_path: Pat
     issues = document.strict_lint_errors()
     issue_codes = {issue.code for issue in issues}
     issue_messages = "\n".join(issue.message for issue in issues)
+    report = document.strict_lint_report()
+    formatted = document.format_strict_lint_errors()
 
     assert "binary_closure" in issue_codes
     assert "control_subtree" in issue_codes
     assert "DocInfo BinData id" in issue_messages
     assert "Table control does not contain a TAG_TABLE record." in issue_messages
     assert "Field control is missing TAG_CTRL_DATA parameters." in issue_messages
+    assert any(item["code"] == "binary_closure" and "hint" in item for item in report)
+    assert "Hint: Keep DocInfo BinData records" in formatted
+    assert "control[tbl ]" in formatted
 
     with pytest.raises(HwpxValidationError):
         document.strict_validate()
@@ -1128,6 +1266,113 @@ def test_hwp_picture_ole_curve_container_and_table_richer_setters_roundtrip(tmp_
     assert reopened_ole.extent() == {"x": 43000, "y": 14000}
     assert reopened_ole.line_color == "#445566"
     assert reopened_ole.line_width == 77
+
+
+def test_hwp_strict_lint_reports_form_memo_and_chart_native_semantic_breakage() -> None:
+    document = HwpDocument.blank()
+    document.append_form("Accept", form_type="INPUT", name="accept", value="Y")
+    document.append_memo("Review needed")
+    document.append_chart(
+        "Sales",
+        chart_type="BAR",
+        categories=["Q1"],
+        series=[{"name": "Revenue", "values": [10]}],
+    )
+    document.apply_section_settings(section_index=0, memo_shape_id="1")
+
+    section_model = document.section_model(0)
+    controls_by_id: dict[str, RecordNode] = {}
+    for paragraph in section_model.paragraphs():
+        for control_node in paragraph.control_nodes():
+            control_id = hwp_document_module._control_id(control_node)
+            controls_by_id.setdefault(control_id, control_node)
+
+    form_control = controls_by_id["mrof"]
+    memo_control = controls_by_id["omem"]
+    chart_control = controls_by_id["gso "]
+
+    form_control.children = [child for child in form_control.children if child.tag_id != TAG_FORM_OBJECT]
+
+    memo_node = next(child for child in memo_control.children if child.tag_id == TAG_MEMO_LIST)
+    memo_node.payload = b"\x61"
+
+    shape_component = next(child for child in chart_control.children if child.tag_id == TAG_SHAPE_COMPONENT)
+    shape_component.children = [child for child in shape_component.children if child.tag_id != TAG_CHART_DATA]
+
+    document.binary_document().replace_section_model(0, section_model)
+
+    issues = document.strict_lint_errors()
+    issue_codes = {issue.code for issue in issues}
+    issue_messages = "\n".join(issue.message for issue in issues)
+    report = document.strict_lint_report()
+
+    assert "control_subtree" in issue_codes
+    assert "payload_sanity" in issue_codes
+    assert "docinfo_mapping" in issue_codes
+    assert "Form control does not contain a TAG_FORM_OBJECT record." in issue_messages
+    assert "Memo payload is not UTF-16 aligned." in issue_messages
+    assert "Chart control metadata is present but TAG_CHART_DATA is missing." in issue_messages
+    assert "Section memo_shape_id 1 points to missing TAG_MEMO_SHAPE record." in issue_messages
+    assert all("hint" in item for item in report)
+
+    with pytest.raises(HwpxValidationError):
+        document.strict_validate()
+
+
+def test_hwp_strict_lint_reports_invalid_form_memo_and_chart_metadata_schema() -> None:
+    document = HwpDocument.blank()
+    document.append_form("Accept", form_type="INPUT", name="accept", value="Y", checked=True, items=["Y"])
+    document.append_memo("Review needed", order=1, visible=True)
+    document.append_chart(
+        "Sales",
+        chart_type="BAR",
+        categories=["Q1"],
+        series=[{"name": "Revenue", "values": [10]}],
+        data_ref="dataset-1",
+        legend_visible=True,
+    )
+
+    section_model = document.section_model(0)
+    controls_by_id: dict[str, RecordNode] = {}
+    for paragraph in section_model.paragraphs():
+        for control_node in paragraph.control_nodes():
+            control_id = hwp_document_module._control_id(control_node)
+            controls_by_id.setdefault(control_id, control_node)
+
+    form_control = controls_by_id["mrof"]
+    memo_control = controls_by_id["omem"]
+    chart_control = controls_by_id["gso "]
+
+    form_metadata_node = next(child for child in form_control.children if child.tag_id == TAG_CTRL_DATA)
+    form_metadata_node.payload = "JAKAL_CTRL_META;form.checked=maybe;form.items=[oops".encode("utf-16-le")
+
+    memo_metadata_node = next(child for child in memo_control.children if child.tag_id == TAG_CTRL_DATA)
+    memo_metadata_node.payload = "JAKAL_CTRL_META;memo.order=NaN;memo.visible=maybe".encode("utf-16-le")
+
+    chart_metadata_node = next(child for child in chart_control.children if child.tag_id == TAG_CTRL_DATA)
+    chart_metadata_node.payload = (
+        "JAKAL_SHAPE_META;chart.legendVisible=maybe;chart.categories={oops};chart.series=[1,2]"
+    ).encode("utf-16-le")
+
+    document.binary_document().replace_section_model(0, section_model)
+
+    issues = document.strict_lint_errors()
+    issue_codes = {issue.code for issue in issues}
+    issue_messages = "\n".join(issue.message for issue in issues)
+    formatted = document.format_strict_lint_errors()
+
+    assert "metadata_schema" in issue_codes
+    assert "form.checked metadata must be a bool-like literal." in issue_messages
+    assert "form.items metadata must be valid JSON" in issue_messages
+    assert "memo.order metadata must be an integer." in issue_messages
+    assert "memo.visible metadata must be a bool-like literal." in issue_messages
+    assert "chart.legendVisible metadata must be a bool-like literal." in issue_messages
+    assert "chart.categories metadata must be valid JSON" in issue_messages
+    assert "chart.series metadata must decode to a JSON list of objects." in issue_messages
+    assert "Hint: Use the semantic setter API" in formatted
+
+    with pytest.raises(HwpxValidationError):
+        document.strict_validate()
 
 
 def test_hwp_document_append_methods_create_controls_without_bridge(tmp_path: Path) -> None:

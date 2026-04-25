@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import struct
 import tempfile
 from collections.abc import Sequence
@@ -13,6 +14,7 @@ from .hwp_binary import (
     _build_auto_number_payload,
     _build_colorref,
     _build_control_id_payload,
+    _build_control_native_metadata_payload,
     _build_header_footer_control_payload,
     _build_ole_attribute_flags,
     _build_table_cell_list_header_payload,
@@ -118,7 +120,17 @@ _HWP_OLE_OBJECT_TYPE_NAMES = {
     4: "EQUATION",
 }
 _SHAPE_NATIVE_METADATA_PREFIX = "JAKAL_SHAPE_META"
+_CONTROL_NATIVE_METADATA_PREFIX = "JAKAL_CTRL_META"
 _HANCOM_CONNECTLINE_COMPONENT_SIGNATURE = b"loc$loc$"
+_HWP_STRICT_LINT_HINTS = {
+    "binary_closure": "Keep DocInfo BinData records and BinData/BINxxxx streams in sync. Re-add the picture/OLE data or remove the broken control.",
+    "binary_media_type": "Use replace_binary(..., extension=...) or rebuild the BinData entry so the DocInfo extension matches the stream name.",
+    "binary_reference": "Re-add the missing embedded binary or update the picture/OLE control to point at an existing BinData id.",
+    "control_subtree": "Recreate the object with the public append/setter API, or restore the missing child record before saving.",
+    "docinfo_mapping": "Repair DocInfo id mappings before saving. This usually means recreating the referenced memo/BinData entry through the HWP API.",
+    "metadata_schema": "Use the semantic setter API instead of editing JAKAL metadata text directly; values must keep their documented type.",
+    "payload_sanity": "The native HWP payload is truncated or malformed. Recreate that control or replace it from a known-good source document.",
+}
 
 
 def _issue(
@@ -128,6 +140,7 @@ def _issue(
     section_index: int | None = None,
     paragraph_index: int | None = None,
     context: str | None = None,
+    hint: str | None = None,
 ) -> ValidationIssue:
     return ValidationIssue(
         kind=kind,
@@ -135,6 +148,7 @@ def _issue(
         section_index=section_index,
         paragraph_index=paragraph_index,
         context=context,
+        hint=hint or _HWP_STRICT_LINT_HINTS.get(kind),
     )
 
 
@@ -269,6 +283,110 @@ def _update_shape_native_metadata(
         node.payload = _build_shape_native_metadata_payload(**metadata)
         return
     control_node.children = [child for child in control_node.children if child is not node]
+
+
+def _parse_control_native_metadata(payload: bytes) -> dict[str, str]:
+    if not payload:
+        return {}
+    text = payload.decode("utf-16-le", errors="ignore")
+    if not text.startswith(_CONTROL_NATIVE_METADATA_PREFIX):
+        return {}
+    metadata: dict[str, str] = {}
+    for field in text.split(";")[1:]:
+        key, separator, value = field.partition("=")
+        if separator and key:
+            metadata[key] = value
+    return metadata
+
+
+def _collect_control_native_metadata(control_node: RecordNode) -> dict[str, str]:
+    metadata: dict[str, str] = {}
+    for child in control_node.children:
+        if child.tag_id != TAG_CTRL_DATA:
+            continue
+        metadata.update(_parse_control_native_metadata(child.payload))
+    return metadata
+
+
+def _control_metadata_node(control_node: RecordNode, *, create: bool = False) -> RecordNode | None:
+    for child in control_node.children:
+        if child.tag_id == TAG_CTRL_DATA and _parse_control_native_metadata(child.payload):
+            return child
+    if not create:
+        return None
+    node = RecordNode(tag_id=TAG_CTRL_DATA, level=control_node.level + 1, payload=_build_control_native_metadata_payload())
+    insert_at = next(
+        (index for index, child in enumerate(control_node.children) if child.tag_id in {TAG_FORM_OBJECT, TAG_MEMO_LIST}),
+        len(control_node.children),
+    )
+    control_node.children.insert(insert_at, node)
+    return node
+
+
+def _update_control_native_metadata(
+    control_node: RecordNode,
+    *,
+    updates: dict[str, object | None],
+    remove_prefixes: Sequence[str] = (),
+) -> None:
+    metadata = _collect_control_native_metadata(control_node)
+    for prefix in remove_prefixes:
+        for key in list(metadata):
+            if key.startswith(prefix):
+                metadata.pop(key, None)
+    for key, value in updates.items():
+        if value is None:
+            metadata.pop(key, None)
+            continue
+        if isinstance(value, bool):
+            metadata[key] = "1" if value else "0"
+        else:
+            metadata[key] = str(value)
+    node = _control_metadata_node(control_node, create=bool(metadata))
+    if node is None:
+        return
+    if metadata:
+        node.payload = _build_control_native_metadata_payload(**metadata)
+        return
+    control_node.children = [child for child in control_node.children if child is not node]
+
+
+def _metadata_bool_value(metadata: dict[str, str], key: str, default: bool = False) -> bool:
+    value = metadata.get(key)
+    if value is None:
+        return default
+    return value.strip().lower() in {"1", "true", "yes", "y", "on"}
+
+
+def _metadata_bool_literal_is_valid(value: str | None) -> bool:
+    if value is None:
+        return True
+    return value.strip().lower() in {"0", "1", "false", "true", "no", "yes", "n", "y", "off", "on"}
+
+
+def _metadata_json_value(metadata: dict[str, str], key: str) -> tuple[object | None, str | None]:
+    raw_value = metadata.get(key)
+    if not raw_value:
+        return None, None
+    try:
+        return json.loads(raw_value), None
+    except json.JSONDecodeError as exc:
+        return None, str(exc)
+
+
+def _metadata_json_list(metadata: dict[str, str], key: str) -> list[object]:
+    value, error = _metadata_json_value(metadata, key)
+    if error is not None:
+        return []
+    return list(value) if isinstance(value, list) else []
+
+
+def _metadata_json_dict_list(metadata: dict[str, str], key: str) -> list[dict[str, object]]:
+    result: list[dict[str, object]] = []
+    for item in _metadata_json_list(metadata, key):
+        if isinstance(item, dict):
+            result.append(dict(item))
+    return result
 
 
 def _graphic_layout_metadata_updates(
@@ -631,6 +749,7 @@ class HwpDocument:
         grid: dict[str, int] | None = None,
         start_numbers: dict[str, str] | None = None,
         numbering_shape_id: str | None = None,
+        memo_shape_id: str | None = None,
     ) -> None:
         self._invalidate_bridge()
         self._binary_document.set_section_page_settings(
@@ -646,6 +765,7 @@ class HwpDocument:
             grid=grid,
             start_numbers=start_numbers,
             numbering_shape_id=int(numbering_shape_id) if numbering_shape_id is not None else None,
+            memo_shape_id=memo_shape_id,
         )
 
     def apply_section_page_border_fills(
@@ -927,8 +1047,39 @@ class HwpDocument:
                 )
             )
 
+        memo_shape_records = docinfo.memo_shape_records()
+        memo_shape_count = id_mappings.get_count(15)
+        if memo_shape_count < len(memo_shape_records):
+            errors.append(
+                _issue(
+                    "docinfo_mapping",
+                    f"DocInfo id_mappings.memo_shapes={memo_shape_count} is smaller than actual memo shape record count {len(memo_shape_records)}.",
+                    context="DocInfo",
+                )
+            )
+
         for section_index, section in enumerate(self.sections()):
             section_model = self.section_model(section_index)
+            memo_shape_id = self.binary_document().section_definition_settings(section_index).get("memo_shape_id")
+            if memo_shape_id not in (None, "", "0"):
+                if not str(memo_shape_id).isdigit():
+                    errors.append(
+                        _issue(
+                            "docinfo_mapping",
+                            f"Section memo_shape_id must be numeric, got {memo_shape_id!r}.",
+                            section_index=section_index,
+                            context="SectionSettings",
+                        )
+                    )
+                elif int(str(memo_shape_id)) >= len(memo_shape_records):
+                    errors.append(
+                        _issue(
+                            "docinfo_mapping",
+                            f"Section memo_shape_id {memo_shape_id} points to missing TAG_MEMO_SHAPE record.",
+                            section_index=section_index,
+                            context="SectionSettings",
+                        )
+                    )
             for paragraph in section_model.paragraphs():
                 for control_node in paragraph.control_nodes():
                     control_id = _control_id(control_node)
@@ -938,6 +1089,8 @@ class HwpDocument:
                         has_picture = _control_has_descendant(control_node, TAG_SHAPE_COMPONENT_PICTURE)
                         has_ole = _control_has_descendant(control_node, TAG_SHAPE_COMPONENT_OLE)
                         has_chart = _control_has_descendant(control_node, TAG_CHART_DATA)
+                        shape_metadata = _collect_shape_native_metadata(control_node)
+                        expects_chart_data = any(key.startswith("chart.") for key in shape_metadata)
                         if not (has_shape_component or has_chart):
                             errors.append(
                                 _issue(
@@ -948,6 +1101,92 @@ class HwpDocument:
                                     context=context,
                                 )
                             )
+                        if expects_chart_data and not has_chart:
+                            errors.append(
+                                _issue(
+                                    "control_subtree",
+                                    "Chart control metadata is present but TAG_CHART_DATA is missing.",
+                                    section_index=section_index,
+                                    paragraph_index=paragraph.index,
+                                    context=context,
+                                    )
+                                )
+                        if not _metadata_bool_literal_is_valid(shape_metadata.get("chart.legendVisible")):
+                            errors.append(
+                                _issue(
+                                    "metadata_schema",
+                                    "chart.legendVisible metadata must be a bool-like literal.",
+                                    section_index=section_index,
+                                    paragraph_index=paragraph.index,
+                                    context=context,
+                                )
+                            )
+                        chart_categories, chart_categories_error = _metadata_json_value(shape_metadata, "chart.categories")
+                        if chart_categories_error is not None:
+                            errors.append(
+                                _issue(
+                                    "metadata_schema",
+                                    f"chart.categories metadata must be valid JSON: {chart_categories_error}",
+                                    section_index=section_index,
+                                    paragraph_index=paragraph.index,
+                                    context=context,
+                                )
+                            )
+                        elif chart_categories is not None and not isinstance(chart_categories, list):
+                            errors.append(
+                                _issue(
+                                    "metadata_schema",
+                                    "chart.categories metadata must decode to a JSON list.",
+                                    section_index=section_index,
+                                    paragraph_index=paragraph.index,
+                                    context=context,
+                                )
+                            )
+                        chart_series, chart_series_error = _metadata_json_value(shape_metadata, "chart.series")
+                        if chart_series_error is not None:
+                            errors.append(
+                                _issue(
+                                    "metadata_schema",
+                                    f"chart.series metadata must be valid JSON: {chart_series_error}",
+                                    section_index=section_index,
+                                    paragraph_index=paragraph.index,
+                                    context=context,
+                                )
+                            )
+                        elif chart_series is not None:
+                            if not isinstance(chart_series, list):
+                                errors.append(
+                                    _issue(
+                                        "metadata_schema",
+                                        "chart.series metadata must decode to a JSON list.",
+                                        section_index=section_index,
+                                        paragraph_index=paragraph.index,
+                                        context=context,
+                                    )
+                                )
+                            elif not all(isinstance(item, dict) for item in chart_series):
+                                errors.append(
+                                    _issue(
+                                        "metadata_schema",
+                                        "chart.series metadata must decode to a JSON list of objects.",
+                                        section_index=section_index,
+                                        paragraph_index=paragraph.index,
+                                        context=context,
+                                    )
+                                )
+                        if has_chart:
+                            chart_nodes = [node for node in control_node.iter_descendants() if node.tag_id == TAG_CHART_DATA]
+                            for chart_node in chart_nodes:
+                                if len(chart_node.payload) % 2:
+                                    errors.append(
+                                        _issue(
+                                            "payload_sanity",
+                                            "Chart payload is not UTF-16 aligned.",
+                                            section_index=section_index,
+                                            paragraph_index=paragraph.index,
+                                            context=context,
+                                        )
+                                    )
                         if has_picture:
                             picture_nodes = [node for node in control_node.iter_descendants() if node.tag_id == TAG_SHAPE_COMPONENT_PICTURE]
                             for picture_node in picture_nodes:
@@ -995,8 +1234,131 @@ class HwpDocument:
                                             section_index=section_index,
                                             paragraph_index=paragraph.index,
                                             context=context,
+                                            )
                                         )
+                    elif control_id == "mrof":
+                        metadata = _collect_control_native_metadata(control_node)
+                        form_nodes = [node for node in control_node.iter_descendants() if node.tag_id == TAG_FORM_OBJECT]
+                        if not form_nodes:
+                            errors.append(
+                                _issue(
+                                    "control_subtree",
+                                    "Form control does not contain a TAG_FORM_OBJECT record.",
+                                    section_index=section_index,
+                                    paragraph_index=paragraph.index,
+                                    context=context,
+                                )
+                            )
+                        for form_node in form_nodes:
+                            if len(form_node.payload) % 2:
+                                errors.append(
+                                    _issue(
+                                        "payload_sanity",
+                                        "Form payload is not UTF-16 aligned.",
+                                        section_index=section_index,
+                                        paragraph_index=paragraph.index,
+                                        context=context,
                                     )
+                                )
+                        if not _metadata_bool_literal_is_valid(metadata.get("form.checked")):
+                            errors.append(
+                                _issue(
+                                    "metadata_schema",
+                                    "form.checked metadata must be a bool-like literal.",
+                                    section_index=section_index,
+                                    paragraph_index=paragraph.index,
+                                    context=context,
+                                )
+                            )
+                        if not _metadata_bool_literal_is_valid(metadata.get("form.editable")):
+                            errors.append(
+                                _issue(
+                                    "metadata_schema",
+                                    "form.editable metadata must be a bool-like literal.",
+                                    section_index=section_index,
+                                    paragraph_index=paragraph.index,
+                                    context=context,
+                                )
+                            )
+                        if not _metadata_bool_literal_is_valid(metadata.get("form.locked")):
+                            errors.append(
+                                _issue(
+                                    "metadata_schema",
+                                    "form.locked metadata must be a bool-like literal.",
+                                    section_index=section_index,
+                                    paragraph_index=paragraph.index,
+                                    context=context,
+                                )
+                            )
+                        form_items, form_items_error = _metadata_json_value(metadata, "form.items")
+                        if form_items_error is not None:
+                            errors.append(
+                                _issue(
+                                    "metadata_schema",
+                                    f"form.items metadata must be valid JSON: {form_items_error}",
+                                    section_index=section_index,
+                                    paragraph_index=paragraph.index,
+                                    context=context,
+                                )
+                            )
+                        elif form_items is not None and not isinstance(form_items, list):
+                            errors.append(
+                                _issue(
+                                    "metadata_schema",
+                                    "form.items metadata must decode to a JSON list.",
+                                    section_index=section_index,
+                                    paragraph_index=paragraph.index,
+                                    context=context,
+                                )
+                            )
+                    elif control_id == "omem":
+                        metadata = _collect_control_native_metadata(control_node)
+                        memo_nodes = [node for node in control_node.iter_descendants() if node.tag_id == TAG_MEMO_LIST]
+                        if not memo_nodes:
+                            errors.append(
+                                _issue(
+                                    "control_subtree",
+                                    "Memo control does not contain a TAG_MEMO_LIST record.",
+                                    section_index=section_index,
+                                    paragraph_index=paragraph.index,
+                                    context=context,
+                                )
+                            )
+                        for memo_node in memo_nodes:
+                            if len(memo_node.payload) % 2:
+                                errors.append(
+                                    _issue(
+                                        "payload_sanity",
+                                        "Memo payload is not UTF-16 aligned.",
+                                        section_index=section_index,
+                                        paragraph_index=paragraph.index,
+                                        context=context,
+                                    )
+                                )
+                        memo_order = metadata.get("memo.order")
+                        if memo_order not in (None, ""):
+                            try:
+                                int(memo_order)
+                            except ValueError:
+                                errors.append(
+                                    _issue(
+                                        "metadata_schema",
+                                        "memo.order metadata must be an integer.",
+                                        section_index=section_index,
+                                        paragraph_index=paragraph.index,
+                                        context=context,
+                                    )
+                                )
+                        if not _metadata_bool_literal_is_valid(metadata.get("memo.visible")):
+                            errors.append(
+                                _issue(
+                                    "metadata_schema",
+                                    "memo.visible metadata must be a bool-like literal.",
+                                    section_index=section_index,
+                                    paragraph_index=paragraph.index,
+                                    context=context,
+                                )
+                            )
                     elif control_id == "tbl ":
                         table_nodes = [node for node in control_node.iter_descendants() if node.tag_id == TAG_TABLE]
                         if not table_nodes:
@@ -1069,6 +1431,21 @@ class HwpDocument:
         errors = self.strict_lint_errors()
         if errors:
             raise HwpxValidationError(errors)
+
+    def strict_lint_report(self, *, include_none: bool = False) -> list[dict[str, object]]:
+        return [issue.to_dict(include_none=include_none) for issue in self.strict_lint_errors()]
+
+    def format_strict_lint_errors(self) -> str:
+        issues = self.strict_lint_errors()
+        if not issues:
+            return ""
+        lines: list[str] = []
+        for index, issue in enumerate(issues, start=1):
+            location = issue.location() or "document"
+            lines.append(f"{index}. [{issue.code or issue.kind}] {location}: {issue.message}")
+            if issue.hint:
+                lines.append(f"   Hint: {issue.hint}")
+        return "\n".join(lines)
 
     def load_pure_profile(self, profile_root: str | Path) -> HwpPureProfile:
         self._pure_profile = HwpPureProfile.load(profile_root)
@@ -1324,6 +1701,90 @@ class HwpDocument:
             text,
             kind="endNote",
             number=number,
+            section_index=section_index,
+            paragraph_index=paragraph_index,
+        )
+
+    def append_form(
+        self,
+        label: str = "",
+        *,
+        form_type: str = "INPUT",
+        name: str | None = None,
+        value: str | None = None,
+        checked: bool = False,
+        items: Sequence[str] | None = None,
+        editable: bool = True,
+        locked: bool = False,
+        placeholder: str | None = None,
+        section_index: int = 0,
+        paragraph_index: int | None = None,
+    ) -> None:
+        self._invalidate_bridge()
+        self._binary_document.append_form(
+            label,
+            form_type=form_type,
+            name=name,
+            value=value,
+            checked=checked,
+            items=items,
+            editable=editable,
+            locked=locked,
+            placeholder=placeholder,
+            section_index=section_index,
+            paragraph_index=paragraph_index,
+        )
+
+    def append_memo(
+        self,
+        text: str,
+        *,
+        author: str | None = None,
+        memo_id: str | None = None,
+        anchor_id: str | None = None,
+        order: int | None = None,
+        visible: bool = True,
+        section_index: int = 0,
+        paragraph_index: int | None = None,
+    ) -> None:
+        self._invalidate_bridge()
+        self._binary_document.append_memo(
+            text,
+            author=author,
+            memo_id=memo_id,
+            anchor_id=anchor_id,
+            order=order,
+            visible=visible,
+            section_index=section_index,
+            paragraph_index=paragraph_index,
+        )
+
+    def append_chart(
+        self,
+        title: str = "",
+        *,
+        chart_type: str = "BAR",
+        categories: Sequence[str] | None = None,
+        series: Sequence[dict[str, object]] | None = None,
+        data_ref: str | None = None,
+        legend_visible: bool = True,
+        width: int = 12000,
+        height: int = 3200,
+        shape_comment: str | None = None,
+        section_index: int = 0,
+        paragraph_index: int | None = None,
+    ) -> None:
+        self._invalidate_bridge()
+        self._binary_document.append_chart(
+            title,
+            chart_type=chart_type,
+            categories=categories,
+            series=series,
+            data_ref=data_ref,
+            legend_visible=legend_visible,
+            width=width,
+            height=height,
+            shape_comment=shape_comment,
             section_index=section_index,
             paragraph_index=paragraph_index,
         )
@@ -1710,6 +2171,7 @@ class HwpSection:
         grid: dict[str, int] | None = None,
         start_numbers: dict[str, str] | None = None,
         numbering_shape_id: str | None = None,
+        memo_shape_id: str | None = None,
     ) -> None:
         self.document.apply_section_settings(
             section_index=self.index,
@@ -1721,6 +2183,7 @@ class HwpSection:
             grid=grid,
             start_numbers=start_numbers,
             numbering_shape_id=numbering_shape_id,
+            memo_shape_id=memo_shape_id,
         )
 
     def apply_page_border_fills(self, page_border_fills: list[dict[str, str | int]]) -> None:
@@ -1866,6 +2329,84 @@ class HwpSection:
             text,
             kind=kind,
             number=number,
+            section_index=self.index,
+            paragraph_index=paragraph_index,
+        )
+
+    def append_form(
+        self,
+        label: str = "",
+        *,
+        form_type: str = "INPUT",
+        name: str | None = None,
+        value: str | None = None,
+        checked: bool = False,
+        items: Sequence[str] | None = None,
+        editable: bool = True,
+        locked: bool = False,
+        placeholder: str | None = None,
+        paragraph_index: int | None = None,
+    ) -> None:
+        self.document.append_form(
+            label,
+            form_type=form_type,
+            name=name,
+            value=value,
+            checked=checked,
+            items=items,
+            editable=editable,
+            locked=locked,
+            placeholder=placeholder,
+            section_index=self.index,
+            paragraph_index=paragraph_index,
+        )
+
+    def append_memo(
+        self,
+        text: str,
+        *,
+        author: str | None = None,
+        memo_id: str | None = None,
+        anchor_id: str | None = None,
+        order: int | None = None,
+        visible: bool = True,
+        paragraph_index: int | None = None,
+    ) -> None:
+        self.document.append_memo(
+            text,
+            author=author,
+            memo_id=memo_id,
+            anchor_id=anchor_id,
+            order=order,
+            visible=visible,
+            section_index=self.index,
+            paragraph_index=paragraph_index,
+        )
+
+    def append_chart(
+        self,
+        title: str = "",
+        *,
+        chart_type: str = "BAR",
+        categories: Sequence[str] | None = None,
+        series: Sequence[dict[str, object]] | None = None,
+        data_ref: str | None = None,
+        legend_visible: bool = True,
+        width: int = 12000,
+        height: int = 3200,
+        shape_comment: str | None = None,
+        paragraph_index: int | None = None,
+    ) -> None:
+        self.document.append_chart(
+            title,
+            chart_type=chart_type,
+            categories=categories,
+            series=series,
+            data_ref=data_ref,
+            legend_visible=legend_visible,
+            width=width,
+            height=height,
+            shape_comment=shape_comment,
             section_index=self.index,
             paragraph_index=paragraph_index,
         )
@@ -2136,6 +2677,10 @@ class HwpControlObject:
         target = self.control_node if control_node is None else control_node
         return _collect_shape_native_metadata(target)
 
+    def _native_control_metadata(self, control_node: RecordNode | None = None) -> dict[str, str]:
+        target = self.control_node if control_node is None else control_node
+        return _collect_control_native_metadata(target)
+
     def _graphic_out_margins(self, control_node: RecordNode | None = None) -> dict[str, int]:
         target = self.control_node if control_node is None else control_node
         native = _parse_graphic_control_out_margins(target.payload)
@@ -2253,6 +2798,16 @@ class HwpControlObject:
     ) -> None:
         section_model, _paragraph, control_node = self._live_context()
         _update_shape_native_metadata(control_node, updates=updates, remove_prefixes=remove_prefixes)
+        self._commit(section_model)
+
+    def _write_native_control_metadata(
+        self,
+        *,
+        updates: dict[str, object | None],
+        remove_prefixes: Sequence[str] = (),
+    ) -> None:
+        section_model, _paragraph, control_node = self._live_context()
+        _update_control_native_metadata(control_node, updates=updates, remove_prefixes=remove_prefixes)
         self._commit(section_model)
 
 
@@ -4277,21 +4832,89 @@ class HwpChartObject(HwpShapeObject):
         return "chart"
 
     def fields(self) -> dict[str, object]:
-        return _parse_chart_data_payload(self._chart_record().payload)
+        result = _parse_chart_data_payload(self._chart_record().payload)
+        metadata = self._shape_native_metadata()
+        title = metadata.get("chart.title") or str(result.get("utf16_text", ""))
+        if title:
+            result["title"] = title
+        if "chart.chartType" in metadata:
+            result["chart_type"] = metadata["chart.chartType"]
+        if "chart.dataRef" in metadata:
+            result["data_ref"] = metadata["chart.dataRef"]
+        if "chart.legendVisible" in metadata:
+            result["legend_visible"] = _metadata_bool_value(metadata, "chart.legendVisible", True)
+        categories = [str(item) for item in _metadata_json_list(metadata, "chart.categories")]
+        if categories:
+            result["categories"] = categories
+        series = _metadata_json_dict_list(metadata, "chart.series")
+        if series:
+            result["series"] = series
+        return result
 
     @property
     def raw_payload(self) -> bytes:
-        payload = self.fields().get("raw_payload", b"")
+        payload = _parse_chart_data_payload(self._chart_record().payload).get("raw_payload", b"")
         return bytes(payload) if isinstance(payload, (bytes, bytearray)) else b""
 
     @property
     def utf16_text(self) -> str:
-        return str(self.fields().get("utf16_text", ""))
+        return str(_parse_chart_data_payload(self._chart_record().payload).get("utf16_text", ""))
+
+    @property
+    def title(self) -> str:
+        metadata = self._shape_native_metadata()
+        return metadata.get("chart.title", self.utf16_text)
+
+    @property
+    def chart_type(self) -> str:
+        metadata = self._shape_native_metadata()
+        return metadata.get("chart.chartType", "BAR")
+
+    @property
+    def data_ref(self) -> str | None:
+        metadata = self._shape_native_metadata()
+        value = metadata.get("chart.dataRef")
+        return value or None
+
+    @property
+    def legend_visible(self) -> bool:
+        return _metadata_bool_value(self._shape_native_metadata(), "chart.legendVisible", True)
+
+    @property
+    def categories(self) -> list[str]:
+        return [str(item) for item in _metadata_json_list(self._shape_native_metadata(), "chart.categories")]
+
+    @property
+    def series(self) -> list[dict[str, object]]:
+        return _metadata_json_dict_list(self._shape_native_metadata(), "chart.series")
 
     def set_raw_payload(self, payload: bytes) -> None:
         section_model, _paragraph, control_node = self._live_context()
         self._chart_record(control_node).payload = bytes(payload)
         self._commit(section_model)
+
+    def set_title(self, value: str) -> None:
+        section_model, _paragraph, control_node = self._live_context()
+        self._chart_record(control_node).payload = str(value).encode("utf-16-le")
+        _update_shape_native_metadata(control_node, updates={"chart.title": value})
+        self._commit(section_model)
+
+    def set_chart_type(self, value: str) -> None:
+        self._write_native_shape_metadata(updates={"chart.chartType": str(value).upper()})
+
+    def set_data_ref(self, value: str | None) -> None:
+        self._write_native_shape_metadata(updates={"chart.dataRef": value})
+
+    def set_legend_visible(self, value: bool) -> None:
+        self._write_native_shape_metadata(updates={"chart.legendVisible": bool(value)})
+
+    def set_categories(self, values: Sequence[str]) -> None:
+        serialized = json.dumps([str(value) for value in values], ensure_ascii=True, separators=(",", ":"))
+        self._write_native_shape_metadata(updates={"chart.categories": serialized})
+
+    def set_series(self, values: Sequence[dict[str, object]]) -> None:
+        serialized = json.dumps([dict(value) for value in values], ensure_ascii=True, separators=(",", ":"))
+        self._write_native_shape_metadata(updates={"chart.series": serialized})
 
     def _chart_record(self, control_node: RecordNode | None = None) -> RecordNode:
         target = self.control_node if control_node is None else control_node
@@ -4537,21 +5160,117 @@ class HwpFormObject(HwpControlObject):
         return "form"
 
     def fields(self) -> dict[str, object]:
-        return _parse_form_object_payload(self._form_record().payload)
+        result = _parse_form_object_payload(self._form_record().payload)
+        metadata = self._native_control_metadata()
+        label = metadata.get("form.label", str(result.get("utf16_text", "")))
+        if label:
+            result["label"] = label
+        result["form_type"] = metadata.get("form.type", "INPUT")
+        if metadata.get("form.name"):
+            result["name"] = metadata["form.name"]
+        result["value"] = metadata.get("form.value", label)
+        result["checked"] = _metadata_bool_value(metadata, "form.checked", False)
+        result["items"] = [str(item) for item in _metadata_json_list(metadata, "form.items")]
+        result["editable"] = _metadata_bool_value(metadata, "form.editable", True)
+        result["locked"] = _metadata_bool_value(metadata, "form.locked", False)
+        if metadata.get("form.placeholder"):
+            result["placeholder"] = metadata["form.placeholder"]
+        return result
 
     @property
     def raw_payload(self) -> bytes:
-        payload = self.fields().get("raw_payload", b"")
+        payload = _parse_form_object_payload(self._form_record().payload).get("raw_payload", b"")
         return bytes(payload) if isinstance(payload, (bytes, bytearray)) else b""
 
     @property
     def utf16_text(self) -> str:
-        return str(self.fields().get("utf16_text", ""))
+        return str(_parse_form_object_payload(self._form_record().payload).get("utf16_text", ""))
+
+    @property
+    def label(self) -> str:
+        metadata = self._native_control_metadata()
+        return metadata.get("form.label", self.utf16_text)
+
+    @property
+    def text(self) -> str:
+        return self.label
+
+    @property
+    def form_type(self) -> str:
+        metadata = self._native_control_metadata()
+        return metadata.get("form.type", "INPUT")
+
+    @property
+    def name(self) -> str | None:
+        metadata = self._native_control_metadata()
+        value = metadata.get("form.name")
+        return value or None
+
+    @property
+    def value(self) -> str:
+        metadata = self._native_control_metadata()
+        return metadata.get("form.value", self.label)
+
+    @property
+    def checked(self) -> bool:
+        return _metadata_bool_value(self._native_control_metadata(), "form.checked", False)
+
+    @property
+    def items(self) -> list[str]:
+        return [str(item) for item in _metadata_json_list(self._native_control_metadata(), "form.items")]
+
+    @property
+    def editable(self) -> bool:
+        return _metadata_bool_value(self._native_control_metadata(), "form.editable", True)
+
+    @property
+    def locked(self) -> bool:
+        return _metadata_bool_value(self._native_control_metadata(), "form.locked", False)
+
+    @property
+    def placeholder(self) -> str | None:
+        metadata = self._native_control_metadata()
+        value = metadata.get("form.placeholder")
+        return value or None
 
     def set_raw_payload(self, payload: bytes) -> None:
         section_model, _paragraph, control_node = self._live_context()
         self._form_record(control_node).payload = bytes(payload)
         self._commit(section_model)
+
+    def set_label(self, value: str) -> None:
+        section_model, _paragraph, control_node = self._live_context()
+        self._form_record(control_node).payload = str(value).encode("utf-16-le")
+        _update_control_native_metadata(control_node, updates={"form.label": value})
+        self._commit(section_model)
+
+    def set_text(self, value: str) -> None:
+        self.set_label(value)
+
+    def set_form_type(self, value: str) -> None:
+        self._write_native_control_metadata(updates={"form.type": str(value).upper()})
+
+    def set_name(self, value: str | None) -> None:
+        self._write_native_control_metadata(updates={"form.name": value})
+
+    def set_value(self, value: str | None) -> None:
+        self._write_native_control_metadata(updates={"form.value": value})
+
+    def set_checked(self, value: bool) -> None:
+        self._write_native_control_metadata(updates={"form.checked": bool(value)})
+
+    def set_items(self, values: Sequence[str]) -> None:
+        serialized = json.dumps([str(value) for value in values], ensure_ascii=True, separators=(",", ":"))
+        self._write_native_control_metadata(updates={"form.items": serialized})
+
+    def set_editable(self, value: bool) -> None:
+        self._write_native_control_metadata(updates={"form.editable": bool(value)})
+
+    def set_locked(self, value: bool) -> None:
+        self._write_native_control_metadata(updates={"form.locked": bool(value)})
+
+    def set_placeholder(self, value: str | None) -> None:
+        self._write_native_control_metadata(updates={"form.placeholder": value})
 
     def _form_record(self, control_node: RecordNode | None = None) -> RecordNode:
         target = self.control_node if control_node is None else control_node
@@ -4567,26 +5286,95 @@ class HwpMemoObject(HwpControlObject):
         return "memo"
 
     def fields(self) -> dict[str, object]:
-        return _parse_memo_list_payload(self._memo_record().payload)
+        result = _parse_memo_list_payload(self._memo_record().payload)
+        metadata = self._native_control_metadata()
+        memo_text = str(result.get("utf16_text", "")).strip()
+        result["text"] = memo_text or _collect_text_from_node(self.control_node).replace("\r", "")
+        if metadata.get("memo.author"):
+            result["author"] = metadata["memo.author"]
+        if metadata.get("memo.memoId"):
+            result["memo_id"] = metadata["memo.memoId"]
+        if metadata.get("memo.anchorId"):
+            result["anchor_id"] = metadata["memo.anchorId"]
+        if metadata.get("memo.order"):
+            try:
+                result["order"] = int(metadata["memo.order"])
+            except ValueError:
+                pass
+        result["visible"] = _metadata_bool_value(metadata, "memo.visible", True)
+        return result
 
     @property
     def raw_payload(self) -> bytes:
-        payload = self.fields().get("raw_payload", b"")
+        payload = _parse_memo_list_payload(self._memo_record().payload).get("raw_payload", b"")
         return bytes(payload) if isinstance(payload, (bytes, bytearray)) else b""
 
     @property
     def utf16_text(self) -> str:
-        return str(self.fields().get("utf16_text", ""))
+        return str(_parse_memo_list_payload(self._memo_record().payload).get("utf16_text", ""))
 
     @property
     def text(self) -> str:
         memo_text = self.utf16_text.strip()
         return memo_text or _collect_text_from_node(self.control_node).replace("\r", "")
 
+    @property
+    def author(self) -> str | None:
+        metadata = self._native_control_metadata()
+        value = metadata.get("memo.author")
+        return value or None
+
+    @property
+    def memo_id(self) -> str | None:
+        metadata = self._native_control_metadata()
+        value = metadata.get("memo.memoId")
+        return value or None
+
+    @property
+    def anchor_id(self) -> str | None:
+        metadata = self._native_control_metadata()
+        value = metadata.get("memo.anchorId")
+        return value or None
+
+    @property
+    def order(self) -> int | None:
+        metadata = self._native_control_metadata()
+        value = metadata.get("memo.order")
+        if value is None:
+            return None
+        try:
+            return int(value)
+        except ValueError:
+            return None
+
+    @property
+    def visible(self) -> bool:
+        return _metadata_bool_value(self._native_control_metadata(), "memo.visible", True)
+
     def set_raw_payload(self, payload: bytes) -> None:
         section_model, _paragraph, control_node = self._live_context()
         self._memo_record(control_node).payload = bytes(payload)
         self._commit(section_model)
+
+    def set_text(self, value: str) -> None:
+        section_model, _paragraph, control_node = self._live_context()
+        self._memo_record(control_node).payload = str(value).encode("utf-16-le")
+        self._commit(section_model)
+
+    def set_author(self, value: str | None) -> None:
+        self._write_native_control_metadata(updates={"memo.author": value})
+
+    def set_memo_id(self, value: str | None) -> None:
+        self._write_native_control_metadata(updates={"memo.memoId": value})
+
+    def set_anchor_id(self, value: str | None) -> None:
+        self._write_native_control_metadata(updates={"memo.anchorId": value})
+
+    def set_order(self, value: int | None) -> None:
+        self._write_native_control_metadata(updates={"memo.order": value})
+
+    def set_visible(self, value: bool) -> None:
+        self._write_native_control_metadata(updates={"memo.visible": bool(value)})
 
     def _memo_record(self, control_node: RecordNode | None = None) -> RecordNode:
         target = self.control_node if control_node is None else control_node

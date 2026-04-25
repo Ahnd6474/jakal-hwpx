@@ -1,208 +1,125 @@
-# `jakal_hwpx` 모듈 선택 가이드
+# `jakal_hwpx` 모듈 가이드
 
-이 문서는 `jakal_hwpx`를 처음 쓰는 사람이 "어떤 객체부터 잡아야 하는지" 빠르게 결정할 수 있게 정리한 가이드입니다.
+이 문서는 README에 넣기에는 긴 모듈별 사용 설명을 따로 정리한 문서입니다. 일반적인 앱 코드는 `HancomDocument`부터 시작하고, 포맷 내부를 직접 만져야 할 때만 `HwpxDocument`나 `HwpDocument`로 내려가면 됩니다.
 
-핵심은 간단합니다.
+![jakal_hwpx의 문서 레이어](./docs/images/module-layers.svg)
 
-- HWPX만 다루면 `HwpxDocument`
-- HWP를 직접 다루면 `HwpDocument`
-- HWP와 HWPX를 같은 코드로 다루고 싶으면 `HancomDocument`
-- 포맷 전환을 묶고 싶으면 `HwpHwpxBridge`
-- binary를 직접 조사해야 하면 `HwpBinaryDocument`
+## 전체 그림
 
-## 빠른 선택
+`jakal_hwpx`의 공개 클래스는 많지만, 사용 흐름은 단순하게 잡는 편이 좋습니다.
 
-| 하고 싶은 일 | 추천 객체 | 이유 |
+| 레이어 | 클래스 | 쓰는 순간 |
 |---|---|---|
-| 새 문서를 만들고 HWPX/HWP 둘 다 저장 | `HancomDocument` | 공통 편집 모델이라 코드가 가장 단순함 |
-| HWPX를 직접 편집 | `HwpxDocument` | 가장 넓은 직접 편집 범위 |
-| HWP를 직접 편집 | `HwpDocument` | HWP 전용 객체 API가 바로 붙어 있음 |
-| HWP와 HWPX를 오가며 저장 | `HwpHwpxBridge` | 전환 경로를 한 객체로 관리 가능 |
-| record tree, stream, docinfo 조사 | `HwpBinaryDocument` | 가장 저수준 API |
+| 기본 편집 모델 | `HancomDocument` | HWP/HWPX를 같은 코드로 읽고 만들고 저장할 때 |
+| HWPX 포맷 레이어 | `HwpxDocument` | HWPX package, XML part, strict lint를 직접 다룰 때 |
+| HWP 포맷 레이어 | `HwpDocument` | HWP binary 문서를 직접 열고 저장하거나 HWP 전용 wrapper가 필요할 때 |
+| 저수준 조사 레이어 | `HwpBinaryDocument` | record tree, stream, DocInfo, reencode 문제를 조사할 때 |
+| 전환 도우미 | `HwpHwpxBridge` | 변환 경로를 명시적으로 잡아 실험하거나 회귀를 만들 때 |
 
-## 권장 사용 순서
+처음 코드를 작성한다면 이 문서의 `HancomDocument` 부분만 봐도 충분합니다.
 
-처음 시작할 때는 아래 순서로 생각하면 됩니다.
+## `HancomDocument`
 
-1. 포맷이 하나로 고정이면 `HwpxDocument` 또는 `HwpDocument`
-2. 포맷이 섞이거나 나중에 바뀔 수 있으면 `HancomDocument`
-3. 저장 결과를 HWP와 HWPX 양쪽으로 내보내야 하면 `HancomDocument` 또는 `HwpHwpxBridge`
-4. 고수준 API로 안 보이는 payload를 조사해야 하면 `HwpBinaryDocument`
+`HancomDocument`는 이 패키지의 기본 진입점입니다. 입력이 `.hwp`이든 `.hwpx`이든 같은 편집 모델로 올린 뒤, 필요한 포맷으로 다시 저장합니다.
 
-## 주요 객체
+대표 진입점은 아래 네 가지입니다.
 
-### `HancomDocument`
+| API | 용도 |
+|---|---|
+| `HancomDocument.blank()` | 새 문서 만들기 |
+| `HancomDocument.read_hwpx(path)` | HWPX 읽기 |
+| `HancomDocument.read_hwp(path)` | HWP 읽기 |
+| `write_to_hwpx(path)`, `write_to_hwp(path)` | 원하는 포맷으로 저장 |
 
-가장 권장되는 공통 편집 모델입니다.
-
-이 객체를 쓰면:
-
-- `.hwpx`를 읽어도 같은 구조
-- `.hwp`를 읽어도 같은 구조
-- 새 문서를 만들어도 같은 구조
-
-즉, 앱 코드가 입력 포맷에 덜 묶입니다.
-
-대표 진입점:
-
-- `HancomDocument.blank()`
-- `HancomDocument.read_hwpx(path)`
-- `HancomDocument.read_hwp(path)`
-- `write_to_hwpx(path)`
-- `write_to_hwp(path)`
-
-대표 append API:
-
-- `append_paragraph()`
-- `append_table()`
-- `append_picture()`
-- `append_shape()`
-- `append_equation()`
-- `append_ole()`
-- `append_field()`
-- `append_hyperlink()`
-- `append_bookmark()`
-- `append_note()`
-- `append_header()`, `append_footer()`
-
-짧은 예:
+새 문서를 만드는 예입니다.
 
 ```python
 from jakal_hwpx import HancomDocument
 
 doc = HancomDocument.blank()
-doc.metadata.title = "Sample"
-doc.append_paragraph("Hello")
-doc.write_to_hwpx("build/sample.hwpx")
-doc.write_to_hwp("build/sample.hwp")
+doc.metadata.title = "보고서"
+
+doc.append_paragraph("첫 문단")
+doc.append_table(
+    rows=2,
+    cols=2,
+    cell_texts=[["A", "B"], ["1", "2"]],
+)
+
+doc.write_to_hwpx("build/report.hwpx")
+doc.write_to_hwp("build/report.hwp")
 ```
 
-### `HwpxDocument`
+기존 HWP를 읽어서 HWPX도 같이 내보내는 예입니다.
 
-HWPX를 직접 편집하는 주력 객체입니다.
+```python
+from jakal_hwpx import HancomDocument
 
-이 객체를 쓰면 좋은 경우:
+doc = HancomDocument.read_hwp("input.hwp")
+doc.append_paragraph("추가 문단")
 
-- 입력과 출력이 둘 다 HWPX일 때
-- XML wrapper 메서드를 직접 쓰고 싶을 때
-- package part, manifest, preview text 같은 HWPX package 요소를 직접 볼 때
+doc.write_to_hwp("build/output.hwp")
+doc.write_to_hwpx("build/output.hwpx")
+```
 
-대표 진입점:
+`HancomDocument`에서 자주 쓰는 append API는 다음 정도입니다.
 
-- `HwpxDocument.blank()`
-- `HwpxDocument.open(path)`
-- `save(path)`
-- `strict_lint_errors()`, `strict_validate()`
+| API | 용도 |
+|---|---|
+| `append_paragraph()` | 문단 추가 |
+| `append_table()` | 표 추가 |
+| `append_picture()` | 그림 추가 |
+| `append_hyperlink()` | 하이퍼링크 추가 |
+| `append_bookmark()` | 북마크 추가 |
+| `append_field()` | 필드 추가 |
+| `append_note()` | 각주나 미주 추가 |
+| `append_header()`, `append_footer()` | 머리말과 꼬리말 추가 |
+| `append_equation()`, `append_shape()`, `append_ole()` | 수식, 도형, OLE 추가 |
 
-대표 append API:
+## `HwpxDocument`
 
-- `append_paragraph()`
-- `append_table()`
-- `append_picture()`
-- `append_shape()`
-- `append_equation()`
-- `append_ole()`
-- `append_field()`
-- `append_hyperlink()`
-- `append_bookmark()`
-- `append_note()`
-- `append_header()`, `append_footer()`
-
-짧은 예:
+`HwpxDocument`는 HWPX를 직접 다루는 하위 레이어입니다. HWPX가 zip 안에 XML part를 담는 구조이므로, XML wrapper나 package part를 직접 보고 싶을 때 사용합니다.
 
 ```python
 from jakal_hwpx import HwpxDocument
 
 doc = HwpxDocument.open("input.hwpx")
 doc.replace_text("초안", "최종")
+doc.append_paragraph("승인 완료")
+
 doc.strict_validate()
 doc.save("build/output.hwpx")
 ```
 
-### `HwpDocument`
+이 레이어가 필요한 경우는 보통 아래와 같습니다.
 
-HWP를 직접 편집하는 주력 객체입니다.
+- 입력과 출력이 모두 HWPX이고 HWP 변환이 필요 없을 때
+- HWPX part, manifest, preview text 같은 package 구조를 직접 확인할 때
+- `strict_lint_errors()`, `strict_lint_report()`, `strict_validate()`를 HWPX 기준으로 바로 돌릴 때
 
-이 객체를 쓰면 좋은 경우:
+## `HwpDocument`
 
-- 기존 `.hwp`를 직접 수정하고 다시 저장할 때
-- HWP control wrapper가 필요한 경우
-- HWP 기준으로 tables, fields, notes, shapes를 다루고 싶을 때
-
-대표 진입점:
-
-- `HwpDocument.blank()`
-- `HwpDocument.open(path)`
-- `save(path)`
-- `strict_lint_errors()`, `strict_validate()`
-
-대표 append API:
-
-- `append_paragraph()`
-- `append_table()`
-- `append_picture()`
-- `append_shape()`
-- `append_equation()`
-- `append_ole()`
-- `append_field()`
-- `append_hyperlink()`
-- `append_bookmark()`
-- `append_note()`
-- `append_header()`, `append_footer()`
-- `append_auto_number()`
-
-짧은 예:
+`HwpDocument`는 HWP binary 문서를 직접 다루는 하위 레이어입니다. HWP를 읽고 다시 HWP로 저장해야 하거나, HWP 전용 control wrapper를 써야 할 때 사용합니다.
 
 ```python
 from jakal_hwpx import HwpDocument
 
 doc = HwpDocument.open("input.hwp")
 doc.append_paragraph("추가 문단")
+
 doc.strict_validate()
 doc.save("build/output.hwp")
 ```
 
-### `HwpHwpxBridge`
+이 레이어가 필요한 경우는 보통 아래와 같습니다.
 
-문서를 한쪽에서 열고 다른 포맷으로 내보내거나, 중간에 기준 문서를 바꾸며 작업할 때 쓰는 도우미 객체입니다.
+- 기존 `.hwp` 파일을 직접 수정해서 다시 `.hwp`로 저장할 때
+- HWP 기준의 `tables()`, `fields()`, `notes()`, `section()` wrapper가 필요할 때
+- HWP의 native record 구조와 연결된 동작을 확인할 때
 
-이 객체를 쓰면 좋은 경우:
+## `HwpBinaryDocument`
 
-- `input.hwp`를 받아 HWPX도 같이 만들고 싶을 때
-- `input.hwpx`를 받아 HWP도 같이 만들고 싶을 때
-- HWP/HWPX/HancomDocument를 반복해서 materialize하고 저장할 때
-
-대표 진입점:
-
-- `HwpHwpxBridge.open(path)`
-- `HwpHwpxBridge.from_hwp(source)`
-- `HwpHwpxBridge.from_hwpx(source)`
-- `HwpHwpxBridge.from_hancom(source)`
-- `save_hwp(path)`
-- `save_hwpx(path)`
-
-짧은 예:
-
-```python
-from jakal_hwpx import HwpHwpxBridge
-
-bridge = HwpHwpxBridge.open("input.hwp")
-bridge.save_hwpx("build/output.hwpx")
-bridge.save_hwp("build/output_copy.hwp")
-```
-
-### `HwpBinaryDocument`
-
-가장 저수준의 HWP API입니다.
-
-이 객체는 일반적인 앱 코드의 기본 편집 진입점으로 권장하지는 않습니다. 대신 이런 상황에서 씁니다.
-
-- record tree를 직접 보고 싶을 때
-- `DocInfoModel`, `SectionModel`을 직접 다뤄야 할 때
-- binary payload parse/build 도구를 확장할 때
-- stream reencode 안정성을 검사할 때
-
-짧은 예:
+`HwpBinaryDocument`는 일반 앱 코드의 기본 편집 객체가 아닙니다. HWP reverse engineering, record 단위 디버깅, reencode 안정성 확인에 쓰는 저수준 API입니다.
 
 ```python
 from jakal_hwpx import HwpBinaryDocument
@@ -213,166 +130,44 @@ print(doc.docinfo_model().id_mappings_record().named_counts())
 print(doc.section_model(0).controls())
 ```
 
-## 지원 범위
+문서가 깨지는 원인을 찾거나, 아직 매핑되지 않은 control payload를 조사할 때 이 레이어로 내려갑니다.
 
-### 문서 흐름별
+## `HwpHwpxBridge`
 
-| 흐름 | 현재 상태 | 설명 |
-|---|---|---|
-| `HWPX -> HWPX` | 매우 좋음 | 가장 넓게 지원되는 직접 편집 경로 |
-| `HWP -> HWP` | 강함 | HWP 저장과 재인코드 안정성이 높음 |
-| `HWP -> HWPX` | 강함 | 의미 있는 구조를 잘 끌어올리는 편 |
-| `HWPX -> HWP` | 좋음 | 지원된 편집 범위 기준으로 실사용 가능 |
-
-### 컨트롤 패밀리별
-
-| 항목 | 현재 수준 | 메모 |
-|---|---|---|
-| 문단, 스타일 | 높음 | 가장 안정적인 축 |
-| 머리말, 꼬리말 | 높음 | `apply_page_type`까지 포함 |
-| 필드, 북마크, 하이퍼링크 | 높음 | HWP native field subtype도 보존 |
-| 각주, 미주, 자동번호, 페이지번호 | 높음 | setter와 bridge parity가 있음 |
-| 섹션 설정, page border fill, visibility | 높음 | 읽기/쓰기와 bridge 테스트 포함 |
-| 표 | 중상 | 실무 자동화에 필요한 surface는 넓음 |
-| 그림 | 중상 | crop, rotation, line style 등 지원 |
-| 도형, `connectLine` | 중상 | subtype wrapper와 주요 setter 포함 |
-| 수식 | 중상 | layout, outMargins, rotation surface 포함 |
-| OLE | 중상 | metadata, extent, line style 등 지원 |
-| 차트 | 부분 | wrapper/typed access 중심 |
-| form object | 부분 | 의미 있는 수정 API가 더 필요한 단계 |
-| memo/comment | 부분 | typed access와 wrapper 중심 |
-
-## 어떤 block/type을 얻게 되는가
-
-`HancomDocument` 기준으로 본문은 다음 타입들로 다룹니다.
-
-- `Paragraph`
-- `Table`
-- `Picture`
-- `Hyperlink`
-- `Bookmark`
-- `Field`
-- `AutoNumber`
-- `Note`
-- `Equation`
-- `Shape`
-- `Ole`
-
-섹션은 `HancomSection`, 설정은 `SectionSettings`, 머리말/꼬리말은 `HeaderFooter`, 스타일은 `StyleDefinition`, `ParagraphStyle`, `CharacterStyle`로 다룹니다.
-
-즉, 일반적인 앱 코드에서는 XML 노드나 binary record 대신 dataclass 중심으로 문서를 조립한다고 생각하면 됩니다.
-
-## 실제로 자주 쓰는 패턴
-
-### 1. HWPX를 읽어서 수정하고 다시 HWPX 저장
+`HwpHwpxBridge`는 변환 경로를 명시적으로 붙잡아야 할 때 쓰는 도우미입니다. 일반 작성 코드는 `HancomDocument.read_hwp()`와 `HancomDocument.read_hwpx()`로 충분한 경우가 많습니다.
 
 ```python
-from jakal_hwpx import HancomDocument
+from jakal_hwpx import HwpHwpxBridge
 
-doc = HancomDocument.read_hwpx("input.hwpx")
-doc.append_paragraph("추가 문단")
-doc.write_to_hwpx("build/output.hwpx")
+bridge = HwpHwpxBridge.open("input.hwp")
+bridge.save_hwpx("build/output.hwpx")
+bridge.save_hwp("build/output-copy.hwp")
 ```
 
-### 2. HWP를 읽어서 HWP와 HWPX 둘 다 내보내기
+bridge는 회귀 테스트나 변환 실험에서 "어떤 포맷을 기준으로 materialize했는가"를 분명히 남기고 싶을 때 유용합니다.
 
-```python
-from jakal_hwpx import HancomDocument
+## 검증 기준
 
-doc = HancomDocument.read_hwp("input.hwp")
-doc.append_bookmark("appendix_anchor")
-doc.write_to_hwp("build/output.hwp")
-doc.write_to_hwpx("build/output.hwpx")
+지원 범위는 느낌으로 적지 않고 회귀 테스트와 lint 경로를 기준으로 봅니다.
+
+| 흐름 | 기준 |
+|---|---|
+| `HWPX -> HWPX` | HWPX 직접 수정, 저장, 재오픈, strict lint |
+| `HWP -> HWP` | HWP 직접 수정, 저장, 재오픈, binary/reencode 회귀 |
+| `HWP -> HWPX` | HWP를 공통 모델로 읽은 뒤 HWPX로 다시 쓰는 roundtrip |
+| `HWPX -> HWP` | HWPX를 공통 모델로 읽은 뒤 HWP로 다시 쓰는 roundtrip |
+
+주요 회귀 명령은 아래와 같습니다.
+
+```bash
+python -m pytest tests/test_hancom_document.py tests/test_bridge.py -q
 ```
 
-### 3. 새 문서를 공통 IR로 조립
-
-```python
-from pathlib import Path
-from jakal_hwpx import HancomDocument
-
-doc = HancomDocument.blank()
-doc.metadata.title = "생성 문서"
-doc.append_header("보고서")
-doc.append_paragraph("첫 문단")
-doc.append_table(rows=2, cols=2, cell_texts=[["A1", "B1"], ["A2", "B2"]])
-doc.append_picture("logo.png", Path("assets/logo.png").read_bytes(), extension="png")
-doc.write_to_hwpx("build/generated.hwpx")
-```
-
-### 4. HWP control을 직접 수정
-
-```python
-from jakal_hwpx import HwpDocument
-
-doc = HwpDocument.open("input.hwp")
-field = doc.fields()[0]
-field.set_display_text("변경됨")
-
-table = doc.tables()[0]
-table.set_cell_text(0, 0, "수정")
-
-doc.save("build/edited.hwp")
-```
-
-## 공개 API와 내부 API
-
-호환성 기준으로 믿을 수 있는 표면은 `jakal_hwpx` 루트 import입니다.
-
-예:
-
-```python
-from jakal_hwpx import HancomDocument, HwpxDocument, HwpDocument
-```
-
-반대로 아래처럼 내부 모듈 경로를 직접 import하는 건 구현 세부사항으로 보는 편이 맞습니다.
-
-```python
-from jakal_hwpx.document import HwpxDocument
-from jakal_hwpx.hancom_document import HancomDocument
-```
-
-이 경로들은 내부 구조 정리 때 바뀔 수 있습니다.
-
-## 검증 전략
-
-안전하게 쓰려면 저장 전에 검증을 같이 거는 편이 좋습니다.
-
-HWPX:
-
-- `strict_lint_errors()`
-- `strict_validate()`
-
-HWP:
-
-- `strict_lint_errors()`
-- `strict_validate()`
-
-추가로, 실제 한컴에서 열리는지까지 보고 싶다면 Windows에서 smoke validation 스크립트를 돌리면 됩니다.
-
-```powershell
-powershell -ExecutionPolicy Bypass -File scripts/setup_hancom_security_module.ps1 -DownloadIfMissing
-powershell -ExecutionPolicy Bypass -File scripts/run_hancom_smoke_validation.ps1 -InputPath input.hwpx -OutputPath build\roundtrip.hwpx
-```
-
-## 고급 도구
-
-일반적인 앱 코드에서는 아래 도구를 바로 쓸 일이 많지 않지만, corpus 분석이나 template-backed HWP 작업에는 유용합니다.
-
-- `build_hwp_pure_profile()`
-- `append_feature_from_profile()`
-- `run_template_lab()`
-- `scan_hwp_collection()`
-- donor selection 도구들
+릴리스 기준은 [STABILITY_CONTRACT.md](./STABILITY_CONTRACT.md)와 `scripts/check_release.py`를 따릅니다.
 
 ## 정리
 
-실무 기준으로는 이렇게 기억하면 충분합니다.
-
-- 기본 편집 객체: `HancomDocument`
-- HWPX 직접 작업: `HwpxDocument`
-- HWP 직접 작업: `HwpDocument`
-- 포맷 전환 도우미: `HwpHwpxBridge`
-- binary 조사: `HwpBinaryDocument`
-
-입문자는 `HancomDocument`부터 시작하면 됩니다. 그다음에 정말 필요한 경우에만 `HwpxDocument`나 `HwpDocument`로 내려가면 됩니다.
+- 앱 코드의 기본값은 `HancomDocument`입니다.
+- `HwpxDocument`와 `HwpDocument`는 포맷별 하위 레이어입니다.
+- `HwpBinaryDocument`는 조사와 디버깅용입니다.
+- `HwpHwpxBridge`는 변환 경로를 명시해야 할 때만 씁니다.

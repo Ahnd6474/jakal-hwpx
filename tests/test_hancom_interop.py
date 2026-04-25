@@ -37,9 +37,19 @@ def test_convert_document_always_passes_security_module_install_root(monkeypatch
 
     commands: list[list[str]] = []
 
-    def fake_run(command: list[str], *, capture_output: bool, text: bool, check: bool):
+    def fake_run(
+        command: list[str],
+        *,
+        capture_output: bool,
+        text: bool,
+        encoding: str,
+        errors: str,
+        check: bool,
+    ):
         assert capture_output is True
         assert text is True
+        assert encoding == "utf-8"
+        assert errors == "replace"
         assert check is False
         commands.append(command)
         output_path.write_text("<hwpx />", encoding="utf-8")
@@ -56,6 +66,44 @@ def test_convert_document_always_passes_security_module_install_root(monkeypatch
     assert "-SecurityModuleInstallRoot" in commands[0]
     assert str(Path(r"C:\Users\TestUser\AppData\Local") / "jakal-hwpx" / "hancom-security") in commands[0]
     assert "-SkipSecurityModuleRegistration" not in commands[0]
+
+
+def test_convert_document_retries_transient_hancom_rpc_failure(monkeypatch, tmp_path: Path) -> None:
+    input_path = tmp_path / "input.hwp"
+    output_path = tmp_path / "output.hwpx"
+    script_path = tmp_path / "run_hancom_smoke_validation.ps1"
+    input_path.write_bytes(b"fake-hwp")
+    script_path.write_text("exit 0", encoding="utf-8")
+
+    commands: list[list[str]] = []
+
+    def fake_run(
+        command: list[str],
+        *,
+        capture_output: bool,
+        text: bool,
+        encoding: str,
+        errors: str,
+        check: bool,
+    ):
+        commands.append(command)
+        if len(commands) == 1:
+            return subprocess.CompletedProcess(
+                command,
+                1,
+                stdout="",
+                stderr="The remote procedure call failed. (Exception from HRESULT: 0x800706BE)",
+            )
+        output_path.write_text("<hwpx />", encoding="utf-8")
+        return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+
+    monkeypatch.setattr(hancom, "_smoke_script_path", lambda: script_path)
+    monkeypatch.setattr(hancom.subprocess, "run", fake_run)
+
+    result = hancom.convert_document(input_path, output_path, "HWPX")
+
+    assert result == output_path.resolve()
+    assert len(commands) == 2
 
 
 def test_convert_document_rejects_skip_security_module_registration(tmp_path: Path) -> None:

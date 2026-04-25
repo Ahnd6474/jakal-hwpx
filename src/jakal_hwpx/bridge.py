@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 import tempfile
+import zipfile
 from pathlib import Path
 from typing import Callable, Literal
+
+import olefile
 
 from .document import HwpxDocument
 from .hancom_document import HancomDocument
@@ -38,10 +41,10 @@ class HwpHwpxBridge:
     @classmethod
     def open(cls, path: str | Path, *, converter: HancomConverter | None = None) -> "HwpHwpxBridge":
         source_path = Path(path).expanduser().resolve()
-        suffix = source_path.suffix.lower()
-        if suffix == ".hwp":
+        source_format = _detect_source_format(source_path)
+        if source_format == "hwp":
             return cls.from_hwp(source_path, converter=converter)
-        if suffix == ".hwpx":
+        if source_format == "hwpx":
             return cls.from_hwpx(source_path, converter=converter)
         raise ValueError(f"Unsupported bridge source: {source_path}")
 
@@ -185,3 +188,18 @@ class HwpHwpxBridge:
         if self._workspace is None:
             self._workspace = Path(tempfile.mkdtemp(prefix="jakal_hwp_hwpx_bridge_"))
         return self._workspace
+
+
+def _detect_source_format(path: Path) -> Literal["hwp", "hwpx"] | None:
+    if not path.exists():
+        raise FileNotFoundError(path)
+    if zipfile.is_zipfile(path):
+        return "hwpx"
+    if olefile.isOleFile(str(path)):
+        return "hwp"
+    suffix = path.suffix.lower()
+    if suffix == ".hwp":
+        return "hwp"
+    if suffix == ".hwpx":
+        return "hwpx"
+    return None

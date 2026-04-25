@@ -32,6 +32,7 @@ def convert_document(
     output_format: str,
     *,
     timeout_seconds: int = 120,
+    retry_count: int = 1,
     allow_existing_hwp_processes: bool = True,
     security_module_name: str = DEFAULT_SECURITY_MODULE_NAME,
     security_module_path: str = "",
@@ -84,18 +85,43 @@ def convert_document(
     if security_module_path:
         command.extend(["-SecurityModulePath", security_module_path])
 
-    completed = subprocess.run(
-        command,
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    if completed.returncode != 0:
-        stderr = completed.stderr.strip()
-        stdout = completed.stdout.strip()
-        detail = stderr or stdout or f"exit code {completed.returncode}"
-        raise HancomInteropError(f"Hancom conversion failed for {resolved_input} -> {resolved_output}: {detail}")
+    attempts = max(1, int(retry_count) + 1)
+    last_detail = ""
+    for attempt in range(1, attempts + 1):
+        completed = subprocess.run(
+            command,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            check=False,
+        )
+        if completed.returncode == 0:
+            if resolved_output.exists():
+                return resolved_output
+            last_detail = f"Hancom conversion did not produce the expected output file: {resolved_output}"
+        else:
+            stderr = completed.stderr.strip()
+            stdout = completed.stdout.strip()
+            last_detail = stderr or stdout or f"exit code {completed.returncode}"
 
-    if not resolved_output.exists():
-        raise HancomInteropError(f"Hancom conversion did not produce the expected output file: {resolved_output}")
-    return resolved_output
+        if attempt < attempts and _is_transient_hancom_failure(last_detail):
+            continue
+        break
+
+    if last_detail.startswith("Hancom conversion did not produce"):
+        raise HancomInteropError(last_detail)
+    raise HancomInteropError(f"Hancom conversion failed for {resolved_input} -> {resolved_output}: {last_detail}")
+
+
+def _is_transient_hancom_failure(detail: str) -> bool:
+    lowered = detail.lower()
+    return any(
+        marker in lowered
+        for marker in (
+            "remote procedure call failed",
+            "rpc server is unavailable",
+            "0x800706be",
+            "0x800706ba",
+        )
+    )

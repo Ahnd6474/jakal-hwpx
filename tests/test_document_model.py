@@ -66,6 +66,204 @@ def test_default_constructor_builds_blank_document_in_memory() -> None:
     assert reopened.get_document_text() == ""
 
 
+def test_append_native_memo_roundtrip(tmp_path: Path) -> None:
+    document = HwpxDocument.blank()
+
+    memo = document.append_memo("comment-body", section_index=0)
+    assert memo.text == "comment-body"
+    assert len(document.memos()) == 1
+    assert document.fields() == []
+
+    output_path = tmp_path / "memo_roundtrip.hwpx"
+    document.save(output_path)
+
+    reopened = HwpxDocument.open(output_path)
+    reopened.validate()
+
+    memos = reopened.memos()
+    assert len(memos) == 1
+    assert memos[0].text == "comment-body"
+    assert reopened.sections[0].root_element.xpath(".//hp:hiddenComment", namespaces=PARA_NS)
+    assert reopened.fields() == []
+
+
+def test_append_native_memo_shape_roundtrip(tmp_path: Path) -> None:
+    document = HwpxDocument.blank()
+
+    memo_shape = document.append_memo_shape(
+        width=16384,
+        line_width=24,
+        line_type="DOT",
+        line_color="#112233",
+        fill_color="#FFF4CC",
+        active_color="#FFAA00",
+        memo_type="USER_INSERT",
+    )
+    document.section_settings().set_memo_shape_id(memo_shape.memo_shape_id)
+    document.append_memo("comment-body", section_index=0)
+
+    output_path = tmp_path / "memo_shape_roundtrip.hwpx"
+    document.save(output_path)
+
+    reopened = HwpxDocument.open(output_path)
+    reopened.validate()
+
+    memo_shapes = reopened.memo_shapes()
+    assert len(memo_shapes) == 1
+    assert memo_shapes[0].memo_shape_id == "0"
+    assert memo_shapes[0].width == 16384
+    assert memo_shapes[0].line_width == 24
+    assert memo_shapes[0].line_type == "DOT"
+    assert memo_shapes[0].line_color == "#112233"
+    assert memo_shapes[0].fill_color == "#FFF4CC"
+    assert memo_shapes[0].active_color == "#FFAA00"
+    assert memo_shapes[0].memo_type == "USER_INSERT"
+    assert reopened.section_settings().memo_shape_id == "0"
+    assert reopened.header.root_element.xpath(".//hh:memoProperties/hh:memoPr[@id='0']", namespaces=HEAD_NS)
+
+
+def test_append_native_form_roundtrip(tmp_path: Path) -> None:
+    document = HwpxDocument.blank()
+
+    checkbox = document.append_form(
+        "Consent",
+        form_type="CHECKBOX",
+        name="consent",
+        checked=True,
+        value="CHECKED",
+        section_index=0,
+    )
+    edit = document.append_form(
+        "Approval",
+        form_type="INPUT",
+        name="approval",
+        value="pending",
+        placeholder="Type status",
+        section_index=0,
+    )
+    combo = document.append_form(
+        "Status",
+        form_type="COMBOBOX",
+        name="status",
+        value="approved",
+        items=["pending", "approved"],
+        locked=True,
+        section_index=0,
+    )
+
+    assert checkbox.form_type == "CHECKBOX"
+    assert checkbox.checked is True
+    assert edit.label == "Approval"
+    assert edit.value == "pending"
+    assert edit.placeholder == "Type status"
+    assert combo.items == ["pending", "approved"]
+    assert combo.locked is True
+
+    output_path = tmp_path / "form_roundtrip.hwpx"
+    document.save(output_path)
+
+    reopened = HwpxDocument.open(output_path)
+    reopened.validate()
+
+    forms = reopened.forms()
+    assert [form.form_type for form in forms] == ["CHECKBOX", "INPUT", "COMBOBOX"]
+    assert forms[0].checked is True
+    assert forms[0].label == "Consent"
+    assert forms[1].label == "Approval"
+    assert forms[1].value == "pending"
+    assert forms[1].placeholder == "Type status"
+    assert forms[2].items == ["pending", "approved"]
+    assert forms[2].locked is True
+    assert reopened.fields() == []
+    assert reopened.sections[0].root_element.xpath(".//hp:checkBtn", namespaces=PARA_NS)
+    assert reopened.sections[0].root_element.xpath(".//hp:edit", namespaces=PARA_NS)
+    assert reopened.sections[0].root_element.xpath(".//hp:comboBox", namespaces=PARA_NS)
+    assert reopened.sections[0].root_element.xpath(
+        ".//hp:edit/hp:caption/hp:subList/hp:p/hp:run/hp:t[text()='Approval']",
+        namespaces=PARA_NS,
+    )
+    assert reopened.sections[0].root_element.xpath(
+        ".//hp:comboBox/hp:caption/hp:subList/hp:p/hp:run/hp:t[text()='Status']",
+        namespaces=PARA_NS,
+    )
+    edit_nodes = reopened.sections[0].root_element.xpath(".//hp:edit", namespaces=PARA_NS)
+    assert edit_nodes
+    assert "label" not in edit_nodes[0].get("command", "")
+    combo_nodes = reopened.sections[0].root_element.xpath(".//hp:comboBox[@enabled='0']", namespaces=PARA_NS)
+    assert combo_nodes
+    assert combo_nodes[0].xpath("./hp:caption/hp:subList", namespaces=PARA_NS)
+    assert "locked" not in combo_nodes[0].get("command", "")
+    assert "label" not in combo_nodes[0].get("command", "")
+
+
+def test_append_native_chart_roundtrip(tmp_path: Path) -> None:
+    document = HwpxDocument.blank()
+
+    chart = document.append_chart(
+        "Revenue",
+        chart_type="LINE",
+        categories=["Q1", "Q2"],
+        series=[{"name": "Sales", "values": [10, 20]}],
+        data_ref="dataset-7",
+        legend_visible=False,
+        width=3600,
+        height=2100,
+        shape_comment="chart-note",
+        section_index=0,
+    )
+    chart.set_layout(text_wrap="SQUARE", text_flow="LEFT_ONLY", treat_as_char=False)
+    chart.set_out_margins(left=1, right=2, top=3, bottom=4)
+    chart.set_rotation(angle=15, center_x=120, center_y=240)
+
+    output_path = tmp_path / "chart_roundtrip.hwpx"
+    document.save(output_path)
+
+    reopened = HwpxDocument.open(output_path)
+    reopened.validate()
+
+    charts = reopened.charts()
+    assert len(charts) == 1
+    assert charts[0].title == "Revenue"
+    assert charts[0].chart_type == "LINE"
+    assert charts[0].categories == ["Q1", "Q2"]
+    assert charts[0].series == [{"name": "Sales", "values": [10, 20]}]
+    assert charts[0].data_ref == "dataset-7"
+    assert charts[0].legend_visible is False
+    assert charts[0].shape_comment == "chart-note"
+    assert charts[0].layout()["textFlow"] == "LEFT_ONLY"
+    assert charts[0].rotation()["angle"] == "15"
+    assert charts[0].rotation()["centerX"] == "120"
+    assert charts[0].rotation()["centerY"] == "240"
+    assert reopened.oles() == []
+    assert reopened.sections[0].root_element.xpath(".//hp:chart", namespaces=PARA_NS)
+    assert reopened.sections[0].root_element.xpath(".//hp:chart/hp:shapeComment[text()='chart-note']", namespaces=PARA_NS)
+    assert reopened.sections[0].root_element.xpath(".//hp:default/hp:ole", namespaces=PARA_NS)
+    assert reopened.sections[0].root_element.xpath(
+        ".//hp:switch[hp:case/hp:chart]/hp:default/hp:ole/hp:rotationInfo[@angle='15'][@centerX='120'][@centerY='240']",
+        namespaces=PARA_NS,
+    )
+    assert "Chart/chart1.xml" in reopened.list_part_paths()
+    assert "BinData/ole1.ole" in reopened.list_part_paths()
+    with zipfile.ZipFile(output_path) as archive:
+        section_xml = archive.read("Contents/section0.xml").decode("utf-8")
+    with zipfile.ZipFile(output_path) as archive:
+        chart_xml = archive.read("Chart/chart1.xml").decode("utf-8")
+    assert "<hp:shapeComment>chart-note</hp:shapeComment>" in section_xml
+    assert "<mc:AlternateContent" in chart_xml
+    assert "<c14:style val=\"102\"/>" in chart_xml
+    assert "<ho:hncChartStyle" in chart_xml
+    assert "<c:txPr>" in chart_xml
+    assert "<c:spPr>" in chart_xml
+    assert "<c:auto val=\"1\"/>" in chart_xml
+    assert "<c:tickMarkSkip val=\"1\"/>" in chart_xml
+    assert "<c:f>'dataset-7'!$A$2:$A$3</c:f>" in chart_xml
+    assert "<c:f>'dataset-7'!$B$2:$B$3</c:f>" in chart_xml
+    assert "dataRef" not in chart_xml
+    assert "shapeComment" not in chart_xml
+    assert "\"rotation\":" not in chart_xml
+    assert "<hp:rotationInfo angle=\"15\" centerX=\"120\" centerY=\"240\"" in section_xml
+
+
 def test_edit_save_and_reopen_roundtrip(sample_hwpx_path: Path, tmp_path: Path) -> None:
     document = HwpxDocument.open(sample_hwpx_path)
     original_section_count = len(document.sections)
@@ -681,19 +879,126 @@ def test_strict_lint_reports_llm_prone_hwpx_package_issues() -> None:
     document._zip_infos["mimetype"] = mimetype_info
     document._part_order = [path for path in document._part_order if path != "mimetype"] + ["mimetype"]
 
+    document.append_form("Approval", form_type="INPUT", name="approval", value="pending")
+    document.append_memo("comment-body")
+    document.append_memo_shape(memo_shape_id="2")
+    document.append_memo_shape(memo_shape_id="2")
+    document.section_settings().set_memo_shape_id("7")
+    document.append_chart(
+        "Revenue",
+        chart_type="LINE",
+        categories=["Q1", "Q2"],
+        series=[{"name": "Sales", "values": [10, 20]}],
+    )
+
+    form_node = document.sections[0].root_element.xpath(".//hp:edit", namespaces=PARA_NS)[0]
+    form_pos = form_node.xpath("./hp:pos", namespaces=PARA_NS)[0]
+    form_node.remove(form_pos)
+    form_caption = form_node.xpath("./hp:caption", namespaces=PARA_NS)[0]
+    form_caption_sublist = form_caption.xpath("./hp:subList", namespaces=PARA_NS)[0]
+    form_caption.remove(form_caption_sublist)
+    form_node.set("command", "JAKAL_FORM_META:{oops")
+
+    memo_node = document.sections[0].root_element.xpath(".//hp:hiddenComment", namespaces=PARA_NS)[0]
+    memo_sublist = memo_node.xpath("./hp:subList", namespaces=PARA_NS)[0]
+    memo_node.remove(memo_sublist)
+
+    chart_switch = document.sections[0].root_element.xpath(".//hp:switch[hp:case/hp:chart]", namespaces=PARA_NS)[0]
+    chart_default = chart_switch.xpath("./hp:default", namespaces=PARA_NS)[0]
+    chart_switch.remove(chart_default)
+    memo_properties = document.header.root_element.xpath(".//hh:memoProperties", namespaces=HEAD_NS)[0]
+    memo_properties.set("itemCnt", "1")
+
     issues = document.strict_lint_errors()
     issue_codes = {issue.code for issue in issues}
     issue_messages = "\n".join(issue.message for issue in issues)
+    report = document.strict_lint_report()
+    formatted = document.format_strict_lint_errors()
 
     assert "style_binding" in issue_codes
     assert "binary_closure" in issue_codes
     assert "binary_media_type" in issue_codes
     assert "mimetype_packaging" in issue_codes
+    assert "control_subtree" in issue_codes
+    assert "metadata_schema" in issue_codes
+    assert "chart_closure" in issue_codes
+    assert "memo_reference" in issue_codes
     assert "run is missing charPrIDRef" in issue_messages
     assert "BinData part is not referenced by content.hpf manifest: BinData/orphan.bin" in issue_messages
     assert "manifest binary item is not referenced by any control: manifest_only_png" in issue_messages
     assert "mimetype must be the first package entry" in issue_messages
     assert "mimetype must be stored without compression" in issue_messages
+    assert "edit is missing hp:pos" in issue_messages
+    assert "edit caption is missing hp:subList" in issue_messages
+    assert "edit command metadata must be valid JSON" in issue_messages
+    assert "hiddenComment is missing hp:subList" in issue_messages
+    assert "memoProperties itemCnt=1 does not match memoPr count=2" in issue_messages
+    assert "Duplicate hh:memoPr id: 2" in issue_messages
+    assert "memoShapeIDRef points to unknown hh:memoPr id 7" in issue_messages
+    assert "native hp:chart control is missing hp:default/hp:ole fallback" in issue_messages
+    assert any(item["code"] == "style_binding" for item in report)
+    assert "[style_binding]" in formatted
 
     with pytest.raises(HwpxValidationError):
         document.strict_validate()
+
+
+def test_strict_lint_reports_missing_chart_fallback_rotation_info() -> None:
+    document = HwpxDocument.blank()
+    document.append_chart("Revenue", chart_type="BAR", categories=["Q1"], series=[{"name": "Sales", "values": [10]}])
+
+    rotation_node = document.sections[0].root_element.xpath(
+        ".//hp:switch[hp:case/hp:chart]/hp:default/hp:ole/hp:rotationInfo",
+        namespaces=PARA_NS,
+    )[0]
+    rotation_node.getparent().remove(rotation_node)
+
+    issues = document.strict_lint_errors()
+    issue_messages = "\n".join(issue.message for issue in issues)
+
+    assert "native hp:chart fallback hp:ole is missing hp:rotationInfo" in issue_messages
+
+
+def test_strict_lint_reports_invalid_form_placeholder_metadata() -> None:
+    document = HwpxDocument.blank()
+    document.append_form("Approval", form_type="INPUT", name="approval", value="pending")
+
+    form_node = document.sections[0].root_element.xpath(".//hp:edit", namespaces=PARA_NS)[0]
+    form_node.set("command", 'JAKAL_FORM_META:{"placeholder":123,"items":"bad","label":456}')
+
+    issues = document.strict_lint_errors()
+    issue_messages = "\n".join(issue.message for issue in issues)
+
+    assert "edit placeholder metadata must be a string." in issue_messages
+    assert "edit items metadata must be a list." in issue_messages
+    assert "edit label metadata must be a string." in issue_messages
+
+
+def test_strict_lint_reports_invalid_form_metadata_items_entries() -> None:
+    document = HwpxDocument.blank()
+    document.append_form("Approval", form_type="INPUT", name="approval", value="pending")
+
+    form_node = document.sections[0].root_element.xpath(".//hp:edit", namespaces=PARA_NS)[0]
+    form_node.set("command", 'JAKAL_FORM_META:{"items":["ok",1]}')
+
+    issues = document.strict_lint_errors()
+    issue_messages = "\n".join(issue.message for issue in issues)
+
+    assert "edit items metadata entries must be strings." in issue_messages
+
+
+def test_strict_lint_reports_invalid_jakal_memo_carrier_parameters() -> None:
+    document = HwpxDocument.blank()
+    document.append_memo("comment-body")
+    document.append_field(
+        field_type="JAKAL_MEMO",
+        display_text="comment-body",
+        name="memo-1",
+        parameters={"Visible": "maybe", "Order": "NaN", "Author": "Alice"},
+    )
+
+    issues = document.strict_lint_errors()
+    issue_messages = "\n".join(issue.message for issue in issues)
+
+    assert "JAKAL_MEMO carrier Visible parameter must be a bool-like literal." in issue_messages
+    assert "JAKAL_MEMO carrier Order parameter must be an integer." in issue_messages

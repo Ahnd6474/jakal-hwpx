@@ -308,6 +308,8 @@ def run_hancom_corpus_smoke(output_root: str | Path, root: str | Path | None = N
         cwd=base,
         capture_output=True,
         text=True,
+        encoding="utf-8",
+        errors="replace",
         check=False,
     )
 
@@ -318,7 +320,13 @@ def run_hancom_corpus_smoke(output_root: str | Path, root: str | Path | None = N
 
     entries: list[dict[str, Any]] = []
     if report_path.exists():
-        entries = json.loads(report_path.read_text(encoding="utf-8"))
+        decoded_report = json.loads(report_path.read_text(encoding="utf-8-sig"))
+        if isinstance(decoded_report, list):
+            entries = [entry for entry in decoded_report if isinstance(entry, dict)]
+        elif isinstance(decoded_report, dict):
+            entries = [decoded_report]
+        else:
+            errors.append(f"Hancom corpus smoke report has unsupported shape: {type(decoded_report).__name__}")
     else:
         errors.append(f"Hancom corpus smoke did not produce report {report_path}")
 
@@ -336,7 +344,7 @@ def run_hancom_corpus_smoke(output_root: str | Path, root: str | Path | None = N
             errors.append(f"missing Hancom run log: {log_path}")
             continue
         try:
-            log_entries = json.loads(log_path.read_text(encoding="utf-8"))
+            log_entries = json.loads(log_path.read_text(encoding="utf-8-sig"))
         except Exception as exc:  # noqa: BLE001
             errors.append(f"failed to read Hancom run log {log_path}: {exc}")
             continue

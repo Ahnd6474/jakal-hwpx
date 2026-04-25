@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import struct
 import tempfile
 from dataclasses import dataclass, field
@@ -9,7 +10,17 @@ from typing import Callable
 from lxml import etree
 
 from .document import DocumentMetadata, HwpxDocument
-from .hwp_binary import TAG_BULLET, TAG_CHAR_SHAPE, TAG_CTRL_DATA, TAG_NUMBERING, TAG_PARA_SHAPE, TAG_STYLE, TypedRecord
+from .hwp_binary import (
+    TAG_BULLET,
+    TAG_CHAR_SHAPE,
+    TAG_CTRL_DATA,
+    TAG_MEMO_SHAPE,
+    TAG_NUMBERING,
+    TAG_PARA_SHAPE,
+    TAG_STYLE,
+    TypedRecord,
+    _build_memo_shape_native_metadata_payload,
+)
 from .hwp_document import (
     HwpArcShapeObject,
     HwpConnectLineShapeObject,
@@ -37,6 +48,7 @@ _HWP_DOCINFO_COUNT_INDEX_BY_TAG = {
     TAG_BULLET: 12,
     TAG_PARA_SHAPE: 13,
     TAG_STYLE: 14,
+    TAG_MEMO_SHAPE: 15,
 }
 _DEFAULT_HWP_NUMBERING_PAYLOAD = bytes.fromhex(
     "0c00000000003200ffffffff03005e0031002e000c01000000003200ffffffff03005e0032002e000c00000000003200ffffffff"
@@ -70,6 +82,9 @@ _HWP_NATIVE_FIELD_TYPE_BY_SEMANTIC_TYPE = {
     "FORMULA": "%for",
     "CROSSREF": "%ref",
 }
+_HWPX_FORM_FIELD_TYPE = "JAKAL_FORM"
+_HWPX_MEMO_FIELD_TYPE = "JAKAL_MEMO"
+_HWPX_CHART_CARRIER_PREFIX = "JAKAL_CHART:"
 
 
 def _semantic_field_type_from_native(native_field_type: str, parameters: dict[str, str | int] | None = None) -> str:
@@ -391,6 +406,115 @@ class Ole:
     extent: dict[str, int] = field(default_factory=dict)
 
 
+@dataclass
+class Form:
+    label: str = ""
+    form_type: str = "INPUT"
+    name: str | None = None
+    value: str | None = None
+    checked: bool = False
+    items: list[str] = field(default_factory=list)
+    editable: bool = True
+    locked: bool = False
+    placeholder: str | None = None
+
+    @property
+    def text(self) -> str:
+        return self.label
+
+    def set_label(self, value: str) -> None:
+        self.label = value
+
+    def set_text(self, value: str) -> None:
+        self.label = value
+
+    def set_form_type(self, value: str) -> None:
+        self.form_type = value
+
+    def set_name(self, value: str | None) -> None:
+        self.name = value
+
+    def set_value(self, value: str | None) -> None:
+        self.value = value
+
+    def set_checked(self, value: bool) -> None:
+        self.checked = value
+
+    def set_items(self, values: list[str]) -> None:
+        self.items = list(values)
+
+    def set_editable(self, value: bool) -> None:
+        self.editable = value
+
+    def set_locked(self, value: bool) -> None:
+        self.locked = value
+
+    def set_placeholder(self, value: str | None) -> None:
+        self.placeholder = value
+
+
+@dataclass
+class Memo:
+    text: str
+    author: str | None = None
+    memo_id: str | None = None
+    anchor_id: str | None = None
+    order: int | None = None
+    visible: bool = True
+
+    def set_text(self, value: str) -> None:
+        self.text = value
+
+    def set_author(self, value: str | None) -> None:
+        self.author = value
+
+    def set_memo_id(self, value: str | None) -> None:
+        self.memo_id = value
+
+    def set_anchor_id(self, value: str | None) -> None:
+        self.anchor_id = value
+
+    def set_order(self, value: int | None) -> None:
+        self.order = value
+
+    def set_visible(self, value: bool) -> None:
+        self.visible = value
+
+
+@dataclass
+class Chart:
+    title: str = ""
+    chart_type: str = "BAR"
+    categories: list[str] = field(default_factory=list)
+    series: list[dict[str, object]] = field(default_factory=list)
+    data_ref: str | None = None
+    legend_visible: bool = True
+    width: int = 12000
+    height: int = 3200
+    shape_comment: str | None = None
+    layout: dict[str, str] = field(default_factory=dict)
+    out_margins: dict[str, int] = field(default_factory=dict)
+    rotation: dict[str, str] = field(default_factory=dict)
+
+    def set_title(self, value: str) -> None:
+        self.title = value
+
+    def set_chart_type(self, value: str) -> None:
+        self.chart_type = value
+
+    def set_categories(self, values: list[str]) -> None:
+        self.categories = list(values)
+
+    def set_series(self, values: list[dict[str, object]]) -> None:
+        self.series = [dict(value) for value in values]
+
+    def set_data_ref(self, value: str | None) -> None:
+        self.data_ref = value
+
+    def set_legend_visible(self, value: bool) -> None:
+        self.legend_visible = value
+
+
 HancomBlock = (
     Paragraph
     | Table
@@ -403,6 +527,9 @@ HancomBlock = (
     | Equation
     | Shape
     | Ole
+    | Form
+    | Memo
+    | Chart
 )
 
 
@@ -495,6 +622,48 @@ class BulletDefinition:
 
 
 @dataclass
+class MemoShapeDefinition:
+    memo_shape_id: str | None = None
+    width: int | None = None
+    line_width: int | None = None
+    line_type: str | None = None
+    line_color: str | None = None
+    fill_color: str | None = None
+    active_color: str | None = None
+    memo_type: str | None = None
+    native_hwp_payload: bytes | None = None
+
+    def configure(
+        self,
+        *,
+        memo_shape_id: str | None = None,
+        width: int | None = None,
+        line_width: int | None = None,
+        line_type: str | None = None,
+        line_color: str | None = None,
+        fill_color: str | None = None,
+        active_color: str | None = None,
+        memo_type: str | None = None,
+    ) -> None:
+        if memo_shape_id is not None:
+            self.memo_shape_id = memo_shape_id
+        if width is not None:
+            self.width = width
+        if line_width is not None:
+            self.line_width = line_width
+        if line_type is not None:
+            self.line_type = line_type
+        if line_color is not None:
+            self.line_color = line_color
+        if fill_color is not None:
+            self.fill_color = fill_color
+        if active_color is not None:
+            self.active_color = active_color
+        if memo_type is not None:
+            self.memo_type = memo_type
+
+
+@dataclass
 class SectionSettings:
     page_width: int | None = None
     page_height: int | None = None
@@ -509,6 +678,7 @@ class SectionSettings:
     endnote_pr: dict[str, object] = field(default_factory=dict)
     line_number_shape: dict[str, str] = field(default_factory=dict)
     numbering_shape_id: str | None = None
+    memo_shape_id: str | None = None
 
     def set_page_size(
         self,
@@ -605,6 +775,9 @@ class SectionSettings:
         if endnote_pr is not None:
             self.endnote_pr = dict(endnote_pr)
 
+    def set_memo_shape_id(self, value: str | None) -> None:
+        self.memo_shape_id = value
+
 
 ParagraphNode = Paragraph
 TableNode = Table
@@ -623,6 +796,7 @@ ParagraphStyleNode = ParagraphStyle
 CharacterStyleNode = CharacterStyle
 NumberingDefinitionNode = NumberingDefinition
 BulletDefinitionNode = BulletDefinition
+MemoShapeDefinitionNode = MemoShapeDefinition
 SectionSettingsNode = SectionSettings
 
 
@@ -652,6 +826,7 @@ class HancomDocument:
         self.character_styles: list[CharacterStyle] = []
         self.numbering_definitions: list[NumberingDefinition] = []
         self.bullet_definitions: list[BulletDefinition] = []
+        self.memo_shape_definitions: list[MemoShapeDefinition] = []
 
     @classmethod
     def blank(cls, *, converter: HancomConverter | None = None) -> "HancomDocument":
@@ -686,6 +861,7 @@ class HancomDocument:
         instance.style_definitions = [_extract_style_definition(style) for style in document.styles()]
         instance.paragraph_styles = [_extract_paragraph_style(style) for style in document.paragraph_styles()]
         instance.character_styles = [_extract_character_style(style) for style in document.character_styles()]
+        instance.memo_shape_definitions = [_extract_hwpx_memo_shape(memo_shape) for memo_shape in document.memo_shapes()]
         for section in document.sections:
             instance.sections.append(_extract_hwpx_section(section))
         if not instance.sections:
@@ -714,6 +890,7 @@ class HancomDocument:
         instance.character_styles = _build_hwp_placeholder_character_styles(docinfo_model, style_definitions)
         instance.numbering_definitions = _extract_hwp_numbering_definitions(docinfo_model)
         instance.bullet_definitions = _extract_hwp_bullet_definitions(docinfo_model)
+        instance.memo_shape_definitions = _extract_hwp_memo_shape_definitions(docinfo_model)
         _merge_hwp_style_defaults_into_paragraphs(instance)
         return instance
 
@@ -941,6 +1118,87 @@ class HancomDocument:
     ) -> Note:
         section = self._ensure_section(section_index)
         block = Note(kind=kind, text=text, number=number)
+        section.blocks.append(block)
+        return block
+
+    def append_form(
+        self,
+        label: str = "",
+        *,
+        form_type: str = "INPUT",
+        name: str | None = None,
+        value: str | None = None,
+        checked: bool = False,
+        items: list[str] | None = None,
+        editable: bool = True,
+        locked: bool = False,
+        placeholder: str | None = None,
+        section_index: int = 0,
+    ) -> Form:
+        section = self._ensure_section(section_index)
+        block = Form(
+            label=label,
+            form_type=form_type,
+            name=name,
+            value=value,
+            checked=checked,
+            items=list(items or []),
+            editable=editable,
+            locked=locked,
+            placeholder=placeholder,
+        )
+        section.blocks.append(block)
+        return block
+
+    def append_memo(
+        self,
+        text: str,
+        *,
+        author: str | None = None,
+        memo_id: str | None = None,
+        anchor_id: str | None = None,
+        order: int | None = None,
+        visible: bool = True,
+        section_index: int = 0,
+    ) -> Memo:
+        section = self._ensure_section(section_index)
+        block = Memo(
+            text=text,
+            author=author,
+            memo_id=memo_id,
+            anchor_id=anchor_id,
+            order=order,
+            visible=visible,
+        )
+        section.blocks.append(block)
+        return block
+
+    def append_chart(
+        self,
+        title: str = "",
+        *,
+        chart_type: str = "BAR",
+        categories: list[str] | None = None,
+        series: list[dict[str, object]] | None = None,
+        data_ref: str | None = None,
+        legend_visible: bool = True,
+        width: int = 12000,
+        height: int = 3200,
+        shape_comment: str | None = None,
+        section_index: int = 0,
+    ) -> Chart:
+        section = self._ensure_section(section_index)
+        block = Chart(
+            title=title,
+            chart_type=chart_type,
+            categories=list(categories or []),
+            series=[dict(value) for value in (series or [])],
+            data_ref=data_ref,
+            legend_visible=legend_visible,
+            width=width,
+            height=height,
+            shape_comment=shape_comment,
+        )
         section.blocks.append(block)
         return block
 
@@ -1220,6 +1478,41 @@ class HancomDocument:
         self.bullet_definitions.append(node)
         return node
 
+    def append_memo_shape_definition(
+        self,
+        *,
+        memo_shape_id: str | None = None,
+        width: int | None = None,
+        line_width: int | None = None,
+        line_type: str | None = None,
+        line_color: str | None = None,
+        fill_color: str | None = None,
+        active_color: str | None = None,
+        memo_type: str | None = None,
+    ) -> MemoShapeDefinition:
+        if memo_shape_id is None:
+            used_ids = {
+                int(node.memo_shape_id)
+                for node in self.memo_shape_definitions
+                if node.memo_shape_id is not None and str(node.memo_shape_id).isdigit()
+            }
+            next_id = 0
+            while next_id in used_ids:
+                next_id += 1
+            memo_shape_id = str(next_id)
+        node = MemoShapeDefinition(
+            memo_shape_id=memo_shape_id,
+            width=width,
+            line_width=line_width,
+            line_type=line_type,
+            line_color=line_color,
+            fill_color=fill_color,
+            active_color=active_color,
+            memo_type=memo_type,
+        )
+        self.memo_shape_definitions.append(node)
+        return node
+
     def to_hwpx_document(self) -> HwpxDocument:
         document = HwpxDocument.blank()
         self.metadata.apply_to_hwpx_document(document)
@@ -1256,6 +1549,7 @@ class HancomDocument:
                 grid=section.settings.grid or None,
                 start_numbers=section.settings.start_numbers or None,
                 numbering_shape_id=section.settings.numbering_shape_id,
+                memo_shape_id=section.settings.memo_shape_id,
             )
             if section.settings.page_border_fills:
                 document.apply_section_page_border_fills(
@@ -1406,6 +1700,7 @@ def _extract_hwp_section_settings(section) -> SectionSettings:
         footnote_pr=dict(note_settings.get("footNotePr", {})),
         endnote_pr=dict(note_settings.get("endNotePr", {})),
         numbering_shape_id=_normalize_hwp_setting_scalar(section_definition.get("numbering_shape_id")),
+        memo_shape_id=_normalize_hwp_setting_scalar(section_definition.get("memo_shape_id")),
     )
 
 
@@ -1499,9 +1794,12 @@ def _extract_hwp_control(control) -> HancomBlock | None:
     from .hwp_document import (
         HwpAutoNumberObject,
         HwpBookmarkObject,
+        HwpChartObject,
         HwpEquationObject,
         HwpFieldObject,
+        HwpFormObject,
         HwpHyperlinkObject,
+        HwpMemoObject,
         HwpNoteObject,
         HwpOleObject,
         HwpPictureObject,
@@ -1580,6 +1878,27 @@ def _extract_hwp_control(control) -> HancomBlock | None:
             number=control.number or 1,
             number_type=control.number_type or "PAGE",
         )
+    if isinstance(control, HwpFormObject):
+        return Form(
+            label=control.label,
+            form_type=control.form_type,
+            name=control.name,
+            value=control.value,
+            checked=control.checked,
+            items=list(control.items),
+            editable=control.editable,
+            locked=control.locked,
+            placeholder=control.placeholder,
+        )
+    if isinstance(control, HwpMemoObject):
+        return Memo(
+            text=control.text,
+            author=control.author,
+            memo_id=control.memo_id,
+            anchor_id=control.anchor_id,
+            order=control.order,
+            visible=control.visible,
+        )
     if isinstance(control, HwpNoteObject):
         number = int(control.number) if control.number and str(control.number).isdigit() else None
         return Note(kind=control.kind, text=control.text, number=number)
@@ -1601,6 +1920,22 @@ def _extract_hwp_control(control) -> HancomBlock | None:
             out_margins=dict(control.out_margins()) if hasattr(control, "out_margins") else {},
             rotation=dict(control.rotation()) if hasattr(control, "rotation") else {},
             extent=dict(control.extent()) if hasattr(control, "extent") else {},
+        )
+    if isinstance(control, HwpChartObject):
+        size = control.size()
+        return Chart(
+            title=control.title,
+            chart_type=control.chart_type,
+            categories=list(control.categories),
+            series=[dict(value) for value in control.series],
+            data_ref=control.data_ref,
+            legend_visible=control.legend_visible,
+            width=size.get("width", 12000),
+            height=size.get("height", 3200),
+            shape_comment=getattr(control, "shape_comment", "") or None,
+            layout=dict(control.layout()) if hasattr(control, "layout") else {},
+            out_margins=dict(control.out_margins()) if hasattr(control, "out_margins") else {},
+            rotation=dict(control.rotation()) if hasattr(control, "rotation") else {},
         )
     if isinstance(control, HwpShapeObject):
         size = control.size()
@@ -1938,6 +2273,12 @@ def _block_owned_text(block: HancomBlock | None) -> str | None:
         return block.display_text
     if isinstance(block, Field):
         return block.display_text
+    if isinstance(block, Form):
+        return block.label
+    if isinstance(block, Memo):
+        return block.text
+    if isinstance(block, Chart):
+        return block.title
     if isinstance(block, Shape):
         return block.text
     if isinstance(block, Ole):
@@ -2029,6 +2370,31 @@ def _append_hancom_block_to_hwp(document: HwpDocument, block: HancomBlock, *, se
             section_index=section_index,
         )
         return
+    if isinstance(block, Form):
+        document.append_form(
+            block.label,
+            form_type=block.form_type,
+            name=block.name,
+            value=block.value,
+            checked=block.checked,
+            items=block.items,
+            editable=block.editable,
+            locked=block.locked,
+            placeholder=block.placeholder,
+            section_index=section_index,
+        )
+        return
+    if isinstance(block, Memo):
+        document.append_memo(
+            block.text,
+            author=block.author,
+            memo_id=block.memo_id,
+            anchor_id=block.anchor_id,
+            order=block.order,
+            visible=block.visible,
+            section_index=section_index,
+        )
+        return
     if isinstance(block, AutoNumber):
         document.append_auto_number(number=block.number, number_type=block.number_type, kind=block.kind, section_index=section_index)
         return
@@ -2072,6 +2438,27 @@ def _append_hancom_block_to_hwp(document: HwpDocument, block: HancomBlock, *, se
         if block.rotation:
             shape.set_rotation(**_hwpx_rotation_kwargs(block.rotation))
         _apply_hwp_shape_specific_fields(shape, block)
+        return
+    if isinstance(block, Chart):
+        document.append_chart(
+            block.title,
+            chart_type=block.chart_type,
+            categories=block.categories,
+            series=block.series,
+            data_ref=block.data_ref,
+            legend_visible=block.legend_visible,
+            width=block.width,
+            height=block.height,
+            shape_comment=block.shape_comment,
+            section_index=section_index,
+        )
+        chart = document.section(section_index).charts()[-1]
+        if block.layout:
+            chart.set_layout(**_hwpx_layout_kwargs(block.layout))
+        if block.out_margins:
+            chart.set_out_margins(**block.out_margins)
+        if block.rotation:
+            chart.set_rotation(**_hwpx_rotation_kwargs(block.rotation))
         return
     if isinstance(block, Ole):
         document.append_ole(
@@ -2162,15 +2549,23 @@ def _extract_hwpx_section(section) -> HancomSection:
         pictures = paragraph.xpath(".//hp:pic", namespaces=NS)
         hyperlinks = paragraph.xpath(".//hp:fieldBegin[@type='HYPERLINK']", namespaces=NS)
         fields = paragraph.xpath(".//hp:fieldBegin[not(@type='HYPERLINK')]", namespaces=NS)
+        memo_field_nodes = [node for node in fields if (node.get("type", "").upper() == _HWPX_MEMO_FIELD_TYPE)]
+        regular_field_nodes = [node for node in fields if node not in memo_field_nodes]
+        forms = paragraph.xpath(
+            ".//hp:checkBtn | .//hp:radioBtn | .//hp:btn | .//hp:edit | .//hp:comboBox | .//hp:listBox | .//hp:scrollBar",
+            namespaces=NS,
+        )
         bookmarks = paragraph.xpath(".//hp:bookmark", namespaces=NS)
         auto_numbers = paragraph.xpath(".//hp:autoNum | .//hp:newNum", namespaces=NS)
         notes = paragraph.xpath(".//hp:footNote | .//hp:endNote", namespaces=NS)
+        memos = paragraph.xpath(".//hp:hiddenComment", namespaces=NS)
         equations = paragraph.xpath(".//hp:equation", namespaces=NS)
+        charts = paragraph.xpath(".//hp:chart", namespaces=NS)
         shapes = paragraph.xpath(
             ".//hp:rect | .//hp:line | .//hp:ellipse | .//hp:arc | .//hp:polygon | .//hp:curve | .//hp:connectLine | .//hp:textart | .//hp:container",
             namespaces=NS,
         )
-        oles = paragraph.xpath(".//hp:ole", namespaces=NS)
+        oles = paragraph.xpath(".//hp:ole[not(ancestor::hp:default[parent::hp:switch[hp:case/hp:chart]])]", namespaces=NS)
 
         text = "".join(paragraph.xpath("./hp:run/hp:t/text()", namespaces=NS)).replace("\r", "").strip()
         if text:
@@ -2180,8 +2575,10 @@ def _extract_hwpx_section(section) -> HancomSection:
         for node in hyperlinks:
             field = _build_field_wrapper(section, node)
             blocks.append(Hyperlink(target=field.hyperlink_target or "", display_text=field.display_text or None))
-        for node in fields:
+        for node in regular_field_nodes:
             blocks.append(_extract_field(_build_field_wrapper(section, node)))
+        for node in forms:
+            blocks.append(_extract_hwpx_form(_build_form_wrapper(section, node)))
         for node in auto_numbers:
             blocks.append(_extract_auto_number(_build_auto_number_wrapper(section, node)))
         for node in tables:
@@ -2190,8 +2587,13 @@ def _extract_hwpx_section(section) -> HancomSection:
             blocks.append(_extract_hwpx_picture(_build_picture_wrapper(section, node)))
         for node in notes:
             blocks.append(_extract_hwpx_note(_build_note_wrapper(section, node)))
+        memo_blocks = [_extract_hwpx_memo(_build_memo_wrapper(section, node)) for node in memos]
+        memo_carriers = [_extract_hwpx_memo_field(_build_field_wrapper(section, node)) for node in memo_field_nodes]
+        blocks.extend(_merge_hwpx_memos_with_carriers(memo_blocks, memo_carriers))
         for node in equations:
             blocks.append(_extract_hwpx_equation(_build_equation_wrapper(section, node)))
+        for node in charts:
+            blocks.append(_extract_hwpx_chart(_build_chart_wrapper(section, node)))
         for node in shapes:
             blocks.append(_extract_hwpx_shape(_build_shape_wrapper(section, node)))
         for node in oles:
@@ -2277,6 +2679,23 @@ def _extract_hwpx_note(note) -> Note:
     return Note(kind=note.kind, text=note.text, number=number)
 
 
+def _extract_hwpx_memo(memo) -> Memo:
+    return Memo(text=memo.text)
+
+
+def _extract_hwpx_memo_shape(memo_shape) -> MemoShapeDefinition:
+    return MemoShapeDefinition(
+        memo_shape_id=memo_shape.memo_shape_id,
+        width=memo_shape.width,
+        line_width=memo_shape.line_width,
+        line_type=memo_shape.line_type,
+        line_color=memo_shape.line_color,
+        fill_color=memo_shape.fill_color,
+        active_color=memo_shape.active_color,
+        memo_type=memo_shape.memo_type,
+    )
+
+
 def _extract_hwpx_equation(equation) -> Equation:
     size = equation.size()
     return Equation(
@@ -2293,7 +2712,28 @@ def _extract_hwpx_equation(equation) -> Equation:
     )
 
 
-def _extract_hwpx_shape(shape) -> Shape:
+def _extract_hwpx_chart(chart) -> Chart:
+    size = chart.size()
+    return Chart(
+        title=chart.title,
+        chart_type=chart.chart_type,
+        categories=chart.categories,
+        series=chart.series,
+        data_ref=chart.data_ref,
+        legend_visible=chart.legend_visible,
+        width=size.get("width", 12000),
+        height=size.get("height", 3200),
+        shape_comment=chart.shape_comment or None,
+        layout=_normalize_str_map(chart.layout()),
+        out_margins=_normalize_int_map(chart.out_margins()),
+        rotation=_normalize_str_map(chart.rotation()),
+    )
+
+
+def _extract_hwpx_shape(shape) -> Shape | Chart:
+    carrier = _extract_hwpx_chart_carrier(shape)
+    if carrier is not None:
+        return carrier
     size = shape.size()
     fill_style = shape.fill_style()
     line_style = shape.line_style()
@@ -2339,7 +2779,11 @@ def _extract_bookmark(bookmark) -> Bookmark:
     return Bookmark(name=bookmark.name or "")
 
 
-def _extract_field(field) -> Field:
+def _extract_field(field) -> Field | Form | Memo:
+    if (field.field_type or "").upper() == _HWPX_FORM_FIELD_TYPE:
+        return _extract_hwpx_form_field(field)
+    if (field.field_type or "").upper() == _HWPX_MEMO_FIELD_TYPE:
+        return _extract_hwpx_memo_field(field)
     return Field(
         field_type=field.field_type or "",
         display_text=field.display_text or None,
@@ -2348,6 +2792,188 @@ def _extract_field(field) -> Field:
         editable=field.element.get("editable") == "1",
         dirty=field.element.get("dirty") == "1",
     )
+
+
+def _extract_hwpx_form_field(field) -> Form:
+    parameters = field.parameter_map()
+    items = _json_list_parameter(parameters.get("Items"))
+    return Form(
+        label=field.display_text or "",
+        form_type=parameters.get("FormType", "INPUT") or "INPUT",
+        name=field.name or None,
+        value=parameters.get("Value"),
+        checked=_coerce_bool(parameters.get("Checked")) or False,
+        items=items,
+        editable=_coerce_bool(parameters.get("Editable")) is not False,
+        locked=_coerce_bool(parameters.get("Locked")) or False,
+        placeholder=parameters.get("Placeholder") or None,
+    )
+
+
+def _extract_hwpx_form(form) -> Form:
+    return Form(
+        label=form.label,
+        form_type=form.form_type,
+        name=form.name,
+        value=form.value,
+        checked=form.checked,
+        items=form.items,
+        editable=form.editable,
+        locked=form.locked,
+        placeholder=form.placeholder,
+    )
+
+
+def _extract_hwpx_memo_field(field) -> Memo:
+    parameters = field.parameter_map()
+    order_value = parameters.get("Order")
+    try:
+        order = int(order_value) if order_value not in (None, "") else None
+    except (TypeError, ValueError):
+        order = None
+    return Memo(
+        text=field.display_text or parameters.get("Text") or "",
+        author=parameters.get("Author") or None,
+        memo_id=parameters.get("MemoId") or field.name or None,
+        anchor_id=parameters.get("AnchorId") or None,
+        order=order,
+        visible=_coerce_bool(parameters.get("Visible")) is not False,
+    )
+
+
+def _memo_requires_hwpx_carrier(block: Memo) -> bool:
+    return any(
+        value is not None
+        for value in (block.author, block.memo_id, block.anchor_id, block.order)
+    ) or block.visible is False
+
+
+def _merge_hwpx_memo_with_carrier(memo: Memo, carrier: Memo) -> Memo:
+    return Memo(
+        text=memo.text or carrier.text,
+        author=carrier.author,
+        memo_id=carrier.memo_id,
+        anchor_id=carrier.anchor_id,
+        order=carrier.order,
+        visible=carrier.visible,
+    )
+
+
+def _merge_hwpx_memos_with_carriers(memos: list[Memo], carriers: list[Memo]) -> list[Memo]:
+    if not carriers:
+        return list(memos)
+    unused_carriers = list(range(len(carriers)))
+    merged: list[Memo] = []
+
+    for memo in memos:
+        carrier_index = _find_matching_hwpx_memo_carrier(memo, carriers, unused_carriers)
+        if carrier_index is None:
+            merged.append(memo)
+            continue
+        unused_carriers.remove(carrier_index)
+        merged.append(_merge_hwpx_memo_with_carrier(memo, carriers[carrier_index]))
+
+    for carrier_index in unused_carriers:
+        merged.append(carriers[carrier_index])
+    return merged
+
+
+def _find_matching_hwpx_memo_carrier(memo: Memo, carriers: list[Memo], unused_carriers: list[int]) -> int | None:
+    memo_text = _normalize_hwpx_memo_pairing_key(memo.text)
+    if memo_text:
+        for carrier_index in unused_carriers:
+            if _normalize_hwpx_memo_pairing_key(carriers[carrier_index].text) == memo_text:
+                return carrier_index
+    return unused_carriers[0] if unused_carriers else None
+
+
+def _normalize_hwpx_memo_pairing_key(value: str | None) -> str:
+    return " ".join((value or "").split())
+
+
+def _extract_hwpx_chart_carrier(shape) -> Chart | None:
+    comment = shape.shape_comment or ""
+    if not comment.startswith(_HWPX_CHART_CARRIER_PREFIX):
+        return None
+    try:
+        payload = json.loads(comment[len(_HWPX_CHART_CARRIER_PREFIX) :])
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(payload, dict):
+        return None
+    size = shape.size()
+    return Chart(
+        title=shape.text or str(payload.get("title", "")),
+        chart_type=str(payload.get("chartType", "BAR") or "BAR"),
+        categories=[str(value) for value in payload.get("categories", []) if value is not None],
+        series=[dict(value) for value in payload.get("series", []) if isinstance(value, dict)],
+        data_ref=str(payload["dataRef"]) if payload.get("dataRef") not in (None, "") else None,
+        legend_visible=_coerce_bool(payload.get("legendVisible")) is not False,
+        width=size.get("width", 12000),
+        height=size.get("height", 3200),
+        shape_comment=str(payload["shapeComment"]) if payload.get("shapeComment") not in (None, "") else None,
+        layout=_normalize_str_map(shape.layout()),
+        out_margins=_normalize_int_map(shape.out_margins()),
+        rotation=_normalize_str_map(shape.rotation()),
+    )
+
+
+def _build_hwpx_form_parameters(block: Form) -> dict[str, str]:
+    parameters: dict[str, str] = {
+        "FormType": block.form_type,
+        "Checked": "1" if block.checked else "0",
+        "Editable": "1" if block.editable else "0",
+        "Locked": "1" if block.locked else "0",
+    }
+    if block.value is not None:
+        parameters["Value"] = block.value
+    if block.items:
+        parameters["Items"] = json.dumps([str(value) for value in block.items], ensure_ascii=True, separators=(",", ":"))
+    if block.placeholder:
+        parameters["Placeholder"] = block.placeholder
+    return parameters
+
+
+def _build_hwpx_memo_parameters(block: Memo) -> dict[str, str]:
+    parameters: dict[str, str] = {
+        "Visible": "1" if block.visible else "0",
+    }
+    if block.text:
+        parameters["Text"] = block.text
+    if block.author:
+        parameters["Author"] = block.author
+    if block.memo_id:
+        parameters["MemoId"] = block.memo_id
+    if block.anchor_id:
+        parameters["AnchorId"] = block.anchor_id
+    if block.order is not None:
+        parameters["Order"] = str(block.order)
+    return parameters
+
+
+def _build_hwpx_chart_carrier_comment(block: Chart) -> str:
+    payload = {
+        "title": block.title,
+        "chartType": block.chart_type,
+        "categories": [str(value) for value in block.categories],
+        "series": [dict(value) for value in block.series],
+        "dataRef": block.data_ref,
+        "legendVisible": bool(block.legend_visible),
+        "shapeComment": block.shape_comment,
+    }
+    return _HWPX_CHART_CARRIER_PREFIX + json.dumps(payload, ensure_ascii=True, separators=(",", ":"))
+
+
+def _json_list_parameter(value: str | None) -> list[str]:
+    if not value:
+        return []
+    try:
+        decoded = json.loads(value)
+    except json.JSONDecodeError:
+        return []
+    if not isinstance(decoded, list):
+        return []
+    return [str(item) for item in decoded if item is not None]
 
 
 def _extract_auto_number(auto_number) -> AutoNumber:
@@ -2443,6 +3069,12 @@ def _extract_line_number_shape(section) -> dict[str, str]:
 
 def _extract_section_settings(section) -> SectionSettings:
     settings = section.document.section_settings(section.section_index())
+    memo_shape_ids = {
+        memo_shape.memo_shape_id
+        for memo_shape in section.document.memo_shapes()
+        if memo_shape.memo_shape_id is not None
+    }
+    memo_shape_id = settings.memo_shape_id if settings.memo_shape_id in memo_shape_ids else None
     return SectionSettings(
         page_width=settings.page_width,
         page_height=settings.page_height,
@@ -2456,6 +3088,7 @@ def _extract_section_settings(section) -> SectionSettings:
         footnote_pr=_extract_note_pr(section, "footNotePr"),
         endnote_pr=_extract_note_pr(section, "endNotePr"),
         line_number_shape=_extract_line_number_shape(section),
+        memo_shape_id=memo_shape_id,
     )
 
 
@@ -2712,6 +3345,26 @@ def _extract_hwp_bullet_definitions(docinfo_model) -> list[BulletDefinition]:
         definition.flags = int(fields.get("flags", 0))
         definition.flag_bits = dict(fields.get("flag_bits", {}))
         definitions.append(definition)
+    return definitions
+
+
+def _extract_hwp_memo_shape_definitions(docinfo_model) -> list[MemoShapeDefinition]:
+    definitions: list[MemoShapeDefinition] = []
+    for index, record in enumerate(docinfo_model.memo_shape_records()):
+        fields = record.fields()
+        definitions.append(
+            MemoShapeDefinition(
+                memo_shape_id=str(index),
+                width=_coerce_int(fields.get("width")),
+                line_width=_coerce_int(fields.get("line_width")),
+                line_type=str(fields["line_type"]) if fields.get("line_type") is not None else None,
+                line_color=str(fields["line_color"]) if fields.get("line_color") is not None else None,
+                fill_color=str(fields["fill_color"]) if fields.get("fill_color") is not None else None,
+                active_color=str(fields["active_color"]) if fields.get("active_color") is not None else None,
+                memo_type=str(fields["memo_type"]) if fields.get("memo_type") is not None else None,
+                native_hwp_payload=bytes(record.payload),
+            )
+        )
     return definitions
 
 
@@ -3039,6 +3692,30 @@ def _build_hwp_bullet_payload(definition: BulletDefinition, fallback_payload: by
     return bytes(payload)
 
 
+def _build_hwp_memo_shape_payload(definition: MemoShapeDefinition, fallback_payload: bytes | None = None) -> bytes:
+    semantic_fields = {
+        "width": definition.width,
+        "lineWidth": definition.line_width,
+        "lineType": definition.line_type,
+        "lineColor": definition.line_color,
+        "fillColor": definition.fill_color,
+        "activeColor": definition.active_color,
+        "memoType": definition.memo_type,
+    }
+    if definition.native_hwp_payload is not None and not any(value is not None for value in semantic_fields.values()):
+        return bytes(definition.native_hwp_payload)
+    return _build_memo_shape_native_metadata_payload(**semantic_fields)
+
+
+def _sync_hwp_memo_shape_payloads(records, nodes: list[MemoShapeDefinition]) -> None:
+    for node in nodes:
+        memo_shape_id = _parse_optional_int(node.memo_shape_id)
+        if memo_shape_id is None or not 0 <= memo_shape_id < len(records):
+            continue
+        fallback_payload = bytes(records[memo_shape_id].payload)
+        records[memo_shape_id].payload = bytes(_build_hwp_memo_shape_payload(node, fallback_payload))
+
+
 def _merge_hwp_style_defaults_into_paragraphs(document: HancomDocument) -> None:
     style_by_id = {
         style.style_id: style
@@ -3158,6 +3835,14 @@ def _sync_hwp_docinfo_styles(document: HwpDocument, hancom_document: HancomDocum
         )
         if value is not None
     }
+    required_memo_shape_ids = {
+        value
+        for value in (
+            _parse_optional_int(definition.memo_shape_id)
+            for definition in hancom_document.memo_shape_definitions
+        )
+        if value is not None
+    }
 
     for style in hancom_document.style_definitions:
         para_pr_id = _parse_optional_int(style.para_pr_id)
@@ -3194,7 +3879,6 @@ def _sync_hwp_docinfo_styles(document: HwpDocument, hancom_document: HancomDocum
         numbering_shape_id = _parse_optional_int(section.settings.numbering_shape_id)
         if numbering_shape_id is not None:
             required_numbering_ids.add(numbering_shape_id)
-
     if required_char_shape_ids:
         _ensure_hwp_docinfo_record_capacity(docinfo_model, TAG_CHAR_SHAPE, max(required_char_shape_ids) + 1)
     if required_para_shape_ids:
@@ -3214,6 +3898,13 @@ def _sync_hwp_docinfo_styles(document: HwpDocument, hancom_document: HancomDocum
             TAG_BULLET,
             max(required_bullet_ids) + 1,
             default_payload=_DEFAULT_HWP_BULLET_PAYLOAD,
+        )
+    if required_memo_shape_ids:
+        _ensure_hwp_docinfo_record_capacity(
+            docinfo_model,
+            TAG_MEMO_SHAPE,
+            max(required_memo_shape_ids) + 1,
+            default_payload=_build_memo_shape_native_metadata_payload(),
         )
 
     _sync_hwp_docinfo_slot_payloads(
@@ -3235,6 +3926,10 @@ def _sync_hwp_docinfo_styles(document: HwpDocument, hancom_document: HancomDocum
         docinfo_model.records_by_tag_id(TAG_BULLET),
         hancom_document.bullet_definitions,
         builder=_build_hwp_bullet_payload,
+    )
+    _sync_hwp_memo_shape_payloads(
+        docinfo_model.memo_shape_records(),
+        hancom_document.memo_shape_definitions,
     )
 
     # Explicit style definitions still need direct HWP style record authoring.
@@ -3416,6 +4111,18 @@ def _build_note_wrapper(section, node):
     return NoteXml(section.document, section, node)
 
 
+def _build_memo_wrapper(section, node):
+    from .elements import MemoXml
+
+    return MemoXml(section.document, section, node)
+
+
+def _build_form_wrapper(section, node):
+    from .elements import FormXml
+
+    return FormXml(section.document, section, node)
+
+
 def _build_equation_wrapper(section, node):
     from .elements import EquationXml
 
@@ -3426,6 +4133,12 @@ def _build_shape_wrapper(section, node):
     from .elements import ShapeXml
 
     return ShapeXml(section.document, section, node)
+
+
+def _build_chart_wrapper(section, node):
+    from .elements import ChartXml
+
+    return ChartXml(section.document, section, node)
 
 
 def _build_ole_wrapper(section, node):
@@ -3508,6 +4221,35 @@ def _write_section_to_hwpx(document: HwpxDocument, section_index: int, section: 
                 section_index=section_index,
                 paragraph_index=paragraph_index,
             )
+        elif isinstance(block, Form):
+            document.append_form(
+                block.label,
+                form_type=block.form_type,
+                name=block.name,
+                value=block.value,
+                checked=block.checked,
+                items=block.items,
+                editable=block.editable,
+                locked=block.locked,
+                placeholder=block.placeholder,
+                section_index=section_index,
+                paragraph_index=paragraph_index,
+            )
+        elif isinstance(block, Memo):
+            document.append_memo(
+                block.text,
+                section_index=section_index,
+                paragraph_index=paragraph_index,
+            )
+            if _memo_requires_hwpx_carrier(block):
+                document.append_field(
+                    field_type=_HWPX_MEMO_FIELD_TYPE,
+                    display_text=None,
+                    name=block.memo_id,
+                    parameters=_build_hwpx_memo_parameters(block),
+                    section_index=section_index,
+                    paragraph_index=paragraph_index,
+                )
         elif isinstance(block, AutoNumber):
             document.append_auto_number(
                 number=block.number,
@@ -3550,6 +4292,26 @@ def _write_section_to_hwpx(document: HwpxDocument, section_index: int, section: 
                 paragraph_index=paragraph_index,
             )
             _apply_hwpx_shape_block(appended, block)
+        elif isinstance(block, Chart):
+            appended = document.append_chart(
+                block.title,
+                chart_type=block.chart_type,
+                categories=block.categories,
+                series=block.series,
+                data_ref=block.data_ref,
+                legend_visible=block.legend_visible,
+                width=block.width,
+                height=block.height,
+                shape_comment=block.shape_comment,
+                section_index=section_index,
+                paragraph_index=paragraph_index,
+            )
+            if block.layout:
+                appended.set_layout(**_hwpx_layout_kwargs(block.layout))
+            if block.out_margins:
+                appended.set_out_margins(**block.out_margins)
+            if block.rotation:
+                appended.set_rotation(**_hwpx_rotation_kwargs(block.rotation))
         elif isinstance(block, Ole):
             appended = document.append_ole(
                 block.name,
@@ -3664,6 +4426,8 @@ def _apply_section_settings(document: HwpxDocument, section_index: int, settings
             tbl=settings.start_numbers.get("tbl"),
             equation=settings.start_numbers.get("equation"),
         )
+    if settings.memo_shape_id is not None:
+        target.set_memo_shape_id(settings.memo_shape_id)
     if settings.line_number_shape:
         _apply_line_number_shape(document, section_index, settings.line_number_shape)
     if settings.footnote_pr or settings.endnote_pr:
@@ -3903,6 +4667,20 @@ def _apply_styles(document: HwpxDocument, hancom_document: HancomDocument) -> No
             lang_id=style.lang_id,
             lock_form=style.lock_form,
         )
+
+    for memo_shape in hancom_document.memo_shape_definitions:
+        appended = document.append_memo_shape(
+            memo_shape_id=memo_shape.memo_shape_id,
+            width=memo_shape.width if memo_shape.width is not None else 12000,
+            line_width=memo_shape.line_width if memo_shape.line_width is not None else 12,
+            line_type=memo_shape.line_type or "SOLID",
+            line_color=memo_shape.line_color or "#808080",
+            fill_color=memo_shape.fill_color or "#FFF2CC",
+            active_color=memo_shape.active_color or "#FFC000",
+            memo_type=memo_shape.memo_type or "NOMAL",
+        )
+        if memo_shape.memo_shape_id is None:
+            memo_shape.memo_shape_id = appended.memo_shape_id
 
 
 def _coerce_bool(value) -> bool | None:
