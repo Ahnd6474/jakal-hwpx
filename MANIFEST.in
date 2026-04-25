@@ -5,4 +5,5 @@ include HWPX_MODULE.md
 include RELEASING.md
 include STABILITY_CONTRACT.md
 include stability_contract.json
+recursive-include docs *.md *.svg
 recursive-include src/jakal_hwpx py.typed

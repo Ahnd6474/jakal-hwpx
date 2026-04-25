@@ -82,7 +82,7 @@ doc.write_to_hwpx("build/output.hwpx")
 | `HwpBinaryDocument` | record tree, stream, DocInfo를 조사할 때 쓰는 저수준 API |
 | `HwpHwpxBridge` | 포맷 전환 경로를 직접 고정해서 실험하거나 디버깅할 때 쓰는 도우미 |
 
-세부 사용법과 선택 기준은 [HWPX_MODULE.md](./HWPX_MODULE.md)에 모아 둡니다.
+공개 모듈과 세부 API 문서는 [HWPX_MODULE.md](./HWPX_MODULE.md)에 모아 둡니다.
 
 ## 검증
 
@@ -106,7 +106,7 @@ powershell -ExecutionPolicy Bypass -File scripts/run_hancom_smoke_validation.ps1
 
 ## 추가 문서
 
-- [HWPX_MODULE.md](./HWPX_MODULE.md): `HancomDocument`, `HwpxDocument`, `HwpDocument`의 역할과 사용 예
+- [HWPX_MODULE.md](./HWPX_MODULE.md): 공개 모듈/API 문서 인덱스
 - [STABILITY_CONTRACT.md](./STABILITY_CONTRACT.md): 지원 범위와 release gate 기준
 - [examples/SHOWCASE.md](./examples/SHOWCASE.md): 생성 예시 모음
 - [THIRD_PARTY_NOTICES.md](./THIRD_PARTY_NOTICES.md): 샘플 문서와 재배포 고지
