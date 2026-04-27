@@ -10,6 +10,7 @@ import tempfile
 import time
 import zipfile
 from collections import Counter
+from copy import deepcopy
 from dataclasses import replace
 from pathlib import Path, PurePosixPath
 from uuid import uuid4
@@ -65,6 +66,70 @@ from .xmlnode import HwpxXmlNode
 
 def _normalize_path(path: str) -> str:
     return PurePosixPath(path).as_posix()
+
+
+def _normalize_existing_index(index: int, count: int, label: str) -> int:
+    if count <= 0:
+        raise IndexError(f"No {label} exists.")
+    normalized = index + count if index < 0 else index
+    if normalized < 0 or normalized >= count:
+        raise IndexError(f"{label} index out of range: {index}")
+    return normalized
+
+
+def _normalize_insert_index(index: int | None, count: int, label: str) -> int:
+    if index is None:
+        return count
+    normalized = index + count if index < 0 else index
+    if normalized < 0 or normalized > count:
+        raise IndexError(f"{label} insert index out of range: {index}")
+    return normalized
+
+
+def _parse_xml_element(xml: str | bytes) -> etree._Element:
+    raw = xml if isinstance(xml, bytes) else xml.encode("utf-8")
+    element = etree.fromstring(raw)
+    if not isinstance(element.tag, str):
+        raise ValueError("XML payload must contain a concrete element.")
+    return element
+
+
+def _local_name(element: etree._Element) -> str:
+    return etree.QName(element).localname
+
+
+_DIRECT_RUN_CONTROL_TAGS = {
+    "tbl",
+    "pic",
+    "rect",
+    "line",
+    "ellipse",
+    "arc",
+    "polygon",
+    "curve",
+    "connectLine",
+    "textart",
+    "container",
+    "ole",
+    "equation",
+    "chart",
+    "switch",
+    "checkBtn",
+    "radioBtn",
+    "btn",
+    "edit",
+    "comboBox",
+    "listBox",
+    "scrollBar",
+    "autoNum",
+    "newNum",
+}
+
+
+def _node_for_control_return(element: etree._Element) -> etree._Element:
+    if _local_name(element) == "ctrl" and len(element):
+        return element[0]
+    return element
 
 
 def _bool_like_literal_is_valid(value: str | None) -> bool:
@@ -936,6 +1001,209 @@ class HwpxDocument:
         self._ensure_editable_sections()
         self.sections[section_index].delete_paragraph(paragraph_index)
 
+    def paragraph_count(self, section_index: int = 0) -> int:
+        self._ensure_editable_sections()
+        return len(self._paragraph_elements(section_index))
+
+    def paragraph_xml(self, section_index: int, paragraph_index: int, *, pretty_print: bool = False) -> str:
+        self._ensure_editable_sections()
+        paragraph = self._paragraph_element(section_index, paragraph_index)
+        return etree.tostring(paragraph, encoding="unicode", pretty_print=pretty_print)
+
+    def insert_paragraph_xml(
+        self,
+        section_index: int,
+        paragraph_index: int | None,
+        xml: str | bytes,
+    ) -> HwpxXmlNode:
+        self._ensure_editable_sections()
+        section = self.sections[section_index]
+        paragraph = self._parse_paragraph_xml(xml)
+        paragraphs = self._paragraph_elements(section_index)
+        insert_index = _normalize_insert_index(paragraph_index, len(paragraphs), "paragraph")
+        if insert_index == len(paragraphs):
+            section.root_element.append(paragraph)
+        else:
+            paragraphs[insert_index].addprevious(paragraph)
+        _invalidate_paragraph_layout(paragraph)
+        section.mark_modified()
+        return HwpxXmlNode(paragraph, section)
+
+    def replace_paragraph_xml(
+        self,
+        section_index: int,
+        paragraph_index: int,
+        xml: str | bytes,
+    ) -> HwpxXmlNode:
+        self._ensure_editable_sections()
+        section = self.sections[section_index]
+        paragraphs = self._paragraph_elements(section_index)
+        index = _normalize_existing_index(paragraph_index, len(paragraphs), "paragraph")
+        paragraph = self._parse_paragraph_xml(xml)
+        paragraphs[index].getparent().replace(paragraphs[index], paragraph)
+        _invalidate_paragraph_layout(paragraph)
+        section.mark_modified()
+        return HwpxXmlNode(paragraph, section)
+
+    def move_paragraph(
+        self,
+        source_section_index: int,
+        source_paragraph_index: int,
+        *,
+        target_section_index: int | None = None,
+        target_paragraph_index: int | None = None,
+    ) -> HwpxXmlNode:
+        self._ensure_editable_sections()
+        target_section_index = source_section_index if target_section_index is None else target_section_index
+        source_section = self.sections[source_section_index]
+        target_section = self.sections[target_section_index]
+        source_paragraphs = self._paragraph_elements(source_section_index)
+        source_index = _normalize_existing_index(source_paragraph_index, len(source_paragraphs), "paragraph")
+        if source_section_index != target_section_index and len(source_paragraphs) <= 1:
+            raise ValueError("A source section must keep at least one paragraph.")
+        paragraph = source_paragraphs[source_index]
+        source_section.root_element.remove(paragraph)
+
+        target_paragraphs = self._paragraph_elements(target_section_index)
+        target_index = _normalize_insert_index(target_paragraph_index, len(target_paragraphs), "paragraph")
+        if target_index == len(target_paragraphs):
+            target_section.root_element.append(paragraph)
+        else:
+            target_paragraphs[target_index].addprevious(paragraph)
+        _invalidate_paragraph_layout(paragraph)
+        source_section.mark_modified()
+        target_section.mark_modified()
+        return HwpxXmlNode(paragraph, target_section)
+
+    def copy_paragraph(
+        self,
+        source_section_index: int,
+        source_paragraph_index: int,
+        *,
+        target_section_index: int | None = None,
+        target_paragraph_index: int | None = None,
+    ) -> HwpxXmlNode:
+        self._ensure_editable_sections()
+        target_section_index = source_section_index if target_section_index is None else target_section_index
+        target_section = self.sections[target_section_index]
+        paragraph = deepcopy(self._paragraph_element(source_section_index, source_paragraph_index))
+        paragraph.set("id", target_section._next_paragraph_id())
+
+        target_paragraphs = self._paragraph_elements(target_section_index)
+        target_index = _normalize_insert_index(target_paragraph_index, len(target_paragraphs), "paragraph")
+        if target_index == len(target_paragraphs):
+            target_section.root_element.append(paragraph)
+        else:
+            target_paragraphs[target_index].addprevious(paragraph)
+        _invalidate_paragraph_layout(paragraph)
+        target_section.mark_modified()
+        return HwpxXmlNode(paragraph, target_section)
+
+    def control_count(self, section_index: int, paragraph_index: int) -> int:
+        self._ensure_editable_sections()
+        paragraph = self._paragraph_element(section_index, paragraph_index)
+        return len(self._paragraph_control_wrappers(paragraph))
+
+    def insert_control_xml_at(
+        self,
+        xml: str | bytes,
+        *,
+        section_index: int = 0,
+        paragraph_index: int = 0,
+        control_index: int | None = None,
+        char_pr_id: str | None = None,
+    ) -> HwpxXmlNode:
+        self._ensure_editable_sections()
+        control = _parse_xml_element(xml)
+        if _local_name(control) == "ctrl":
+            control_element = control
+        elif _local_name(control) in _DIRECT_RUN_CONTROL_TAGS:
+            control_element = control
+        else:
+            control_element = etree.Element(qname("hp", "ctrl"))
+            control_element.append(control)
+        paragraph = self._paragraph_element(section_index, paragraph_index)
+        section = self.sections[section_index]
+        self._insert_control_wrapper(paragraph, control_element, control_index=control_index, section=section, char_pr_id=char_pr_id)
+        return HwpxXmlNode(_node_for_control_return(control_element), section)
+
+    def delete_control(self, section_index: int, paragraph_index: int, control_index: int) -> None:
+        self._ensure_editable_sections()
+        paragraph = self._paragraph_element(section_index, paragraph_index)
+        wrappers = self._paragraph_control_wrappers(paragraph)
+        index = _normalize_existing_index(control_index, len(wrappers), "control")
+        self._detach_control_wrapper(wrappers[index])
+        _invalidate_paragraph_layout(paragraph)
+        self.sections[section_index].mark_modified()
+
+    def move_control(
+        self,
+        source_section_index: int,
+        source_paragraph_index: int,
+        control_index: int,
+        *,
+        target_section_index: int | None = None,
+        target_paragraph_index: int,
+        target_control_index: int | None = None,
+        char_pr_id: str | None = None,
+    ) -> HwpxXmlNode:
+        self._ensure_editable_sections()
+        target_section_index = source_section_index if target_section_index is None else target_section_index
+        source_section = self.sections[source_section_index]
+        target_section = self.sections[target_section_index]
+        source_paragraph = self._paragraph_element(source_section_index, source_paragraph_index)
+        wrappers = self._paragraph_control_wrappers(source_paragraph)
+        source_index = _normalize_existing_index(control_index, len(wrappers), "control")
+        wrapper = wrappers[source_index]
+        source_run = wrapper.getparent()
+        resolved_char_pr_id = char_pr_id or (source_run.get("charPrIDRef") if source_run is not None else None)
+        control = _node_for_control_return(wrapper)
+        self._detach_control_wrapper(wrapper)
+
+        target_paragraph = self._paragraph_element(target_section_index, target_paragraph_index)
+        self._insert_control_wrapper(
+            target_paragraph,
+            wrapper,
+            control_index=target_control_index,
+            section=target_section,
+            char_pr_id=resolved_char_pr_id,
+        )
+        _invalidate_paragraph_layout(source_paragraph)
+        source_section.mark_modified()
+        target_section.mark_modified()
+        return HwpxXmlNode(control, target_section)
+
+    def copy_control(
+        self,
+        source_section_index: int,
+        source_paragraph_index: int,
+        control_index: int,
+        *,
+        target_section_index: int | None = None,
+        target_paragraph_index: int,
+        target_control_index: int | None = None,
+        char_pr_id: str | None = None,
+    ) -> HwpxXmlNode:
+        self._ensure_editable_sections()
+        target_section_index = source_section_index if target_section_index is None else target_section_index
+        source_paragraph = self._paragraph_element(source_section_index, source_paragraph_index)
+        wrappers = self._paragraph_control_wrappers(source_paragraph)
+        source_index = _normalize_existing_index(control_index, len(wrappers), "control")
+        source_run = wrappers[source_index].getparent()
+        resolved_char_pr_id = char_pr_id or (source_run.get("charPrIDRef") if source_run is not None else None)
+        wrapper = deepcopy(wrappers[source_index])
+        control = _node_for_control_return(wrapper)
+        target_paragraph = self._paragraph_element(target_section_index, target_paragraph_index)
+        target_section = self.sections[target_section_index]
+        self._insert_control_wrapper(
+            target_paragraph,
+            wrapper,
+            control_index=target_control_index,
+            section=target_section,
+            char_pr_id=resolved_char_pr_id,
+        )
+        return HwpxXmlNode(control, target_section)
+
     def apply_style_to_paragraph(
         self,
         section_index: int,
@@ -1070,6 +1338,18 @@ class HwpxDocument:
             isEmbeded=is_embedded_value,
         )
         return part
+
+    def _unused_binary_name(self, name: str) -> str:
+        original = PurePosixPath(name).name
+        candidate = original
+        suffix = PurePosixPath(original).suffix
+        stem = PurePosixPath(original).stem or "bindata"
+        index = 2
+        used_hrefs = {item.get("href", "") for item in self.content_hpf.manifest_items()}
+        while f"BinData/{candidate}" in self._parts or f"BinData/{candidate}" in used_hrefs:
+            candidate = f"{stem}_{index}{suffix}"
+            index += 1
+        return candidate
 
     def append_control_xml(
         self,
@@ -1976,6 +2256,8 @@ class HwpxDocument:
         height: int = 7200,
         original_width: int | None = None,
         original_height: int | None = None,
+        current_width: int | None = None,
+        current_height: int | None = None,
         treat_as_char: bool = True,
         shape_comment: str | None = None,
         text_wrap: str = "TOP_AND_BOTTOM",
@@ -1999,11 +2281,14 @@ class HwpxDocument:
         if width < 1 or height < 1:
             raise ValueError("width and height must be positive.")
 
-        resolved_manifest_id = manifest_id or self.content_hpf.next_manifest_id(PurePosixPath(name).stem or "image")
-        self.add_or_replace_binary(name, data, media_type=media_type, manifest_id=resolved_manifest_id)
+        binary_name = name if manifest_id is not None else self._unused_binary_name(name)
+        resolved_manifest_id = manifest_id or self.content_hpf.next_manifest_id(PurePosixPath(binary_name).stem or "image")
+        self.add_or_replace_binary(binary_name, data, media_type=media_type, manifest_id=resolved_manifest_id)
 
         image_width = original_width or width
         image_height = original_height or height
+        display_width = current_width if current_width is not None else width
+        display_height = current_height if current_height is not None else height
         picture = etree.Element(qname("hp", "pic"))
         picture.set("id", self._next_control_number(_graphic_attribute_xpath("id")))
         picture.set("zOrder", self._next_control_number(_graphic_attribute_xpath("zOrder")))
@@ -2026,8 +2311,8 @@ class HwpxDocument:
         original_size.set("height", str(image_height))
 
         current_size = etree.SubElement(picture, qname("hp", "curSz"))
-        current_size.set("width", str(width))
-        current_size.set("height", str(height))
+        current_size.set("width", str(display_width))
+        current_size.set("height", str(display_height))
 
         flip = etree.SubElement(picture, qname("hp", "flip"))
         flip.set("horizontal", "0")
@@ -2143,6 +2428,11 @@ class HwpxDocument:
         shape_comment: str | None = None,
         fill_color: str = "#FFFFFF",
         line_color: str = "#000000",
+        line_width: int = 33,
+        original_width: int | None = None,
+        original_height: int | None = None,
+        current_width: int | None = None,
+        current_height: int | None = None,
         text_wrap: str = "TOP_AND_BOTTOM",
         text_flow: str = "BOTH_SIDES",
         affect_line_spacing: bool = False,
@@ -2179,6 +2469,8 @@ class HwpxDocument:
         shape.set("href", "")
         shape.set("groupLevel", "0")
         shape.set("instid", self._next_control_number(_graphic_attribute_xpath("instid")))
+        if kind == "textart":
+            shape.set("text", text)
         if kind not in {"line", "connectLine"}:
             shape.set("ratio", "0")
 
@@ -2186,13 +2478,18 @@ class HwpxDocument:
         offset.set("x", "0")
         offset.set("y", "0")
 
+        display_width = current_width if current_width is not None else width
+        display_height = current_height if current_height is not None else height
+        image_width = original_width or width
+        image_height = original_height or height
+
         original_size = etree.SubElement(shape, qname("hp", "orgSz"))
-        original_size.set("width", str(width))
-        original_size.set("height", str(height))
+        original_size.set("width", str(image_width))
+        original_size.set("height", str(image_height))
 
         current_size = etree.SubElement(shape, qname("hp", "curSz"))
-        current_size.set("width", str(width))
-        current_size.set("height", str(height))
+        current_size.set("width", str(display_width))
+        current_size.set("height", str(display_height))
 
         flip = etree.SubElement(shape, qname("hp", "flip"))
         flip.set("horizontal", "0")
@@ -2211,8 +2508,8 @@ class HwpxDocument:
 
         line_shape = etree.SubElement(shape, qname("hp", "lineShape"))
         line_shape.set("color", line_color)
-        line_shape.set("width", "33")
-        line_shape.set("style", "SOLID")
+        line_shape.set("width", str(line_width))
+        line_shape.set("style", "SOLID" if line_width > 0 else "NONE")
         line_shape.set("endCap", "FLAT")
         line_shape.set("headStyle", "NORMAL")
         line_shape.set("tailStyle", "NORMAL")
@@ -2237,7 +2534,7 @@ class HwpxDocument:
         shadow.set("offsetY", "0")
         shadow.set("alpha", "0")
 
-        if kind in {"rect", "ellipse", "arc", "polygon", "curve", "textart", "container"}:
+        if kind in {"rect", "ellipse", "arc", "polygon", "curve", "container"}:
             draw_text = etree.SubElement(shape, qname("hp", "drawText"))
             draw_text.set("lastWidth", str(width))
             draw_text.set("name", "")
@@ -2273,6 +2570,21 @@ class HwpxDocument:
             text_margin.set("right", "283")
             text_margin.set("top", "283")
             text_margin.set("bottom", "283")
+        elif kind == "textart":
+            textart_pr = etree.SubElement(shape, qname("hp", "textartPr"))
+            textart_pr.set("fontName", "HY태백B")
+            textart_pr.set("fontStyle", "보통")
+            textart_pr.set("fontType", "TTF")
+            textart_pr.set("textShape", "PLAIN_TEXT")
+            textart_pr.set("lineSpacing", "120")
+            textart_pr.set("charSpacing", "100")
+            textart_pr.set("align", "LEFT")
+            textart_shadow = etree.SubElement(textart_pr, qname("hp", "shadow"))
+            textart_shadow.set("type", "NONE")
+            textart_shadow.set("color", "#000000")
+            textart_shadow.set("offsetX", "0")
+            textart_shadow.set("offsetY", "0")
+            textart_shadow.set("alpha", "0")
 
         if kind in {"line", "connectLine"}:
             points = ((0, 0), (width, height))
@@ -2382,9 +2694,10 @@ class HwpxDocument:
         if width < 1 or height < 1:
             raise ValueError("width and height must be positive.")
 
-        resolved_manifest_id = manifest_id or self.content_hpf.next_manifest_id(PurePosixPath(name).stem or "ole")
+        binary_name = name if manifest_id is not None else self._unused_binary_name(name)
+        resolved_manifest_id = manifest_id or self.content_hpf.next_manifest_id(PurePosixPath(binary_name).stem or "ole")
         self.add_or_replace_binary(
-            name,
+            binary_name,
             data,
             media_type=media_type,
             manifest_id=resolved_manifest_id,
@@ -3632,6 +3945,69 @@ class HwpxDocument:
                 "but high-level editing is not available."
             )
         raise RuntimeError("This HWPX package does not contain editable section XML parts.")
+
+    def _paragraph_elements(self, section_index: int) -> list[etree._Element]:
+        return self.sections[section_index].root_element.xpath("./hp:p", namespaces=NS)
+
+    def _paragraph_element(self, section_index: int, paragraph_index: int) -> etree._Element:
+        paragraphs = self._paragraph_elements(section_index)
+        index = _normalize_existing_index(paragraph_index, len(paragraphs), "paragraph")
+        return paragraphs[index]
+
+    def _parse_paragraph_xml(self, xml: str | bytes) -> etree._Element:
+        paragraph = _parse_xml_element(xml)
+        if _local_name(paragraph) != "p":
+            raise ValueError("Paragraph XML must use an hp:p root element.")
+        return paragraph
+
+    def _paragraph_control_wrappers(self, paragraph: etree._Element) -> list[etree._Element]:
+        values: list[etree._Element] = []
+        for node in paragraph.xpath("./hp:run/*", namespaces=NS):
+            name = _local_name(node)
+            if name == "t":
+                continue
+            if name == "ctrl" or name in _DIRECT_RUN_CONTROL_TAGS:
+                values.append(node)
+        return values
+
+    def _insert_control_wrapper(
+        self,
+        paragraph: etree._Element,
+        wrapper: etree._Element,
+        *,
+        control_index: int | None,
+        section: SectionPart,
+        char_pr_id: str | None = None,
+    ) -> None:
+        controls = self._paragraph_control_wrappers(paragraph)
+        insert_index = _normalize_insert_index(control_index, len(controls), "control")
+        run = etree.Element(qname("hp", "run"))
+        run.set("charPrIDRef", char_pr_id or self._default_char_pr_id(paragraph))
+        run.append(wrapper)
+        if insert_index == len(controls):
+            line_seg = paragraph.xpath("./hp:linesegarray[1]", namespaces=NS)
+            if line_seg:
+                line_seg[0].addprevious(run)
+            else:
+                paragraph.append(run)
+        else:
+            target_run = controls[insert_index].getparent()
+            target_run.addprevious(run)
+        _invalidate_paragraph_layout(paragraph)
+        section.mark_modified()
+
+    def _detach_control_wrapper(self, wrapper: etree._Element) -> None:
+        parent = wrapper.getparent()
+        if parent is None:
+            return
+        parent.remove(wrapper)
+        if _local_name(parent) != "run" or len(parent) > 0:
+            return
+        if (parent.text or "").strip():
+            return
+        grandparent = parent.getparent()
+        if grandparent is not None:
+            grandparent.remove(parent)
 
     def _resolve_paragraph_for_insert(self, *, section_index: int, paragraph_index: int | None) -> etree._Element:
         if paragraph_index is None:

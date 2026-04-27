@@ -310,6 +310,69 @@ def test_edit_save_and_reopen_roundtrip(sample_hwpx_path: Path, tmp_path: Path) 
     assert part.data == b"abc123"
 
 
+def test_gui_level_paragraph_xml_editing_roundtrip(tmp_path: Path) -> None:
+    document = HwpxDocument.blank()
+    document.set_paragraph_text(0, 0, "first")
+    document.append_paragraph("second")
+    document.append_paragraph("third")
+
+    assert document.paragraph_count(0) == 3
+    assert "second" in document.paragraph_xml(0, 1)
+
+    document.move_paragraph(0, 2, target_paragraph_index=0)
+    document.copy_paragraph(0, 1, target_paragraph_index=None)
+    raw_paragraph = f"""
+    <hp:p xmlns:hp="{NS['hp']}" id="gui-raw" paraPrIDRef="0" styleIDRef="0" pageBreak="0" columnBreak="0" merged="0">
+      <hp:run charPrIDRef="0"><hp:t>raw inserted</hp:t></hp:run>
+    </hp:p>
+    """
+    document.insert_paragraph_xml(0, 1, raw_paragraph)
+    copied_xml = document.paragraph_xml(0, -1).replace("first", "copied first")
+    document.replace_paragraph_xml(0, -1, copied_xml)
+
+    output_path = tmp_path / "gui_paragraph_edit.hwpx"
+    document.save(output_path)
+    reopened = HwpxDocument.open(output_path)
+    reopened.validate()
+
+    assert reopened.sections[0].text_fragments() == ["third", "raw inserted", "first", "second", "copied first"]
+
+
+def test_gui_level_control_move_insert_copy_delete_roundtrip(tmp_path: Path) -> None:
+    image_bytes = base64.b64decode(
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO8B3ioAAAAASUVORK5CYII="
+    )
+    document = HwpxDocument.blank()
+    document.set_paragraph_text(0, 0, "source")
+    document.append_paragraph("target")
+    document.append_picture("gui-pixel.png", image_bytes, paragraph_index=0)
+    document.append_shape(kind="rect", text="shape", paragraph_index=0)
+
+    assert document.control_count(0, 0) == 2
+    assert document.control_count(0, 1) == 0
+
+    document.move_control(0, 0, 0, target_paragraph_index=1)
+    document.insert_control_xml_at(
+        f'<hp:bookmark xmlns:hp="{NS["hp"]}" name="gui-anchor"/>',
+        section_index=0,
+        paragraph_index=1,
+        control_index=0,
+    )
+    document.copy_control(0, 1, 1, target_paragraph_index=1, target_control_index=None)
+    document.delete_control(0, 0, 0)
+
+    output_path = tmp_path / "gui_control_edit.hwpx"
+    document.save(output_path)
+    reopened = HwpxDocument.open(output_path)
+    reopened.validate()
+
+    assert len(reopened.pictures()) == 2
+    assert len(reopened.shapes()) == 0
+    assert [bookmark.name for bookmark in reopened.bookmarks()] == ["gui-anchor"]
+    assert reopened.control_count(0, 0) == 0
+    assert reopened.control_count(0, 1) == 3
+
+
 def test_missing_preview_rootfile_reference_is_tolerated() -> None:
     document = HwpxDocument()
     document.container.ensure_rootfile("Preview/PrvText.txt", "text/plain")
@@ -497,6 +560,31 @@ def test_append_ole_roundtrip(tmp_path: Path) -> None:
     assert manifest_item.get("isEmbeded") == "0"
     assert isinstance(reopened.shapes()[0], OleXml)
     assert reopened_ole.element.getparent().tag.endswith("run")
+
+
+def test_duplicate_binary_names_keep_distinct_picture_and_ole_references(tmp_path: Path) -> None:
+    document = HwpxDocument.blank()
+    document.append_picture("duplicate.png", b"PICTURE-ONE", media_type="image/png")
+    document.append_picture("duplicate.png", b"PICTURE-TWO", media_type="image/png")
+    document.append_ole("duplicate.ole", b"OLE-ONE")
+    document.append_ole("duplicate.ole", b"OLE-TWO")
+
+    output_path = tmp_path / "duplicate_binary_names.hwpx"
+    document.save(output_path)
+
+    reopened = HwpxDocument.open(output_path)
+    reopened.validate()
+
+    assert [picture.binary_data() for picture in reopened.pictures()] == [b"PICTURE-ONE", b"PICTURE-TWO"]
+    assert [ole.binary_data() for ole in reopened.oles()] == [b"OLE-ONE", b"OLE-TWO"]
+    assert len({picture.binary_item_id for picture in reopened.pictures()}) == 2
+    assert len({ole.binary_item_id for ole in reopened.oles()}) == 2
+    assert {path for path in reopened.list_part_paths() if path.startswith("BinData/")} >= {
+        "BinData/duplicate.png",
+        "BinData/duplicate_2.png",
+        "BinData/duplicate.ole",
+        "BinData/duplicate_2.ole",
+    }
 
 
 def test_low_level_authoring_roundtrip(tmp_path: Path) -> None:

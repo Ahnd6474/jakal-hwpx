@@ -184,6 +184,26 @@ from .xmlnode import HwpxXmlNode
 
 __version__ = "0.3.0"
 
+_LAZY_EXPORTS = {
+    "default_hwp_script_path": ("jakal_hwpx.hwp2py", "default_hwp_script_path"),
+    "default_script_path": ("jakal_hwpx.hwpx2py", "default_script_path"),
+    "generate_hwp_script": ("jakal_hwpx.hwp2py", "generate_hwp_script"),
+    "generate_hwpx_script": ("jakal_hwpx.hwpx2py", "generate_hwpx_script"),
+    "write_hwp_script": ("jakal_hwpx.hwp2py", "write_hwp_script"),
+    "write_hwpx_script": ("jakal_hwpx.hwpx2py", "write_hwpx_script"),
+}
+
+
+def __getattr__(name: str):
+    if name not in _LAZY_EXPORTS:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    module_name, attribute_name = _LAZY_EXPORTS[name]
+    from importlib import import_module
+
+    value = getattr(import_module(module_name), attribute_name)
+    globals()[name] = value
+    return value
+
 __all__ = [
     "BinaryDataPart",
     "BinDataRecord",
@@ -351,9 +371,15 @@ __all__ = [
     "find_best_table_donor",
     "find_best_combo_donor",
     "find_control_occurrences",
+    "generate_hwp_script",
+    "generate_hwpx_script",
     "hwp_tag_name",
     "pick_best_donor_for_feature",
     "run_template_lab",
     "scan_hwp_collection",
+    "default_hwp_script_path",
+    "default_script_path",
+    "write_hwp_script",
+    "write_hwpx_script",
     "__version__",
 ]

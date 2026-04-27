@@ -33,6 +33,10 @@ Issues = "https://github.com/Ahnd6474/jakal-hwpx/issues"
 Documentation = "https://github.com/Ahnd6474/jakal-hwpx#readme"
 Releases = "https://github.com/Ahnd6474/jakal-hwpx/releases"
 
+[project.scripts]
+hwp2py = "jakal_hwpx.hwp2py:main"
+hwpx2py = "jakal_hwpx.hwpx2py:main"
+
 [project.optional-dependencies]
 dev = ["build>=1.2", "pytest>=8.0", "setuptools>=77", "tox>=4.0", "twine>=5.0"]
 release = ["build>=1.2", "pytest>=8.0", "setuptools>=77", "twine>=5.0"]

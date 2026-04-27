@@ -1269,13 +1269,16 @@ def _insert_blank_like_paragraph(model: "SectionModel", paragraph_index: int | N
         header = ParagraphHeaderRecord(level=0, char_count=1)
         header.add_child(ParagraphTextRecord(level=1, raw_text="\r"))
 
+    paragraph = SectionParagraphModel(section_index=model.section_index, index=target_index, header=header)
     if target_index == len(current_paragraphs):
         model.roots.append(header)
+        current_paragraphs.append(paragraph)
     else:
         root_index = model._root_insert_index_for_paragraph(target_index)
         model.roots.insert(root_index, header)
+        model._paragraphs_cache = None
 
-    return SectionParagraphModel(section_index=model.section_index, index=target_index, header=header)
+    return paragraph
 
 
 def _find_section_definition_control_node(model: "SectionModel") -> ControlHeaderRecord | None:
@@ -4981,6 +4984,7 @@ class SectionParagraphModel:
 class SectionModel:
     section_index: int
     roots: list[RecordNode]
+    _paragraphs_cache: list[SectionParagraphModel] | None = field(default=None, init=False, repr=False)
 
     @classmethod
     def from_records(cls, section_index: int, records: list[HwpRecord]) -> "SectionModel":
@@ -4991,6 +4995,8 @@ class SectionModel:
             yield from root.iter_preorder()
 
     def paragraphs(self) -> list[SectionParagraphModel]:
+        if self._paragraphs_cache is not None:
+            return self._paragraphs_cache
         paragraphs: list[SectionParagraphModel] = []
         paragraph_index = 0
         for root in self.iter_nodes():
@@ -5003,6 +5009,7 @@ class SectionModel:
                     )
                 )
                 paragraph_index += 1
+        self._paragraphs_cache = paragraphs
         return paragraphs
 
     def control_nodes(self) -> list[ControlHeaderRecord]:
@@ -5056,12 +5063,14 @@ class SectionModel:
             split_flags=split_flags,
         )
         header.add_child(ParagraphTextRecord(level=1, raw_text=text))
-        self.roots.append(header)
-        return SectionParagraphModel(
+        paragraph = SectionParagraphModel(
             section_index=self.section_index,
-            index=len(self.paragraphs()) - 1,
+            index=len(self.paragraphs()),
             header=header,
         )
+        self.roots.append(header)
+        self.paragraphs().append(paragraph)
+        return paragraph
 
     def insert_paragraph(
         self,
@@ -5090,6 +5099,7 @@ class SectionModel:
         else:
             root_index = self._root_insert_index_for_paragraph(paragraph_index)
             self.roots.insert(root_index, header)
+        self._paragraphs_cache = None
         return SectionParagraphModel(
             section_index=self.section_index,
             index=paragraph_index,
@@ -5186,6 +5196,8 @@ class HwpBinaryDocument:
         self._compound_layout = compound_layout
         self._original_file_bytes = original_file_bytes
         self._dirty = False
+        self._section_model_batch_depth = 0
+        self._section_model_cache: dict[int, SectionModel] = {}
 
     @classmethod
     def open(cls, path: str | Path) -> "HwpBinaryDocument":
@@ -5361,10 +5373,35 @@ class HwpBinaryDocument:
         self.write_stream(path, raw, compress=True)
 
     def section_model(self, section_index: int = 0) -> SectionModel:
+        if self._section_model_batch_depth > 0:
+            cached = self._section_model_cache.get(section_index)
+            if cached is not None:
+                return cached
+            model = SectionModel.from_records(section_index, self.section_records(section_index))
+            self._section_model_cache[section_index] = model
+            return model
         return SectionModel.from_records(section_index, self.section_records(section_index))
 
     def replace_section_model(self, section_index: int, model: SectionModel) -> None:
+        if self._section_model_batch_depth > 0:
+            self._section_model_cache[section_index] = model
+            self._dirty = True
+            return
         self.replace_section_records(section_index, model.to_records())
+
+    def begin_section_model_batch(self) -> None:
+        self._section_model_batch_depth += 1
+
+    def end_section_model_batch(self) -> None:
+        if self._section_model_batch_depth <= 0:
+            return
+        self._section_model_batch_depth -= 1
+        if self._section_model_batch_depth > 0:
+            return
+        cached_models = self._section_model_cache
+        self._section_model_cache = {}
+        for section_index, model in cached_models.items():
+            self.replace_section_records(section_index, model.to_records())
 
     def ensure_section_count(self, section_count: int) -> None:
         if section_count < 1:
@@ -5373,6 +5410,8 @@ class HwpBinaryDocument:
         current_count = len(self.section_stream_paths())
         if current_count == 0:
             raise InvalidHwpFileError("HWP document does not contain any BodyText/Section streams.")
+        if current_count >= section_count:
+            return
 
         while current_count < section_count:
             template_index = 1 if current_count > 1 else current_count - 1
@@ -5931,6 +5970,7 @@ class HwpBinaryDocument:
         if use_synthetic_line_numbers:
             _ensure_paragraph_line_seg(paragraph)
         paragraph.header.add_child(_build_note_control_node(control_id, text))
+        model._paragraphs_cache = None
         self.replace_section_model(target_section_index, model)
 
     def append_footnote(
@@ -6227,6 +6267,7 @@ class HwpBinaryDocument:
             list_header, paragraph_header = _build_shape_text_records(text)
             shape_component.add_child(list_header)
             shape_component.add_child(paragraph_header)
+            model._paragraphs_cache = None
         shape_component.add_child(
             RecordNode(
                 tag_id=kind_to_tag[kind],

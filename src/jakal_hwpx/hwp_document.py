@@ -657,6 +657,7 @@ class HwpDocument:
         self._hancom_document = None
         self._bridge_temp_dir: Path | None = None
         self._pure_profile: HwpPureProfile | None = None
+        self._mutation_revision = 0
 
     @classmethod
     def blank(cls, *, converter: HancomConverter | None = None) -> "HwpDocument":
@@ -810,6 +811,31 @@ class HwpDocument:
         for section in sections:
             controls.extend(section.controls())
         return controls
+
+    def _last_appended_control(
+        self,
+        section_index: int,
+        paragraph_index: int | None,
+        expected_type: type["HwpControlObject"],
+    ) -> "HwpControlObject | None":
+        model = self.section_model(section_index)
+        if paragraph_index is None or paragraph_index < 0:
+            header = next((root for root in reversed(model.roots) if isinstance(root, ParagraphHeaderRecord)), None)
+            if header is None:
+                return None
+            resolved_index = next((item.index for item in model.paragraphs() if item.header is header), 0)
+            paragraph = SectionParagraphModel(section_index=section_index, index=resolved_index, header=header)
+        else:
+            paragraphs = model.paragraphs()
+            if paragraph_index >= len(paragraphs):
+                return None
+            paragraph = paragraphs[paragraph_index]
+        controls = [child for child in paragraph.header.children if child.tag_id == TAG_CTRL_HEADER]
+        if not controls:
+            return None
+        ordinal = len(controls) - 1
+        wrapper = _build_control_wrapper(self, model, paragraph, controls[ordinal], ordinal)
+        return wrapper if isinstance(wrapper, expected_type) else None
 
     def tables(self, section_index: int | None = None) -> list["HwpTableObject"]:
         return [control for control in self.controls(section_index) if isinstance(control, HwpTableObject)]
@@ -1511,7 +1537,7 @@ class HwpDocument:
         cell_border_fill_ids: dict[tuple[int, int], int] | None = None,
         table_border_fill_id: int = 1,
         section_index: int | None = None,
-    ) -> None:
+    ) -> "HwpTableObject | None":
         self._invalidate_bridge()
         target_section_index = self._default_append_section_index if section_index is None else section_index
         self._binary_document.append_table(
@@ -1527,6 +1553,7 @@ class HwpDocument:
             profile_root=None,
             section_index=target_section_index,
         )
+        return self._last_appended_control(target_section_index, None, HwpTableObject)  # type: ignore[return-value]
 
     def append_picture(
         self,
@@ -1536,7 +1563,7 @@ class HwpDocument:
         width: int = 12000,
         height: int = 3200,
         section_index: int | None = None,
-    ) -> None:
+    ) -> "HwpPictureObject | None":
         self._invalidate_bridge()
         target_section_index = self._default_append_section_index if section_index is None else section_index
         self._binary_document.append_picture(
@@ -1547,6 +1574,7 @@ class HwpDocument:
             profile_root=None,
             section_index=target_section_index,
         )
+        return self._last_appended_control(target_section_index, None, HwpPictureObject)  # type: ignore[return-value]
 
     def append_hyperlink(
         self,
@@ -1819,7 +1847,7 @@ class HwpDocument:
         shape_comment: str | None = None,
         section_index: int = 0,
         paragraph_index: int | None = None,
-    ) -> None:
+    ) -> "HwpChartObject | None":
         self._invalidate_bridge()
         self._binary_document.append_chart(
             title,
@@ -1834,6 +1862,7 @@ class HwpDocument:
             section_index=section_index,
             paragraph_index=paragraph_index,
         )
+        return self._last_appended_control(section_index, paragraph_index, HwpChartObject)  # type: ignore[return-value]
 
     def append_auto_number(
         self,
@@ -1883,7 +1912,7 @@ class HwpDocument:
         shape_comment: str | None = None,
         section_index: int = 0,
         paragraph_index: int | None = None,
-    ) -> None:
+    ) -> "HwpEquationObject | None":
         self._invalidate_bridge()
         self._binary_document.append_equation(
             script,
@@ -1894,6 +1923,7 @@ class HwpDocument:
             section_index=section_index,
             paragraph_index=paragraph_index,
         )
+        return self._last_appended_control(section_index, paragraph_index, HwpEquationObject)  # type: ignore[return-value]
 
     def append_shape(
         self,
@@ -1907,7 +1937,7 @@ class HwpDocument:
         shape_comment: str | None = None,
         section_index: int = 0,
         paragraph_index: int | None = None,
-    ) -> None:
+    ) -> "HwpShapeObject | None":
         self._invalidate_bridge()
         self._binary_document.append_shape(
             kind=kind,
@@ -1920,6 +1950,7 @@ class HwpDocument:
             section_index=section_index,
             paragraph_index=paragraph_index,
         )
+        return self._last_appended_control(section_index, paragraph_index, HwpShapeObject)  # type: ignore[return-value]
 
     def append_ole(
         self,
@@ -1937,7 +1968,7 @@ class HwpDocument:
         line_width: int = 0,
         section_index: int = 0,
         paragraph_index: int | None = None,
-    ) -> None:
+    ) -> "HwpOleObject | None":
         self._invalidate_bridge()
         self._binary_document.append_ole(
             name,
@@ -1954,6 +1985,7 @@ class HwpDocument:
             section_index=section_index,
             paragraph_index=paragraph_index,
         )
+        return self._last_appended_control(section_index, paragraph_index, HwpOleObject)  # type: ignore[return-value]
 
     def add_embedded_bindata(self, data: bytes, *, extension: str, storage_id: int | None = None) -> tuple[int, str]:
         self._invalidate_bridge()
@@ -2013,6 +2045,7 @@ class HwpDocument:
         self._hancom_document = None
 
     def _invalidate_bridge(self) -> None:
+        self._mutation_revision += 1
         self._bridge_document = None
         self._hancom_document = None
 
@@ -2681,6 +2714,7 @@ class HwpControlObject:
         self._paragraph = paragraph
         self._control_ordinal = control_ordinal
         self._initial_control_node = control_node
+        self._document_revision = getattr(document, "_mutation_revision", 0)
 
     @property
     def document(self) -> HwpDocument:
@@ -2696,6 +2730,8 @@ class HwpControlObject:
 
     @property
     def control_node(self) -> RecordNode:
+        if self._document_revision == getattr(self._document, "_mutation_revision", 0):
+            return self._initial_control_node
         return self._live_context()[2]
 
     @property

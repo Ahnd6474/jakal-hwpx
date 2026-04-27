@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
+from lxml import etree
 
 from jakal_hwpx import (
     AutoNumber,
@@ -25,6 +26,7 @@ from jakal_hwpx import (
     Table,
 )
 from jakal_hwpx.hwp_binary import TAG_BULLET, TAG_NUMBERING
+from jakal_hwpx.hancom_document import _normalize_hwp_text, _tokenize_hwp_paragraph_raw_text
 from jakal_hwpx.namespaces import NS
 
 
@@ -38,6 +40,11 @@ def sample_hwp_path() -> Path:
     paths = sorted(HWP_SAMPLE_DIR.glob("*.hwp"))
     assert paths, f"No .hwp samples were found under {HWP_SAMPLE_DIR}"
     return next((path for path in paths if not path.name.startswith("generated_")), paths[0])
+
+
+def test_hancom_document_hwp_text_normalization_drops_invalid_surrogates() -> None:
+    assert _normalize_hwp_text("본문\ud800\udfff끝") == "본문끝"
+    assert _tokenize_hwp_paragraph_raw_text("A\ud800B") == [("text", "AB")]
 
 
 def test_hancom_document_authoring_can_write_hwpx(tmp_path: Path) -> None:
@@ -1514,6 +1521,7 @@ def test_hancom_document_preserves_richer_hwpx_table_picture_shape_and_ole_seman
     picture.set_image_adjustment(bright=5, contrast=6, effect="GRAY_SCALE", alpha=7)
     picture.set_crop(left=1, right=2399, top=2, bottom=1598)
     picture.set_line_style(color="#112233", width=55, style="SOLID")
+    picture.set_size(width=2400, height=1600, original_width=3200, original_height=2100, current_width=1200, current_height=800)
 
     shape = source.append_shape(kind="rect", text="IR-SHAPE", width=5000, height=2000, fill_color="#ABCDEF", line_color="#123456")
     shape.shape_comment = "SHAPE-COMMENT"
@@ -1531,6 +1539,8 @@ def test_hancom_document_preserves_richer_hwpx_table_picture_shape_and_ole_seman
     shape.set_out_margins(left=6, right=7, top=8, bottom=9)
     shape.set_rotation(angle=25, center_x=333, center_y=444)
     shape.set_text_margins(left=4, right=5, top=6, bottom=7)
+    shape.set_line_style(color="#123456", width=88, style="SOLID")
+    shape.set_size(width=5000, height=2000, original_width=5400, original_height=2300, current_width=4900, current_height=1900)
 
     ole = source.append_ole("bridge.ole", b"OLE-BRIDGE", width=42001, height=13501)
     ole.shape_comment = "OLE-COMMENT"
@@ -1550,6 +1560,7 @@ def test_hancom_document_preserves_richer_hwpx_table_picture_shape_and_ole_seman
     ole.set_line_style(color="#445566", width=77, style="DASH")
     ole.set_object_metadata(object_type="LINK", draw_aspect="ICON", has_moniker=True, eq_baseline=12)
     ole.set_extent(x=43000, y=14000)
+    ole.set_size(width=42001, height=13501, original_width=44000, original_height=15000, current_width=321, current_height=654)
 
     source_path = tmp_path / "hancom_richer_hwpx_source.hwpx"
     source.save(source_path)
@@ -1582,6 +1593,10 @@ def test_hancom_document_preserves_richer_hwpx_table_picture_shape_and_ole_seman
     assert picture_block.crop == {"left": 1, "right": 2399, "top": 2, "bottom": 1598}
     assert picture_block.line_color == "#112233"
     assert picture_block.line_width == 55
+    assert picture_block.original_width == 3200
+    assert picture_block.original_height == 2100
+    assert picture_block.current_width == 1200
+    assert picture_block.current_height == 800
 
     assert shape_block.kind == "rect"
     assert shape_block.shape_comment == "SHAPE-COMMENT"
@@ -1593,6 +1608,11 @@ def test_hancom_document_preserves_richer_hwpx_table_picture_shape_and_ole_seman
     assert shape_block.rotation["centerX"] == "333"
     assert shape_block.rotation["centerY"] == "444"
     assert shape_block.text_margins == {"left": 4, "right": 5, "top": 6, "bottom": 7}
+    assert shape_block.line_width == 88
+    assert shape_block.original_width == 5400
+    assert shape_block.original_height == 2300
+    assert shape_block.current_width == 4900
+    assert shape_block.current_height == 1900
 
     assert ole_block.shape_comment == "OLE-COMMENT"
     assert ole_block.object_type == "LINK"
@@ -1604,6 +1624,10 @@ def test_hancom_document_preserves_richer_hwpx_table_picture_shape_and_ole_seman
     assert ole_block.layout["textFlow"] == "LEFT_ONLY"
     assert ole_block.layout["treatAsChar"] == "0"
     assert ole_block.extent == {"x": 43000, "y": 14000}
+    assert ole_block.original_width == 44000
+    assert ole_block.original_height == 15000
+    assert ole_block.current_width == 321
+    assert ole_block.current_height == 654
 
     roundtrip_path = tmp_path / "hancom_richer_hwpx_roundtrip.hwpx"
     document.write_to_hwpx(roundtrip_path)
@@ -1635,6 +1659,10 @@ def test_hancom_document_preserves_richer_hwpx_table_picture_shape_and_ole_seman
     assert reopened_picture.crop() == {"left": 1, "right": 2399, "top": 2, "bottom": 1598}
     assert reopened_picture.line_style()["color"] == "#112233"
     assert reopened_picture.line_style()["width"] == "55"
+    assert reopened_picture.element.xpath("./hp:orgSz/@width", namespaces=NS) == ["3200"]
+    assert reopened_picture.element.xpath("./hp:orgSz/@height", namespaces=NS) == ["2100"]
+    assert reopened_picture.element.xpath("./hp:curSz/@width", namespaces=NS) == ["1200"]
+    assert reopened_picture.element.xpath("./hp:curSz/@height", namespaces=NS) == ["800"]
 
     assert reopened_shape.kind == "rect"
     assert reopened_shape.shape_comment == "SHAPE-COMMENT"
@@ -1646,6 +1674,11 @@ def test_hancom_document_preserves_richer_hwpx_table_picture_shape_and_ole_seman
     assert reopened_shape.rotation()["centerX"] == "333"
     assert reopened_shape.rotation()["centerY"] == "444"
     assert reopened_shape.text_margins() == {"left": 4, "right": 5, "top": 6, "bottom": 7}
+    assert reopened_shape.line_style()["width"] == "88"
+    assert reopened_shape.element.xpath("./hp:orgSz/@width", namespaces=NS) == ["5400"]
+    assert reopened_shape.element.xpath("./hp:orgSz/@height", namespaces=NS) == ["2300"]
+    assert reopened_shape.element.xpath("./hp:curSz/@width", namespaces=NS) == ["4900"]
+    assert reopened_shape.element.xpath("./hp:curSz/@height", namespaces=NS) == ["1900"]
 
     assert reopened_ole.shape_comment == "OLE-COMMENT"
     assert reopened_ole.object_type == "LINK"
@@ -1657,6 +1690,10 @@ def test_hancom_document_preserves_richer_hwpx_table_picture_shape_and_ole_seman
     assert reopened_ole.line_style()["color"] == "#445566"
     assert reopened_ole.line_style()["width"] == "77"
     assert reopened_ole.extent() == {"x": 43000, "y": 14000}
+    assert reopened_ole.element.xpath("./hp:orgSz/@width", namespaces=NS) == ["44000"]
+    assert reopened_ole.element.xpath("./hp:orgSz/@height", namespaces=NS) == ["15000"]
+    assert reopened_ole.element.xpath("./hp:curSz/@width", namespaces=NS) == ["321"]
+    assert reopened_ole.element.xpath("./hp:curSz/@height", namespaces=NS) == ["654"]
 
 
 def test_hancom_document_preserves_connect_line_kind_through_hwp_bridge(tmp_path: Path) -> None:
@@ -1989,6 +2026,48 @@ def test_hancom_document_pure_hwp_roundtrip_preserves_page_numbers_note_settings
     assert reopened.section_xml(0).find(".//hp:pageNum").get_attr("formatType") == "DIGIT"
     assert reopened.section_xml(0).find(".//hp:footNotePr/hp:noteLine").get_attr("width") == "0.25 mm"
     assert reopened.section_xml(0).find(".//hp:endNotePr/hp:noteLine").get_attr("color") == "#445566"
+
+
+def test_hancom_document_ignores_nested_table_page_numbers_as_section_settings(tmp_path: Path) -> None:
+    source = HwpxDocument.blank()
+    table = source.append_table(1, 1, paragraph_index=0, cell_texts=[["CELL"]])
+    cell_paragraph = table.cell(0, 0).element.xpath("./hp:subList/hp:p[1]", namespaces=NS)[0]
+    run = cell_paragraph.xpath("./hp:run[1]", namespaces=NS)[0]
+    ctrl = etree.SubElement(run, f"{{{NS['hp']}}}ctrl")
+    etree.SubElement(ctrl, f"{{{NS['hp']}}}pageNum", pos="NONE", formatType="DIGIT", sideChar="-")
+
+    source_path = tmp_path / "nested_table_page_num.hwpx"
+    source.save(source_path)
+
+    document = HancomDocument.read_hwpx(source_path)
+    roundtrip = document.to_hwpx_document()
+
+    assert document.sections[0].settings.page_numbers == []
+    assert len(roundtrip.sections[0].paragraphs()) == 1
+
+
+def test_hancom_document_reuses_source_paragraphs_for_direct_page_numbers(tmp_path: Path) -> None:
+    source = HwpxDocument.blank()
+    source.append_control_xml(
+        '<hp:pageNum xmlns:hp="http://www.hancom.co.kr/hwpml/2011/paragraph" '
+        'pos="BOTTOM_CENTER" formatType="DIGIT" sideChar="-"/>',
+        paragraph_index=0,
+    )
+    source.append_paragraph("")
+    source.append_control_xml(
+        '<hp:pageNum xmlns:hp="http://www.hancom.co.kr/hwpml/2011/paragraph" '
+        'pos="TOP_RIGHT" formatType="ROMAN_SMALL" sideChar="*"/>',
+        paragraph_index=1,
+    )
+
+    source_path = tmp_path / "direct_page_num_positions.hwpx"
+    source.save(source_path)
+
+    document = HancomDocument.read_hwpx(source_path)
+    roundtrip = document.to_hwpx_document()
+
+    assert len(roundtrip.sections[0].paragraphs()) == 2
+    assert len(roundtrip.section_xml(0).findall(".//hp:pageNum")) == 2
 
 
 def test_hancom_document_can_extract_native_hwp_header_and_auto_number_controls(

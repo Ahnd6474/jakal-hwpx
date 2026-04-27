@@ -2620,6 +2620,10 @@ class FieldXml:
         return self.element.get("type")
 
     @property
+    def normalized_field_type(self) -> str:
+        return (self.field_type or "").strip().upper()
+
+    @property
     def field_id(self) -> str | None:
         return self.element.get("fieldid")
 
@@ -2673,19 +2677,19 @@ class FieldXml:
 
     @property
     def is_hyperlink(self) -> bool:
-        return self.field_type == "HYPERLINK"
+        return self.normalized_field_type == "HYPERLINK"
 
     @property
     def is_mail_merge(self) -> bool:
-        return self.field_type in {"MAILMERGE", "MAIL_MERGE", "MERGEFIELD"}
+        return self.normalized_field_type in {"%MAI", "MAILMERGE", "MAIL_MERGE", "MERGEFIELD"}
 
     @property
     def is_calculation(self) -> bool:
-        return self.field_type in {"CALCULATE", "CALC", "FORMULA"}
+        return self.normalized_field_type in {"%FOR", "%CAL", "CALCULATE", "CALC", "FORMULA"}
 
     @property
     def is_cross_reference(self) -> bool:
-        return self.field_type in {"REF", "PAGEREF", "BOOKMARKREF", "CROSSREF", "CROSS_REF"}
+        return self.normalized_field_type in {"%REF", "%PAG", "%CRO", "REF", "PAGEREF", "BOOKMARKREF", "CROSSREF", "CROSS_REF"}
 
     @property
     def hyperlink_target(self) -> str | None:

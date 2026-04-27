@@ -10,6 +10,8 @@
 | [hwpx-document.md](./hwpx-document.md) | `HwpxDocument`의 HWPX package, XML part, selector, append API, validation API를 설명합니다. HWPX 내부 구조를 직접 다룰 때 봅니다. |
 | [hwp-document.md](./hwp-document.md) | `HwpDocument`의 HWP 전용 객체 API를 설명합니다. 기존 `.hwp`를 직접 편집하거나 HWP native wrapper를 써야 할 때 봅니다. |
 | [bridge-and-binary.md](./bridge-and-binary.md) | `HwpHwpxBridge`와 `HwpBinaryDocument`를 설명합니다. 변환 경로를 고정하거나 HWP stream/record를 조사할 때 봅니다. |
+| [hwpx2py.md](./hwpx2py.md) | HWPX를 입력으로 받아 같은 문서를 만드는 Python 스크립트를 생성하는 `hwpx2py` 도구를 설명합니다. |
+| [hwp2py.md](./hwp2py.md) | HWP를 입력으로 받아 HWP 작성 스크립트를 생성하는 `hwp2py` 도구를 설명합니다. |
 
 ## 이미지
 
@@ -20,4 +22,4 @@
 
 ## 읽는 순서
 
-처음 사용하는 경우에는 [hancom-document.md](./hancom-document.md)를 먼저 보면 됩니다. 포맷별 세부 제어가 필요해지면 [hwpx-document.md](./hwpx-document.md)나 [hwp-document.md](./hwp-document.md)로 내려가고, 손상 원인 분석이나 역공학 작업은 [bridge-and-binary.md](./bridge-and-binary.md)에서 시작하면 됩니다.
+처음 사용하는 경우에는 [hancom-document.md](./hancom-document.md)를 먼저 보면 됩니다. 포맷별 세부 제어가 필요해지면 [hwpx-document.md](./hwpx-document.md)나 [hwp-document.md](./hwp-document.md)로 내려갑니다. 손상 원인 분석은 [bridge-and-binary.md](./bridge-and-binary.md)에서 시작하고, 샘플 문서를 재현 가능한 Python 코드로 바꿔 비교하려면 HWPX는 [hwpx2py.md](./hwpx2py.md), HWP는 [hwp2py.md](./hwp2py.md)를 보면 됩니다.

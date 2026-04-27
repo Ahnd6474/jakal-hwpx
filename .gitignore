@@ -38,6 +38,8 @@ pytest-cache-files-*/
 .pytest_cache/
 .pytest-temp-*/
 .pytest-temp-validation-issue/
+tests/_tmp_pytest/*/
+tests/_release_tmp/
 
 # Python cache
 __pycache__/

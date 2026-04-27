@@ -501,6 +501,29 @@ class SettingsPart(XmlPart):
 
 
 class SectionPart(XmlPart):
+    def mark_modified(self) -> None:
+        super().mark_modified()
+        self._clear_paragraph_caches()
+
+    def _clear_paragraph_caches(self) -> None:
+        self._paragraph_template_cache = None
+        self._next_paragraph_id_cache = None
+
+    def _cache_text_paragraph(self, paragraph: etree._Element) -> None:
+        self._paragraph_template_cache = paragraph
+        value = paragraph.get("id")
+        if value is None:
+            return
+        try:
+            next_id = int(value) + 1
+        except ValueError:
+            return
+        current = getattr(self, "_next_paragraph_id_cache", None)
+        self._next_paragraph_id_cache = next_id if current is None else max(current, next_id)
+
+    def _paragraph_elements(self) -> list[etree._Element]:
+        return [node for node in self._root if node.tag == qname("hp", "p")]
+
     def section_index(self) -> int:
         match = re.match(SECTION_PATTERN, self.path)
         if match is None:
@@ -508,7 +531,7 @@ class SectionPart(XmlPart):
         return int(match.group(1))
 
     def paragraphs(self) -> list[HwpxXmlNode]:
-        return [HwpxXmlNode(node, self) for node in self._root.xpath("./hp:p", namespaces=NS)]
+        return [HwpxXmlNode(node, self) for node in self._paragraph_elements()]
 
     def text_fragments(self) -> list[str]:
         values = []
@@ -538,6 +561,7 @@ class SectionPart(XmlPart):
         )
         self._root.append(paragraph)
         self.mark_modified()
+        self._cache_text_paragraph(paragraph)
         return HwpxXmlNode(paragraph, self)
 
     def insert_paragraph(
@@ -565,6 +589,7 @@ class SectionPart(XmlPart):
         else:
             paragraphs[index].addprevious(paragraph)
         self.mark_modified()
+        self._cache_text_paragraph(paragraph)
         return HwpxXmlNode(paragraph, self)
 
     def set_paragraph_text(
@@ -627,21 +652,19 @@ class SectionPart(XmlPart):
         char_pr_id: str | None = None,
     ) -> etree._Element:
         template = self._select_template_paragraph(template_index=template_index)
-        protected = _preserved_structure_signature(template)
-        if template_index is not None and protected:
+        if template_index is not None and (protected := _preserved_structure_signature(template)):
             protected_tokens = ", ".join(protected.elements())
             raise ValueError(
                 "template_index refers to a paragraph containing preserved controls and cannot be used "
                 f"as a text paragraph template: {protected_tokens}"
             )
-        paragraph = deepcopy(template)
+        paragraph = etree.Element(template.tag, nsmap=template.nsmap)
+        paragraph.attrib.update(template.attrib)
         paragraph.set("id", self._next_paragraph_id())
         if para_pr_id is not None:
             paragraph.set("paraPrIDRef", para_pr_id)
         if style_id is not None:
             paragraph.set("styleIDRef", style_id)
-        for child in list(paragraph):
-            paragraph.remove(child)
         run = etree.SubElement(paragraph, qname("hp", "run"))
         run.set("charPrIDRef", char_pr_id or self._default_char_pr_id(template))
         text_node = etree.SubElement(run, qname("hp", "t"))
@@ -649,7 +672,7 @@ class SectionPart(XmlPart):
         return paragraph
 
     def _select_template_paragraph(self, template_index: int | None = None) -> etree._Element:
-        paragraphs = self._root.xpath("./hp:p", namespaces=NS)
+        paragraphs = self._paragraph_elements()
         if not paragraphs:
             paragraph = etree.Element(qname("hp", "p"))
             paragraph.set("id", "0")
@@ -661,6 +684,9 @@ class SectionPart(XmlPart):
             return paragraph
         if template_index is not None:
             return paragraphs[template_index]
+        cached = getattr(self, "_paragraph_template_cache", None)
+        if cached is not None and cached.getparent() is self._root:
+            return cached
         safe_text_paragraphs = [
             paragraph
             for paragraph in reversed(paragraphs)
@@ -677,8 +703,12 @@ class SectionPart(XmlPart):
         return paragraphs[-1]
 
     def _next_paragraph_id(self) -> str:
+        cached = getattr(self, "_next_paragraph_id_cache", None)
+        if cached is not None:
+            self._next_paragraph_id_cache = cached + 1
+            return str(cached)
         max_id = -1
-        for paragraph in self._root.xpath("./hp:p", namespaces=NS):
+        for paragraph in self._paragraph_elements():
             value = paragraph.get("id")
             if value is None:
                 continue
@@ -687,11 +717,15 @@ class SectionPart(XmlPart):
             except ValueError:
                 continue
             max_id = max(max_id, numeric)
-        return str(max_id + 1)
+        next_id = max_id + 1
+        self._next_paragraph_id_cache = next_id + 1
+        return str(next_id)
 
     def _default_char_pr_id(self, paragraph: etree._Element) -> str:
-        runs = paragraph.xpath("./hp:run", namespaces=NS)
-        for run in runs:
+        run_tag = qname("hp", "run")
+        for run in paragraph:
+            if run.tag != run_tag:
+                continue
             value = run.get("charPrIDRef")
             if value is not None:
                 return value

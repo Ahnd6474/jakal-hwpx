@@ -201,6 +201,15 @@ class Picture:
     crop: dict[str, int] = field(default_factory=dict)
     line_color: str = "#000000"
     line_width: int = 0
+    original_width: int | None = None
+    original_height: int | None = None
+    current_width: int | None = None
+    current_height: int | None = None
+    has_size_node: bool = True
+    size_attributes: dict[str, str] = field(default_factory=dict)
+    has_line_node: bool = False
+    has_position_node: bool = True
+    has_out_margin_node: bool = True
 
 
 @dataclass
@@ -349,6 +358,7 @@ class Note:
     kind: str
     text: str
     number: int | None = None
+    nested_blocks: list[object] = field(default_factory=list)
 
     def set_text(self, value: str) -> None:
         self.text = value
@@ -385,6 +395,20 @@ class Shape:
     rotation: dict[str, str] = field(default_factory=dict)
     text_margins: dict[str, int] = field(default_factory=dict)
     specific_fields: dict[str, object] = field(default_factory=dict)
+    line_width: int = 33
+    line_style: dict[str, str] = field(default_factory=dict)
+    has_line_node: bool = True
+    original_width: int | None = None
+    original_height: int | None = None
+    current_width: int | None = None
+    current_height: int | None = None
+    has_size_node: bool = True
+    size_attributes: dict[str, str] = field(default_factory=dict)
+    has_position_node: bool = True
+    has_out_margin_node: bool = True
+    has_fill_node: bool = True
+    has_text_margin_node: bool = True
+    nested_blocks: list[object] = field(default_factory=list)
 
 
 @dataclass
@@ -404,6 +428,14 @@ class Ole:
     out_margins: dict[str, int] = field(default_factory=dict)
     rotation: dict[str, str] = field(default_factory=dict)
     extent: dict[str, int] = field(default_factory=dict)
+    original_width: int | None = None
+    original_height: int | None = None
+    current_width: int | None = None
+    current_height: int | None = None
+    has_size_node: bool = True
+    size_attributes: dict[str, str] = field(default_factory=dict)
+    has_position_node: bool = True
+    has_out_margin_node: bool = True
 
 
 @dataclass
@@ -538,6 +570,7 @@ class HeaderFooter:
     kind: str
     text: str
     apply_page_type: str = "BOTH"
+    nested_blocks: list[object] = field(default_factory=list)
 
     def set_text(self, value: str) -> None:
         self.text = value
@@ -674,6 +707,7 @@ class SectionSettings:
     grid: dict[str, int] = field(default_factory=dict)
     start_numbers: dict[str, str] = field(default_factory=dict)
     page_numbers: list[dict[str, str]] = field(default_factory=list)
+    page_number_positions: list[tuple[int | None, int | None]] = field(default_factory=list)
     footnote_pr: dict[str, object] = field(default_factory=dict)
     endnote_pr: dict[str, object] = field(default_factory=dict)
     line_number_shape: dict[str, str] = field(default_factory=dict)
@@ -763,6 +797,7 @@ class SectionSettings:
 
     def set_page_numbers(self, page_numbers: list[dict[str, str]]) -> None:
         self.page_numbers = [dict(page_number) for page_number in page_numbers]
+        self.page_number_positions = []
 
     def set_note_settings(
         self,
@@ -940,10 +975,24 @@ class HancomDocument:
         extension: str | None = None,
         width: int = 7200,
         height: int = 7200,
+        original_width: int | None = None,
+        original_height: int | None = None,
+        current_width: int | None = None,
+        current_height: int | None = None,
         section_index: int = 0,
     ) -> Picture:
         section = self._ensure_section(section_index)
-        block = Picture(name=name, data=data, extension=extension, width=width, height=height)
+        block = Picture(
+            name=name,
+            data=data,
+            extension=extension,
+            width=width,
+            height=height,
+            original_width=original_width,
+            original_height=original_height,
+            current_width=current_width,
+            current_height=current_height,
+        )
         section.blocks.append(block)
         return block
 
@@ -1254,7 +1303,12 @@ class HancomDocument:
         height: int = 3200,
         fill_color: str = "#FFFFFF",
         line_color: str = "#000000",
+        line_width: int = 33,
         shape_comment: str | None = None,
+        original_width: int | None = None,
+        original_height: int | None = None,
+        current_width: int | None = None,
+        current_height: int | None = None,
         section_index: int = 0,
     ) -> Shape:
         section = self._ensure_section(section_index)
@@ -1266,6 +1320,11 @@ class HancomDocument:
             fill_color=fill_color,
             line_color=line_color,
             shape_comment=shape_comment,
+            line_width=line_width,
+            original_width=original_width,
+            original_height=original_height,
+            current_width=current_width,
+            current_height=current_height,
         )
         section.blocks.append(block)
         return block
@@ -1284,6 +1343,10 @@ class HancomDocument:
         eq_baseline: int = 0,
         line_color: str = "#000000",
         line_width: int = 0,
+        original_width: int | None = None,
+        original_height: int | None = None,
+        current_width: int | None = None,
+        current_height: int | None = None,
         section_index: int = 0,
     ) -> Ole:
         section = self._ensure_section(section_index)
@@ -1299,6 +1362,10 @@ class HancomDocument:
             eq_baseline=eq_baseline,
             line_color=line_color,
             line_width=line_width,
+            original_width=original_width,
+            original_height=original_height,
+            current_width=current_width,
+            current_height=current_height,
         )
         section.blocks.append(block)
         return block
@@ -1522,9 +1589,18 @@ class HancomDocument:
         for section_index in range(len(self.sections)):
             _reset_hwpx_section(document, section_index)
         for section_index, section in enumerate(self.sections):
-            _apply_section_settings(document, section_index, section.settings)
-            _apply_header_footer_blocks(document, section_index, section.header_footer_blocks)
+            uses_source_paragraphs = _section_uses_source_paragraphs(section)
+            _apply_section_settings(
+                document,
+                section_index,
+                section.settings,
+                apply_page_numbers=not uses_source_paragraphs,
+            )
+            if not uses_source_paragraphs:
+                _apply_header_footer_blocks(document, section_index, section.header_footer_blocks)
             _write_section_to_hwpx(document, section_index, section)
+            if uses_source_paragraphs and section.settings.page_numbers:
+                _apply_page_numbers_to_source_paragraphs(document, section_index, section.settings)
         return document
 
     def write_to_hwpx(self, path: str | Path, *, validate: bool = True) -> Path:
@@ -1538,6 +1614,8 @@ class HancomDocument:
         if preview_text:
             document.set_preview_text(preview_text)
         _sync_hwp_docinfo_styles(document, self)
+        docinfo = document.docinfo_model()
+        paragraph_attribute_limits = (len(docinfo.para_shape_records()), len(docinfo.style_records()))
         for section_index, section in enumerate(self.sections):
             document.apply_section_settings(
                 section_index=section_index,
@@ -1576,8 +1654,26 @@ class HancomDocument:
                 elif block.kind == "footer" and not footer_written:
                     document.append_footer(block.text, apply_page_type=block.apply_page_type, section_index=section_index)
                     footer_written = True
-            for block in section.blocks:
-                _append_hancom_block_to_hwp(document, block, section_index=section_index)
+            binary_document = document.binary_document()
+            batch_active = False
+            try:
+                for block in section.blocks:
+                    uses_direct_section_records = isinstance(block, (Table, Picture, Hyperlink))
+                    if uses_direct_section_records and batch_active:
+                        binary_document.end_section_model_batch()
+                        batch_active = False
+                    elif not uses_direct_section_records and not batch_active:
+                        binary_document.begin_section_model_batch()
+                        batch_active = True
+                    _append_hancom_block_to_hwp(
+                        document,
+                        block,
+                        section_index=section_index,
+                        paragraph_attribute_limits=paragraph_attribute_limits,
+                    )
+            finally:
+                if batch_active:
+                    binary_document.end_section_model_batch()
         return document
 
     def write_to_hwp(self, path: str | Path, *, converter: HancomConverter | None = None) -> Path:
@@ -1705,7 +1801,11 @@ def _extract_hwp_section_settings(section) -> SectionSettings:
 
 
 def _normalize_hwp_text(value: str) -> str:
-    return value.replace("\r", "").strip()
+    return _xml_safe_scalar(value.replace("\r", "")).strip()
+
+
+def _drop_surrogate_codepoints(value: str) -> str:
+    return "".join(character for character in value if not 0xD800 <= ord(character) <= 0xDFFF)
 
 
 def _xml_safe_scalar(value: object | None) -> str:
@@ -1743,7 +1843,7 @@ def _build_hwp_paragraph_block(paragraph, text: str) -> Paragraph:
 
 
 def _tokenize_hwp_paragraph_raw_text(raw_text: str) -> list[tuple[str, str]]:
-    encoded = raw_text.encode("utf-16-le")
+    encoded = _drop_surrogate_codepoints(raw_text).encode("utf-16-le")
     if not encoded:
         return []
     units = list(struct.unpack("<" + "H" * (len(encoded) // 2), encoded))
@@ -2015,6 +2115,82 @@ def _normalize_int_map(values: dict[str, object] | None) -> dict[str, int]:
     return result
 
 
+def _optional_hwpx_int_attr(node: etree._Element | None, attr_name: str) -> int | None:
+    if node is None:
+        return None
+    value = node.get(attr_name)
+    if value in (None, ""):
+        return None
+    try:
+        return int(value)
+    except ValueError:
+        return None
+
+
+def _extract_hwpx_graphic_size_fields(element: etree._Element, *, width: int, height: int) -> dict[str, int | None]:
+    original_size = element.xpath("./hp:orgSz", namespaces=NS)
+    current_size = element.xpath("./hp:curSz", namespaces=NS)
+    original = original_size[0] if original_size else None
+    current = current_size[0] if current_size else None
+    original_width = _optional_hwpx_int_attr(original, "width")
+    original_height = _optional_hwpx_int_attr(original, "height")
+    current_width = _optional_hwpx_int_attr(current, "width")
+    current_height = _optional_hwpx_int_attr(current, "height")
+    return {
+        "original_width": original_width if original_width != width else None,
+        "original_height": original_height if original_height != height else None,
+        "current_width": current_width if current_width != width else None,
+        "current_height": current_height if current_height != height else None,
+    }
+
+
+def _extract_hwpx_graphic_size_attributes(element: etree._Element) -> dict[str, str]:
+    nodes = element.xpath("./hp:sz", namespaces=NS)
+    if not nodes:
+        return {}
+    return {str(key): str(value) for key, value in nodes[0].attrib.items()}
+
+
+def _apply_hwpx_graphic_size_node(wrapper, *, has_size_node: bool, size_attributes: dict[str, str]) -> None:
+    nodes = wrapper.element.xpath("./hp:sz", namespaces=NS)
+    if not has_size_node:
+        for node in nodes:
+            parent = node.getparent()
+            if parent is not None:
+                parent.remove(node)
+        if nodes:
+            wrapper.section.mark_modified()
+        return
+    if not size_attributes:
+        return
+    node = nodes[0] if nodes else etree.SubElement(wrapper.element, qname("hp", "sz"))
+    for key, value in size_attributes.items():
+        node.set(str(key), str(value))
+    wrapper.section.mark_modified()
+
+
+def _remove_hwpx_child_nodes(wrapper, xpath: str) -> None:
+    nodes = wrapper.element.xpath(xpath, namespaces=NS)
+    for node in nodes:
+        parent = node.getparent()
+        if parent is not None:
+            parent.remove(node)
+    if nodes:
+        wrapper.section.mark_modified()
+
+
+def _apply_hwpx_optional_graphic_nodes(
+    wrapper,
+    *,
+    has_position_node: bool,
+    has_out_margin_node: bool,
+) -> None:
+    if not has_position_node:
+        _remove_hwpx_child_nodes(wrapper, "./hp:pos")
+    if not has_out_margin_node:
+        _remove_hwpx_child_nodes(wrapper, "./hp:outMargin")
+
+
 def _hwpx_layout_kwargs(values: dict[str, object] | None) -> dict[str, object]:
     if not values:
         return {}
@@ -2071,6 +2247,39 @@ def _hwpx_rotation_kwargs(values: dict[str, object] | None) -> dict[str, object]
     }
 
 
+def _hwpx_line_style_kwargs(values: dict[str, object] | None) -> dict[str, object]:
+    if not values:
+        return {}
+    mapping = {
+        "color": "color",
+        "width": "width",
+        "style": "style",
+        "endCap": "end_cap",
+        "headStyle": "head_style",
+        "tailStyle": "tail_style",
+        "headfill": "head_fill",
+        "tailfill": "tail_fill",
+        "headSz": "head_size",
+        "tailSz": "tail_size",
+        "outlineStyle": "outline_style",
+        "alpha": "alpha",
+    }
+    bool_fields = {"headfill", "tailfill"}
+    result: dict[str, object] = {}
+    for source, target in mapping.items():
+        value = values.get(source)
+        if value in (None, ""):
+            continue
+        if source in bool_fields:
+            coerced = _coerce_bool(value)
+            if coerced is None:
+                continue
+            result[target] = coerced
+            continue
+        result[target] = value
+    return result
+
+
 def _extract_hwpx_shape_points(node: etree._Element) -> list[dict[str, int]]:
     points: list[dict[str, int]] = []
     for child in node:
@@ -2100,6 +2309,59 @@ def _extract_hwpx_shape_specific_fields(shape) -> dict[str, object]:
             "points": points,
         }
     return {}
+
+
+_NESTED_TEXT_CONTROL_NAMES = {
+    "tbl",
+    "pic",
+    "ole",
+    "equation",
+    "chart",
+    "rect",
+    "line",
+    "ellipse",
+    "arc",
+    "polygon",
+    "curve",
+    "connectLine",
+    "textart",
+    "container",
+    "fieldBegin",
+    "fieldEnd",
+    "header",
+    "footer",
+    "footNote",
+    "endNote",
+    "hiddenComment",
+    "autoNum",
+    "newNum",
+    "bookmark",
+}
+
+
+def _extract_hwpx_direct_text(scope: etree._Element) -> str:
+    chunks: list[str] = []
+    for text_node in scope.xpath(".//hp:t", namespaces=NS):
+        parent = text_node.getparent()
+        skip = False
+        while parent is not None and parent is not scope:
+            if etree.QName(parent).localname in _NESTED_TEXT_CONTROL_NAMES:
+                skip = True
+                break
+            parent = parent.getparent()
+        if not skip:
+            chunks.append(text_node.text or "")
+    return "".join(chunks)
+
+
+def _extract_hwpx_shape_direct_text(shape) -> str:
+    direct_text = shape.element.get("text")
+    if direct_text is not None:
+        return direct_text
+    draw_text_nodes = shape.element.xpath("./hp:drawText", namespaces=NS)
+    if not draw_text_nodes:
+        return ""
+    return _extract_hwpx_direct_text(draw_text_nodes[0])
 
 
 def _set_hwpx_shape_points(node: etree._Element, points: list[dict[str, int]]) -> None:
@@ -2196,6 +2458,23 @@ def _apply_hwpx_table_block(table, block: Table) -> None:
 
 
 def _apply_hwpx_picture_block(picture, block: Picture) -> None:
+    if any(
+        value is not None
+        for value in (block.original_width, block.original_height, block.current_width, block.current_height)
+    ):
+        picture.set_size(
+            width=block.width,
+            height=block.height,
+            original_width=block.original_width,
+            original_height=block.original_height,
+            current_width=block.current_width,
+            current_height=block.current_height,
+        )
+    _apply_hwpx_graphic_size_node(
+        picture,
+        has_size_node=block.has_size_node,
+        size_attributes=block.size_attributes,
+    )
     if block.shape_comment:
         picture.shape_comment = block.shape_comment
     if block.layout:
@@ -2208,8 +2487,13 @@ def _apply_hwpx_picture_block(picture, block: Picture) -> None:
         picture.set_image_adjustment(**block.image_adjustment)
     if block.crop:
         picture.set_crop(**block.crop)
-    if block.line_color or block.line_width:
+    if block.has_line_node or block.line_width > 0 or block.line_color != "#000000":
         picture.set_line_style(color=block.line_color, width=block.line_width, style="SOLID" if block.line_width > 0 else "NONE")
+    _apply_hwpx_optional_graphic_nodes(
+        picture,
+        has_position_node=block.has_position_node,
+        has_out_margin_node=block.has_out_margin_node,
+    )
 
 
 def _apply_hwpx_equation_block(equation, block: Equation) -> None:
@@ -2222,8 +2506,32 @@ def _apply_hwpx_equation_block(equation, block: Equation) -> None:
 
 
 def _apply_hwpx_shape_block(shape, block: Shape) -> None:
+    if any(
+        value is not None
+        for value in (block.original_width, block.original_height, block.current_width, block.current_height)
+    ):
+        shape.set_size(
+            width=block.width,
+            height=block.height,
+            original_width=block.original_width,
+            original_height=block.original_height,
+            current_width=block.current_width,
+            current_height=block.current_height,
+        )
+    _apply_hwpx_graphic_size_node(
+        shape,
+        has_size_node=block.has_size_node,
+        size_attributes=block.size_attributes,
+    )
+    if block.kind == "textart" and block.has_text_margin_node and block.text:
+        _ensure_hwpx_shape_draw_text(shape, block.text)
     if block.shape_comment:
         shape.shape_comment = block.shape_comment
+    line_style_kwargs = _hwpx_line_style_kwargs(block.line_style)
+    if line_style_kwargs:
+        shape.set_line_style(**line_style_kwargs)
+    else:
+        shape.set_line_style(color=block.line_color, width=block.line_width, style="SOLID" if block.line_width > 0 else "NONE")
     if block.layout:
         shape.set_layout(**_hwpx_layout_kwargs(block.layout))
     if block.out_margins:
@@ -2233,9 +2541,77 @@ def _apply_hwpx_shape_block(shape, block: Shape) -> None:
     if block.text_margins:
         shape.set_text_margins(**block.text_margins)
     _apply_hwpx_shape_specific_fields(shape, block)
+    if not block.has_fill_node:
+        _remove_hwpx_child_nodes(shape, "./hc:fillBrush")
+    if not block.has_line_node:
+        _remove_hwpx_child_nodes(shape, "./hp:lineShape")
+    if not block.has_text_margin_node:
+        _remove_hwpx_child_nodes(shape, "./hp:drawText/hp:textMargin")
+    _apply_hwpx_optional_graphic_nodes(
+        shape,
+        has_position_node=block.has_position_node,
+        has_out_margin_node=block.has_out_margin_node,
+    )
+
+
+def _ensure_hwpx_shape_draw_text(shape, text: str) -> None:
+    if shape.element.xpath("./hp:drawText", namespaces=NS):
+        return
+    draw_text = etree.SubElement(shape.element, qname("hp", "drawText"))
+    draw_text.set("lastWidth", str(shape.size().get("width", 12000)))
+    draw_text.set("name", "")
+    draw_text.set("editable", "0")
+
+    sub_list = etree.SubElement(draw_text, qname("hp", "subList"))
+    sub_list.set("id", "")
+    sub_list.set("textDirection", "HORIZONTAL")
+    sub_list.set("lineWrap", "BREAK")
+    sub_list.set("vertAlign", "CENTER")
+    sub_list.set("linkListIDRef", "0")
+    sub_list.set("linkListNextIDRef", "0")
+    sub_list.set("textWidth", "0")
+    sub_list.set("textHeight", "0")
+    sub_list.set("hasTextRef", "0")
+    sub_list.set("hasNumRef", "0")
+
+    paragraph = etree.SubElement(sub_list, qname("hp", "p"))
+    paragraph.set("id", "0")
+    paragraph.set("paraPrIDRef", "0")
+    paragraph.set("styleIDRef", "0")
+    paragraph.set("pageBreak", "0")
+    paragraph.set("columnBreak", "0")
+    paragraph.set("merged", "0")
+    run = etree.SubElement(paragraph, qname("hp", "run"))
+    run.set("charPrIDRef", "0")
+    text_node = etree.SubElement(run, qname("hp", "t"))
+    text_node.text = text
+
+    text_margin = etree.SubElement(draw_text, qname("hp", "textMargin"))
+    text_margin.set("left", "283")
+    text_margin.set("right", "283")
+    text_margin.set("top", "283")
+    text_margin.set("bottom", "283")
+    shape.section.mark_modified()
 
 
 def _apply_hwpx_ole_block(ole, block: Ole) -> None:
+    if any(
+        value is not None
+        for value in (block.original_width, block.original_height, block.current_width, block.current_height)
+    ):
+        ole.set_size(
+            width=block.width,
+            height=block.height,
+            original_width=block.original_width,
+            original_height=block.original_height,
+            current_width=block.current_width,
+            current_height=block.current_height,
+        )
+    _apply_hwpx_graphic_size_node(
+        ole,
+        has_size_node=block.has_size_node,
+        size_attributes=block.size_attributes,
+    )
     if block.shape_comment:
         ole.shape_comment = block.shape_comment
     if block.layout:
@@ -2247,6 +2623,11 @@ def _apply_hwpx_ole_block(ole, block: Ole) -> None:
     if block.extent:
         ole.set_extent(**block.extent)
     ole.set_line_style(color=block.line_color, width=block.line_width, style="SOLID" if block.line_width > 0 else "NONE")
+    _apply_hwpx_optional_graphic_nodes(
+        ole,
+        has_position_node=block.has_position_node,
+        has_out_margin_node=block.has_out_margin_node,
+    )
 
 
 def _parse_hwp_field_parameters(control) -> dict[str, str | int]:
@@ -2286,10 +2667,44 @@ def _block_owned_text(block: HancomBlock | None) -> str | None:
     return None
 
 
-def _append_hancom_block_to_hwp(document: HwpDocument, block: HancomBlock, *, section_index: int) -> None:
+def _block_owned_text_for_write(block: HancomBlock | HeaderFooter | None) -> str | None:
+    if block is None or getattr(block, "source_text_owned_by_container", False):
+        return None
+    if isinstance(block, Hyperlink):
+        return block.display_text
+    if isinstance(block, Field):
+        return block.display_text
+    return None
+
+
+def _is_owned_text_shadow_paragraph(block: object, next_block: object | None) -> bool:
+    if not isinstance(block, Paragraph):
+        return False
+    if not block.text:
+        return False
+    owned_text = _block_owned_text_for_write(next_block)  # type: ignore[arg-type]
+    if block.text != owned_text:
+        return False
+    return (
+        getattr(block, "source_paragraph_index", None) == getattr(next_block, "source_paragraph_index", None)
+        and getattr(block, "source_order", None) == getattr(next_block, "source_order", None)
+    )
+
+
+def _append_hancom_block_to_hwp(
+    document: HwpDocument,
+    block: HancomBlock,
+    *,
+    section_index: int,
+    paragraph_attribute_limits: tuple[int, int] | None = None,
+) -> None:
     if isinstance(block, Paragraph):
         if block.text:
-            para_shape_id, style_id, split_flags, control_mask = _resolve_hwp_paragraph_attributes(document, block)
+            para_shape_id, style_id, split_flags, control_mask = _resolve_hwp_paragraph_attributes(
+                document,
+                block,
+                paragraph_attribute_limits=paragraph_attribute_limits,
+            )
             document.append_paragraph(
                 block.text,
                 section_index=section_index,
@@ -2300,7 +2715,7 @@ def _append_hancom_block_to_hwp(document: HwpDocument, block: HancomBlock, *, se
             )
         return
     if isinstance(block, Table):
-        document.append_table(
+        table = document.append_table(
             rows=block.rows,
             cols=block.cols,
             cell_texts=block.cell_texts,
@@ -2311,7 +2726,8 @@ def _append_hancom_block_to_hwp(document: HwpDocument, block: HancomBlock, *, se
             table_border_fill_id=block.table_border_fill_id,
             section_index=section_index,
         )
-        table = document.section(section_index).tables()[-1]
+        if table is None:
+            table = document.section(section_index).tables()[-1]
         if block.col_widths:
             table.set_column_widths(block.col_widths)
         if block.cell_spacing is not None:
@@ -2324,14 +2740,15 @@ def _append_hancom_block_to_hwp(document: HwpDocument, block: HancomBlock, *, se
             table.set_cell_margins(row, column, **_normalize_int_map(margins))
         return
     if isinstance(block, Picture):
-        document.append_picture(
+        picture = document.append_picture(
             block.data,
             extension=block.extension,
             width=block.width,
             height=block.height,
             section_index=section_index,
         )
-        picture = document.section(section_index).pictures()[-1]
+        if picture is None:
+            picture = document.section(section_index).pictures()[-1]
         if block.shape_comment:
             picture.set_shape_comment(block.shape_comment)
         if block.layout:
@@ -2350,7 +2767,7 @@ def _append_hancom_block_to_hwp(document: HwpDocument, block: HancomBlock, *, se
     if isinstance(block, Hyperlink):
         document.append_hyperlink(
             block.target,
-            text=block.display_text or None,
+            text=_block_owned_text_for_write(block) or None,
             metadata_fields=block.metadata_fields or None,
             section_index=section_index,
         )
@@ -2362,7 +2779,7 @@ def _append_hancom_block_to_hwp(document: HwpDocument, block: HancomBlock, *, se
     if isinstance(block, Field):
         document.append_field(
             field_type=block.effective_native_field_type,
-            display_text=block.display_text,
+            display_text=_block_owned_text_for_write(block),
             name=block.name,
             parameters=block.parameters,
             editable=block.editable,
@@ -2402,7 +2819,7 @@ def _append_hancom_block_to_hwp(document: HwpDocument, block: HancomBlock, *, se
         document.append_note(block.text, kind=block.kind, number=block.number, section_index=section_index)
         return
     if isinstance(block, Equation):
-        document.append_equation(
+        equation = document.append_equation(
             block.script,
             width=block.width,
             height=block.height,
@@ -2410,7 +2827,8 @@ def _append_hancom_block_to_hwp(document: HwpDocument, block: HancomBlock, *, se
             shape_comment=block.shape_comment,
             section_index=section_index,
         )
-        equation = document.section(section_index).equations()[-1]
+        if equation is None:
+            equation = document.section(section_index).equations()[-1]
         if block.layout:
             equation.set_layout(**_hwpx_layout_kwargs(block.layout))
         if block.out_margins:
@@ -2420,7 +2838,7 @@ def _append_hancom_block_to_hwp(document: HwpDocument, block: HancomBlock, *, se
         return
     if isinstance(block, Shape):
         kind = block.kind if block.kind in {"line", "connectLine", "rect", "ellipse", "arc", "polygon", "curve", "container", "textart"} else "rect"
-        document.append_shape(
+        shape = document.append_shape(
             kind=kind,
             text=block.text,
             width=block.width,
@@ -2430,17 +2848,18 @@ def _append_hancom_block_to_hwp(document: HwpDocument, block: HancomBlock, *, se
             shape_comment=block.shape_comment,
             section_index=section_index,
         )
-        shape = document.section(section_index).shapes()[-1]
+        if shape is None:
+            shape = document.section(section_index).shapes()[-1]
+        _apply_hwp_shape_specific_fields(shape, block)
         if block.layout:
             shape.set_layout(**_hwpx_layout_kwargs(block.layout))
         if block.out_margins:
             shape.set_out_margins(**block.out_margins)
         if block.rotation:
             shape.set_rotation(**_hwpx_rotation_kwargs(block.rotation))
-        _apply_hwp_shape_specific_fields(shape, block)
         return
     if isinstance(block, Chart):
-        document.append_chart(
+        chart = document.append_chart(
             block.title,
             chart_type=block.chart_type,
             categories=block.categories,
@@ -2452,7 +2871,8 @@ def _append_hancom_block_to_hwp(document: HwpDocument, block: HancomBlock, *, se
             shape_comment=block.shape_comment,
             section_index=section_index,
         )
-        chart = document.section(section_index).charts()[-1]
+        if chart is None:
+            chart = document.section(section_index).charts()[-1]
         if block.layout:
             chart.set_layout(**_hwpx_layout_kwargs(block.layout))
         if block.out_margins:
@@ -2461,7 +2881,7 @@ def _append_hancom_block_to_hwp(document: HwpDocument, block: HancomBlock, *, se
             chart.set_rotation(**_hwpx_rotation_kwargs(block.rotation))
         return
     if isinstance(block, Ole):
-        document.append_ole(
+        ole = document.append_ole(
             block.name,
             block.data,
             width=block.width,
@@ -2475,7 +2895,8 @@ def _append_hancom_block_to_hwp(document: HwpDocument, block: HancomBlock, *, se
             line_width=block.line_width,
             section_index=section_index,
         )
-        ole = document.section(section_index).oles()[-1]
+        if ole is None:
+            ole = document.section(section_index).oles()[-1]
         if block.layout:
             ole.set_layout(**_hwpx_layout_kwargs(block.layout))
         if block.out_margins:
@@ -2489,10 +2910,18 @@ def _append_hancom_block_to_hwp(document: HwpDocument, block: HancomBlock, *, se
         return
 
 
-def _resolve_hwp_paragraph_attributes(document: HwpDocument, block: Paragraph) -> tuple[int, int, int, int]:
-    docinfo = document.docinfo_model()
-    para_shape_count = len(docinfo.para_shape_records())
-    style_count = len(docinfo.style_records())
+def _resolve_hwp_paragraph_attributes(
+    document: HwpDocument,
+    block: Paragraph,
+    *,
+    paragraph_attribute_limits: tuple[int, int] | None = None,
+) -> tuple[int, int, int, int]:
+    if paragraph_attribute_limits is None:
+        docinfo = document.docinfo_model()
+        para_shape_count = len(docinfo.para_shape_records())
+        style_count = len(docinfo.style_records())
+    else:
+        para_shape_count, style_count = paragraph_attribute_limits
     para_shape_id = block.hwp_para_shape_id
     style_id = block.hwp_style_id
     if para_shape_id is None:
@@ -2544,69 +2973,417 @@ def _extract_hwpx_section(section) -> HancomSection:
     blocks: list[HancomBlock] = []
     section_settings = _extract_section_settings(section)
     header_footer_blocks = _extract_header_footer_blocks(section)
-    for paragraph in section.root_element.xpath("./hp:p", namespaces=NS):
-        tables = paragraph.xpath(".//hp:tbl", namespaces=NS)
-        pictures = paragraph.xpath(".//hp:pic", namespaces=NS)
-        hyperlinks = paragraph.xpath(".//hp:fieldBegin[@type='HYPERLINK']", namespaces=NS)
-        fields = paragraph.xpath(".//hp:fieldBegin[not(@type='HYPERLINK')]", namespaces=NS)
-        memo_field_nodes = [node for node in fields if (node.get("type", "").upper() == _HWPX_MEMO_FIELD_TYPE)]
-        regular_field_nodes = [node for node in fields if node not in memo_field_nodes]
-        forms = paragraph.xpath(
-            ".//hp:checkBtn | .//hp:radioBtn | .//hp:btn | .//hp:edit | .//hp:comboBox | .//hp:listBox | .//hp:scrollBar",
-            namespaces=NS,
-        )
-        bookmarks = paragraph.xpath(".//hp:bookmark", namespaces=NS)
-        auto_numbers = paragraph.xpath(".//hp:autoNum | .//hp:newNum", namespaces=NS)
-        notes = paragraph.xpath(".//hp:footNote | .//hp:endNote", namespaces=NS)
-        memos = paragraph.xpath(".//hp:hiddenComment", namespaces=NS)
-        equations = paragraph.xpath(".//hp:equation", namespaces=NS)
-        charts = paragraph.xpath(".//hp:chart", namespaces=NS)
-        shapes = paragraph.xpath(
-            ".//hp:rect | .//hp:line | .//hp:ellipse | .//hp:arc | .//hp:polygon | .//hp:curve | .//hp:connectLine | .//hp:textart | .//hp:container",
-            namespaces=NS,
-        )
-        oles = paragraph.xpath(".//hp:ole[not(ancestor::hp:default[parent::hp:switch[hp:case/hp:chart]])]", namespaces=NS)
-
-        text = "".join(paragraph.xpath("./hp:run/hp:t/text()", namespaces=NS)).replace("\r", "").strip()
-        if text:
-            blocks.append(_build_hwpx_paragraph_block(paragraph, text))
-        for node in bookmarks:
-            blocks.append(_extract_bookmark(_build_bookmark_wrapper(section, node)))
-        for node in hyperlinks:
-            field = _build_field_wrapper(section, node)
-            blocks.append(Hyperlink(target=field.hyperlink_target or "", display_text=field.display_text or None))
-        for node in regular_field_nodes:
-            blocks.append(_extract_field(_build_field_wrapper(section, node)))
-        for node in forms:
-            blocks.append(_extract_hwpx_form(_build_form_wrapper(section, node)))
-        for node in auto_numbers:
-            blocks.append(_extract_auto_number(_build_auto_number_wrapper(section, node)))
-        for node in tables:
-            blocks.append(_extract_hwpx_table(_build_table_wrapper(section, node)))
-        for node in pictures:
-            blocks.append(_extract_hwpx_picture(_build_picture_wrapper(section, node)))
-        for node in notes:
-            blocks.append(_extract_hwpx_note(_build_note_wrapper(section, node)))
-        memo_blocks = [_extract_hwpx_memo(_build_memo_wrapper(section, node)) for node in memos]
-        memo_carriers = [_extract_hwpx_memo_field(_build_field_wrapper(section, node)) for node in memo_field_nodes]
-        blocks.extend(_merge_hwpx_memos_with_carriers(memo_blocks, memo_carriers))
-        for node in equations:
-            blocks.append(_extract_hwpx_equation(_build_equation_wrapper(section, node)))
-        for node in charts:
-            blocks.append(_extract_hwpx_chart(_build_chart_wrapper(section, node)))
-        for node in shapes:
-            blocks.append(_extract_hwpx_shape(_build_shape_wrapper(section, node)))
-        for node in oles:
-            blocks.append(_extract_hwpx_ole(_build_ole_wrapper(section, node)))
+    paragraphs = section.root_element.xpath("./hp:p", namespaces=NS)
+    for paragraph_index, paragraph in enumerate(paragraphs):
+        paragraph_blocks = _extract_hwpx_paragraph_blocks(section, paragraph, paragraph_index)
+        if not paragraph_blocks and not _hwpx_paragraph_has_header_footer(paragraph):
+            paragraph_blocks.append(_mark_hwpx_source_paragraph(_build_hwpx_paragraph_block(paragraph, ""), paragraph_index))
+        blocks.extend(paragraph_blocks)
     return HancomSection(settings=section_settings, header_footer_blocks=header_footer_blocks, blocks=blocks)
 
 
-def _build_hwpx_paragraph_block(paragraph, text: str) -> Paragraph:
+def _hwpx_paragraph_has_header_footer(paragraph: etree._Element) -> bool:
+    return bool(paragraph.xpath("./hp:run/hp:ctrl/hp:header | ./hp:run/hp:ctrl/hp:footer", namespaces=NS))
+
+
+def _extract_hwpx_paragraph_blocks(section, paragraph: etree._Element, paragraph_index: int) -> list[HancomBlock]:
+    blocks: list[HancomBlock] = []
+    memo_blocks: list[Memo] = []
+    memo_carriers: list[Memo] = []
+    skipped_field_id: str | None = None
+    seen_nodes: set[str] = set()
+
+    for run in paragraph.xpath("./hp:run", namespaces=NS):
+        for child in list(run):
+            local_name = etree.QName(child).localname
+            if local_name == "t":
+                if skipped_field_id is None:
+                    text = (child.text or "").replace("\r", "")
+                    if text:
+                        blocks.append(
+                            _mark_hwpx_source_paragraph(
+                                _build_hwpx_paragraph_block(paragraph, text, char_pr_id=run.get("charPrIDRef")),
+                                paragraph_index,
+                                order=_source_order_for_element(paragraph, child),
+                            )
+                        )
+                continue
+
+            candidates = list(child) if local_name == "ctrl" else [child]
+            for node in candidates:
+                node_local_name = etree.QName(node).localname
+                if skipped_field_id is not None:
+                    if node_local_name == "fieldEnd" and node.get("beginIDRef") == skipped_field_id:
+                        skipped_field_id = None
+                    continue
+
+                extracted = _extract_hwpx_run_node(section, node)
+                if extracted is None:
+                    continue
+                seen_nodes.add(_hwpx_node_key(node))
+                caption_text = _extract_hwpx_caption_text(node)
+                if caption_text:
+                    blocks.append(
+                        _mark_hwpx_source_paragraph(
+                            _build_hwpx_paragraph_block(paragraph, caption_text, char_pr_id=run.get("charPrIDRef")),
+                            paragraph_index,
+                            order=_source_order_for_element(paragraph, node),
+                        )
+                    )
+                extracted_blocks = extracted if isinstance(extracted, list) else [extracted]
+                for block in extracted_blocks:
+                    owned_text = _hwpx_owned_inline_text(block)
+                    if owned_text:
+                        blocks.append(
+                            _mark_hwpx_source_paragraph(
+                                _build_hwpx_paragraph_block(paragraph, owned_text, char_pr_id=run.get("charPrIDRef")),
+                                paragraph_index,
+                                order=_source_order_for_element(paragraph, node),
+                            )
+                        )
+                    _mark_hwpx_source_paragraph(block, paragraph_index, order=_source_order_for_element(paragraph, node))
+                    if isinstance(block, Memo) and _memo_requires_hwpx_carrier(block):
+                        memo_carriers.append(block)
+                    elif isinstance(block, Memo):
+                        memo_blocks.append(block)
+                    else:
+                        blocks.append(block)
+
+                if node_local_name == "fieldBegin":
+                    skipped_field_id = node.get("id") or node.get("fieldid")
+
+    if memo_blocks or memo_carriers:
+        for memo in _merge_hwpx_memos_with_carriers(memo_blocks, memo_carriers):
+            blocks.append(_mark_hwpx_source_paragraph(memo, paragraph_index))
+    blocks.extend(_extract_missing_hwpx_descendant_blocks(section, paragraph, paragraph_index, seen_nodes))
+    return _sort_hwpx_blocks_by_source_order(blocks)
+
+
+def _sort_hwpx_blocks_by_source_order(blocks: list[HancomBlock]) -> list[HancomBlock]:
+    return [
+        block
+        for _index, block in sorted(
+            enumerate(blocks),
+            key=lambda item: (
+                getattr(item[1], "source_order", 10**9),
+                item[0],
+            ),
+        )
+    ]
+
+
+def _sort_hwpx_nested_blocks_by_source_order(blocks: list[HancomBlock]) -> list[HancomBlock]:
+    return [
+        block
+        for _index, block in sorted(
+            enumerate(blocks),
+            key=lambda item: (
+                getattr(item[1], "nested_paragraph_index", 10**9),
+                getattr(item[1], "nested_source_order", 10**9),
+                item[0],
+            ),
+        )
+    ]
+
+
+def _mark_hwpx_nested_paragraph(block, paragraph_index: int, *, order: int | None = None):
+    setattr(block, "nested_paragraph_index", paragraph_index)
+    if order is not None:
+        setattr(block, "nested_source_order", order)
+    return block
+
+
+def _extract_hwpx_text_container_blocks(section, element: etree._Element) -> list[HancomBlock]:
+    local_name = etree.QName(element).localname
+    if local_name in {"rect", "line", "ellipse", "arc", "polygon", "curve", "connectLine", "container"}:
+        paragraphs = element.xpath("./hp:drawText/hp:subList/hp:p", namespaces=NS)
+    elif local_name in {"header", "footer", "footNote", "endNote", "hiddenComment"}:
+        paragraphs = element.xpath("./hp:subList/hp:p", namespaces=NS)
+    else:
+        return []
+
+    blocks: list[HancomBlock] = []
+    for paragraph_index, paragraph in enumerate(paragraphs):
+        blocks.extend(_extract_hwpx_nested_paragraph_blocks(section, paragraph, paragraph_index))
+    return _sort_hwpx_nested_blocks_by_source_order(blocks)
+
+
+def _extract_hwpx_nested_paragraph_blocks(section, paragraph: etree._Element, paragraph_index: int) -> list[HancomBlock]:
+    blocks: list[HancomBlock] = []
+    skipped_field_id: str | None = None
+    for run in paragraph.xpath("./hp:run", namespaces=NS):
+        for child in list(run):
+            local_name = etree.QName(child).localname
+            if local_name == "t":
+                if skipped_field_id is None:
+                    text = (child.text or "").replace("\r", "")
+                    if text:
+                        blocks.append(
+                            _mark_hwpx_nested_paragraph(
+                                _build_hwpx_paragraph_block(paragraph, text, char_pr_id=run.get("charPrIDRef")),
+                                paragraph_index,
+                                order=_source_order_for_element(paragraph, child),
+                            )
+                        )
+                continue
+
+            candidates = list(child) if local_name == "ctrl" else [child]
+            for node in candidates:
+                node_local_name = etree.QName(node).localname
+                if skipped_field_id is not None:
+                    if node_local_name == "fieldEnd" and node.get("beginIDRef") == skipped_field_id:
+                        skipped_field_id = None
+                    continue
+                if node_local_name not in _HWPX_NESTED_INLINE_BLOCK_NAMES:
+                    continue
+                extracted = _extract_hwpx_run_node(section, node)
+                if extracted is None:
+                    continue
+                extracted_blocks = extracted if isinstance(extracted, list) else [extracted]
+                for block in extracted_blocks:
+                    blocks.append(
+                        _mark_hwpx_nested_paragraph(
+                            block,
+                            paragraph_index,
+                            order=_source_order_for_element(paragraph, node),
+                        )
+                    )
+                if node_local_name == "fieldBegin":
+                    skipped_field_id = node.get("id") or node.get("fieldid")
+    return _sort_hwpx_nested_blocks_by_source_order(blocks)
+
+
+def _extract_missing_hwpx_descendant_blocks(
+    section,
+    paragraph: etree._Element,
+    paragraph_index: int,
+    seen_nodes: set[str],
+) -> list[HancomBlock]:
+    expression = (
+        ".//hp:bookmark | .//hp:fieldBegin | .//hp:checkBtn | .//hp:radioBtn | .//hp:btn | .//hp:edit | "
+        ".//hp:comboBox | .//hp:listBox | .//hp:scrollBar | .//hp:autoNum | .//hp:newNum | .//hp:tbl | "
+        ".//hp:pic | .//hp:footNote | .//hp:endNote | .//hp:hiddenComment | .//hp:equation | .//hp:chart | "
+        ".//hp:rect | .//hp:line | .//hp:ellipse | .//hp:arc | .//hp:polygon | .//hp:curve | "
+        ".//hp:connectLine | .//hp:textart | .//hp:container | .//hp:ole"
+    )
+    blocks: list[HancomBlock] = []
+    memo_blocks: list[Memo] = []
+    memo_carriers: list[Memo] = []
+    for node in paragraph.xpath(expression, namespaces=NS):
+        if _hwpx_node_is_inside_text_container(node) and etree.QName(node).localname in _HWPX_NESTED_INLINE_BLOCK_NAMES:
+            continue
+        node_key = _hwpx_node_key(node)
+        if node_key in seen_nodes:
+            continue
+        extracted = _extract_hwpx_run_node(section, node)
+        if extracted is None:
+            continue
+        seen_nodes.add(node_key)
+        if not _hwpx_node_is_inside_table_cell(node):
+            caption_text = _extract_hwpx_caption_text(node)
+            if caption_text:
+                blocks.append(
+                    _mark_hwpx_source_paragraph(
+                        _build_hwpx_paragraph_block(paragraph, caption_text),
+                        paragraph_index,
+                        order=_source_order_for_element(paragraph, node),
+                    )
+                )
+        extracted_blocks = extracted if isinstance(extracted, list) else [extracted]
+        for block in extracted_blocks:
+            if _hwpx_node_is_inside_table_cell(node):
+                _clear_nested_owned_text(block)
+            elif _hwpx_node_is_inside_text_container(node):
+                _mark_hwpx_text_owned_by_container(block)
+            owned_text = _hwpx_owned_inline_text(block)
+            if owned_text:
+                blocks.append(
+                    _mark_hwpx_source_paragraph(
+                        _build_hwpx_paragraph_block(paragraph, owned_text),
+                        paragraph_index,
+                        order=_source_order_for_element(paragraph, node),
+                    )
+                )
+            _mark_hwpx_source_paragraph(block, paragraph_index, order=_source_order_for_element(paragraph, node))
+            if isinstance(block, Memo) and _memo_requires_hwpx_carrier(block):
+                memo_carriers.append(block)
+            elif isinstance(block, Memo):
+                memo_blocks.append(block)
+            else:
+                blocks.append(block)
+    if memo_blocks or memo_carriers:
+        for memo in _merge_hwpx_memos_with_carriers(memo_blocks, memo_carriers):
+            blocks.append(_mark_hwpx_source_paragraph(memo, paragraph_index))
+    return blocks
+
+
+def _extract_hwpx_caption_text(node: etree._Element) -> str:
+    if etree.QName(node).localname not in _CAPTION_TEXT_BLOCK_NAMES:
+        return ""
+    caption_nodes = node.xpath("./hp:caption", namespaces=NS)
+    if not caption_nodes:
+        return ""
+    return "".join(text_node.text or "" for text_node in caption_nodes[0].xpath(".//hp:t", namespaces=NS))
+
+
+_CAPTION_TEXT_BLOCK_NAMES = {
+    "tbl",
+    "pic",
+    "ole",
+    "rect",
+    "line",
+    "ellipse",
+    "arc",
+    "polygon",
+    "curve",
+    "connectLine",
+    "textart",
+    "container",
+}
+
+
+def _hwpx_node_is_inside_table_cell(node: etree._Element) -> bool:
+    return any(etree.QName(ancestor).localname == "tc" for ancestor in node.iterancestors())
+
+
+_HWPX_TEXT_CONTAINER_NAMES = {
+    "header",
+    "footer",
+    "footNote",
+    "endNote",
+    "hiddenComment",
+    "rect",
+    "line",
+    "ellipse",
+    "arc",
+    "polygon",
+    "curve",
+    "connectLine",
+    "textart",
+    "container",
+}
+
+
+_HWPX_NESTED_INLINE_BLOCK_NAMES = {
+    "bookmark",
+    "fieldBegin",
+    "autoNum",
+    "newNum",
+}
+
+
+def _hwpx_node_is_inside_text_container(node: etree._Element) -> bool:
+    return any(etree.QName(ancestor).localname in _HWPX_TEXT_CONTAINER_NAMES for ancestor in node.iterancestors())
+
+
+def _clear_nested_owned_text(block: HancomBlock) -> None:
+    if isinstance(block, Shape):
+        block.text = ""
+    elif isinstance(block, Chart):
+        block.title = ""
+    elif isinstance(block, Hyperlink):
+        block.display_text = None
+    elif isinstance(block, Field):
+        block.display_text = None
+    elif isinstance(block, Form):
+        block.label = ""
+    elif isinstance(block, Memo):
+        block.text = ""
+
+
+def _mark_hwpx_text_owned_by_container(block: HancomBlock) -> None:
+    if isinstance(block, (Hyperlink, Field)):
+        setattr(block, "source_text_owned_by_container", True)
+
+
+def _hwpx_owned_inline_text(block: HancomBlock) -> str | None:
+    if getattr(block, "source_text_owned_by_container", False):
+        return None
+    if isinstance(block, (Hyperlink, Field)):
+        return block.display_text
+    return None
+
+
+def _hwpx_node_key(node: etree._Element) -> str:
+    return node.getroottree().getpath(node)
+
+
+def _extract_hwpx_run_node(section, node: etree._Element) -> HancomBlock | list[HancomBlock] | None:
+    local_name = etree.QName(node).localname
+    if local_name == "bookmark":
+        return _extract_bookmark(_build_bookmark_wrapper(section, node))
+    if local_name == "fieldBegin":
+        field = _build_field_wrapper(section, node)
+        if (field.field_type or "").upper() == "HYPERLINK":
+            return Hyperlink(target=field.hyperlink_target or "", display_text=field.display_text or None)
+        return _extract_field(field)
+    if local_name in {"checkBtn", "radioBtn", "btn", "edit", "comboBox", "listBox", "scrollBar"}:
+        return _extract_hwpx_form(_build_form_wrapper(section, node))
+    if local_name in {"autoNum", "newNum"}:
+        return _extract_auto_number(_build_auto_number_wrapper(section, node))
+    if local_name == "tbl":
+        return _extract_hwpx_table(_build_table_wrapper(section, node))
+    if local_name == "pic":
+        return _extract_hwpx_picture(_build_picture_wrapper(section, node))
+    if local_name in {"footNote", "endNote"}:
+        return _extract_hwpx_note(_build_note_wrapper(section, node))
+    if local_name == "hiddenComment":
+        return _extract_hwpx_memo(_build_memo_wrapper(section, node))
+    if local_name == "equation":
+        return _extract_hwpx_equation(_build_equation_wrapper(section, node))
+    if local_name == "chart":
+        if _hwpx_chart_is_covered_by_carrier_shape(node):
+            return None
+        return _extract_hwpx_chart(_build_chart_wrapper(section, node))
+    if local_name in {"rect", "line", "ellipse", "arc", "polygon", "curve", "connectLine", "textart", "container"}:
+        return _extract_hwpx_shape(_build_shape_wrapper(section, node))
+    if local_name == "ole":
+        if node.xpath("ancestor::hp:default[parent::hp:switch[hp:case/hp:chart]]", namespaces=NS):
+            return None
+        return _extract_hwpx_ole(_build_ole_wrapper(section, node))
+    return None
+
+
+def _hwpx_chart_is_covered_by_carrier_shape(node: etree._Element) -> bool:
+    for ancestor in node.iterancestors():
+        if etree.QName(ancestor).localname not in {
+            "rect",
+            "line",
+            "ellipse",
+            "arc",
+            "polygon",
+            "curve",
+            "connectLine",
+            "textart",
+            "container",
+        }:
+            continue
+        comments = ancestor.xpath("./hp:shapeComment/text()", namespaces=NS)
+        if comments and str(comments[0]).startswith(_HWPX_CHART_CARRIER_PREFIX):
+            return True
+    return False
+
+
+def _source_order_for_element(paragraph: etree._Element, element: etree._Element) -> int:
+    for index, candidate in enumerate(paragraph.iter()):
+        if candidate is element:
+            return index
+    return 10**9
+
+
+def _mark_hwpx_source_paragraph(block, paragraph_index: int, *, order: int | None = None):
+    setattr(block, "source_paragraph_index", paragraph_index)
+    if order is not None:
+        setattr(block, "source_order", order)
+    return block
+
+
+def _build_hwpx_paragraph_block(paragraph, text: str, *, char_pr_id: str | None = None) -> Paragraph:
     return Paragraph(
         text=text,
         style_id=paragraph.get("styleIDRef"),
         para_pr_id=paragraph.get("paraPrIDRef"),
-        char_pr_id=_extract_hwpx_paragraph_char_pr_id(paragraph),
+        char_pr_id=char_pr_id or _extract_hwpx_paragraph_char_pr_id(paragraph),
     )
 
 
@@ -2657,12 +3434,15 @@ def _extract_hwpx_picture(picture) -> Picture:
     extension = Path(path).suffix.lstrip(".") or None
     size = picture.size()
     line_style = picture.line_style()
+    size_nodes = picture.element.xpath("./hp:sz", namespaces=NS)
+    width = size.get("width", 7200)
+    height = size.get("height", 7200)
     return Picture(
         name=Path(path).name,
         data=picture.binary_data(),
         extension=extension,
-        width=size.get("width", 7200),
-        height=size.get("height", 7200),
+        width=width,
+        height=height,
         shape_comment=picture.shape_comment or None,
         layout=_normalize_str_map(picture.layout()),
         out_margins=_normalize_int_map(picture.out_margins()),
@@ -2670,13 +3450,24 @@ def _extract_hwpx_picture(picture) -> Picture:
         image_adjustment=_normalize_str_map(picture.image_adjustment()),
         crop=_normalize_int_map(picture.crop()) if hasattr(picture, "crop") else {},
         line_color=line_style.get("color", "#000000"),
-        line_width=int(line_style.get("width", "0")),
+        line_width=int(line_style.get("width") or "0"),
+        has_size_node=bool(size_nodes),
+        size_attributes=_extract_hwpx_graphic_size_attributes(picture.element),
+        has_line_node=bool(picture.element.xpath("./hp:lineShape", namespaces=NS)),
+        has_position_node=bool(picture.element.xpath("./hp:pos", namespaces=NS)),
+        has_out_margin_node=bool(picture.element.xpath("./hp:outMargin", namespaces=NS)),
+        **_extract_hwpx_graphic_size_fields(picture.element, width=width, height=height),
     )
 
 
 def _extract_hwpx_note(note) -> Note:
     number = int(note.number) if note.number and str(note.number).isdigit() else None
-    return Note(kind=note.kind, text=note.text, number=number)
+    return Note(
+        kind=note.kind,
+        text=note.text,
+        number=number,
+        nested_blocks=_extract_hwpx_text_container_blocks(note.section, note.element),
+    )
 
 
 def _extract_hwpx_memo(memo) -> Memo:
@@ -2737,11 +3528,14 @@ def _extract_hwpx_shape(shape) -> Shape | Chart:
     size = shape.size()
     fill_style = shape.fill_style()
     line_style = shape.line_style()
+    size_nodes = shape.element.xpath("./hp:sz", namespaces=NS)
+    width = size.get("width", 12000)
+    height = size.get("height", 3200)
     return Shape(
         kind=shape.kind,
-        text=shape.text,
-        width=size.get("width", 12000),
-        height=size.get("height", 3200),
+        text=_extract_hwpx_shape_direct_text(shape),
+        width=width,
+        height=height,
         fill_color=fill_style.get("faceColor", "#FFFFFF"),
         line_color=line_style.get("color", "#000000"),
         shape_comment=shape.shape_comment or None,
@@ -2750,28 +3544,47 @@ def _extract_hwpx_shape(shape) -> Shape | Chart:
         rotation=_normalize_str_map(shape.rotation()),
         text_margins=_normalize_int_map(shape.text_margins()),
         specific_fields=_extract_hwpx_shape_specific_fields(shape),
+        line_width=int(line_style.get("width", "33") or "33"),
+        line_style=_normalize_str_map(line_style),
+        has_line_node=bool(shape.element.xpath("./hp:lineShape", namespaces=NS)),
+        has_size_node=bool(size_nodes),
+        size_attributes=_extract_hwpx_graphic_size_attributes(shape.element),
+        has_position_node=bool(shape.element.xpath("./hp:pos", namespaces=NS)),
+        has_out_margin_node=bool(shape.element.xpath("./hp:outMargin", namespaces=NS)),
+        has_fill_node=bool(shape.element.xpath("./hc:fillBrush", namespaces=NS)),
+        has_text_margin_node=bool(shape.element.xpath("./hp:drawText/hp:textMargin", namespaces=NS)),
+        nested_blocks=_extract_hwpx_text_container_blocks(shape.section, shape.element),
+        **_extract_hwpx_graphic_size_fields(shape.element, width=width, height=height),
     )
 
 
 def _extract_hwpx_ole(ole) -> Ole:
     size = ole.size()
     line_style = ole.line_style()
+    size_nodes = ole.element.xpath("./hp:sz", namespaces=NS)
+    width = size.get("width", 42001)
+    height = size.get("height", 13501)
     return Ole(
         name=Path(ole.binary_part_path()).name,
         data=ole.binary_data(),
-        width=size.get("width", 42001),
-        height=size.get("height", 13501),
+        width=width,
+        height=height,
         shape_comment=ole.shape_comment or None,
         object_type=ole.object_type or "EMBEDDED",
         draw_aspect=ole.draw_aspect or "CONTENT",
         has_moniker=ole.has_moniker,
         eq_baseline=int(ole.element.get("eqBaseLine", "0")),
         line_color=line_style.get("color", "#000000"),
-        line_width=int(line_style.get("width", "0")),
+        line_width=int(line_style.get("width") or "0"),
         layout=_normalize_str_map(ole.layout()),
         out_margins=_normalize_int_map(ole.out_margins()),
         rotation=_normalize_str_map(ole.rotation()),
         extent=_normalize_int_map(ole.extent()),
+        has_size_node=bool(size_nodes),
+        size_attributes=_extract_hwpx_graphic_size_attributes(ole.element),
+        has_position_node=bool(ole.element.xpath("./hp:pos", namespaces=NS)),
+        has_out_margin_node=bool(ole.element.xpath("./hp:outMargin", namespaces=NS)),
+        **_extract_hwpx_graphic_size_fields(ole.element, width=width, height=height),
     )
 
 
@@ -3005,9 +3818,12 @@ def _extract_page_border_fills(section) -> list[dict[str, str | int]]:
     return fills
 
 
-def _extract_page_numbers(section) -> list[dict[str, str]]:
+def _extract_page_numbers_with_positions(section) -> tuple[list[dict[str, str]], list[tuple[int | None, int | None]]]:
     page_numbers: list[dict[str, str]] = []
+    positions: list[tuple[int | None, int | None]] = []
     for node in section.findall(".//hp:pageNum"):
+        if not _is_direct_section_paragraph_control(node.element):
+            continue
         page_numbers.append(
             {
                 "pos": node.get_attr("pos") or "BOTTOM_CENTER",
@@ -3015,7 +3831,27 @@ def _extract_page_numbers(section) -> list[dict[str, str]]:
                 "sideChar": node.get_attr("sideChar") or "-",
             }
         )
+        positions.append(_source_paragraph_position_for_element(section, node.element))
+    return page_numbers, positions
+
+
+def _extract_page_numbers(section) -> list[dict[str, str]]:
+    page_numbers, _positions = _extract_page_numbers_with_positions(section)
     return page_numbers
+
+
+def _is_direct_section_paragraph_control(element: etree._Element) -> bool:
+    parent = element.getparent()
+    if parent is None or etree.QName(parent).localname != "ctrl":
+        return False
+    run = parent.getparent()
+    if run is None or etree.QName(run).localname != "run":
+        return False
+    paragraph = run.getparent()
+    if paragraph is None or etree.QName(paragraph).localname != "p":
+        return False
+    section_root = paragraph.getparent()
+    return section_root is not None and etree.QName(section_root).localname == "sec"
 
 
 def _extract_note_pr(section, kind: str) -> dict[str, object]:
@@ -3075,6 +3911,7 @@ def _extract_section_settings(section) -> SectionSettings:
         if memo_shape.memo_shape_id is not None
     }
     memo_shape_id = settings.memo_shape_id if settings.memo_shape_id in memo_shape_ids else None
+    page_numbers, page_number_positions = _extract_page_numbers_with_positions(section)
     return SectionSettings(
         page_width=settings.page_width,
         page_height=settings.page_height,
@@ -3084,7 +3921,8 @@ def _extract_section_settings(section) -> SectionSettings:
         visibility=settings.visibility(),
         grid=settings.grid(),
         start_numbers=settings.start_numbers(),
-        page_numbers=_extract_page_numbers(section),
+        page_numbers=page_numbers,
+        page_number_positions=page_number_positions,
         footnote_pr=_extract_note_pr(section, "footNotePr"),
         endnote_pr=_extract_note_pr(section, "endNotePr"),
         line_number_shape=_extract_line_number_shape(section),
@@ -3096,22 +3934,50 @@ def _extract_header_footer_blocks(section) -> list[HeaderFooter]:
     section_index = section.section_index()
     blocks: list[HeaderFooter] = []
     for header in section.document.headers(section_index=section_index):
+        paragraph_index, source_order = _source_paragraph_position_for_element(section, header.element)
         blocks.append(
-            HeaderFooter(
-                kind=header.kind,
-                text=header.text,
-                apply_page_type=header.apply_page_type or "BOTH",
+            _mark_hwpx_source_paragraph(
+                HeaderFooter(
+                    kind=header.kind,
+                    text=_extract_hwpx_direct_text(header.element),
+                    apply_page_type=header.apply_page_type or "BOTH",
+                    nested_blocks=_extract_hwpx_text_container_blocks(header.section, header.element),
+                ),
+                paragraph_index or 0,
+                order=source_order,
             )
         )
     for footer in section.document.footers(section_index=section_index):
+        paragraph_index, source_order = _source_paragraph_position_for_element(section, footer.element)
         blocks.append(
-            HeaderFooter(
-                kind=footer.kind,
-                text=footer.text,
-                apply_page_type=footer.apply_page_type or "BOTH",
+            _mark_hwpx_source_paragraph(
+                HeaderFooter(
+                    kind=footer.kind,
+                    text=_extract_hwpx_direct_text(footer.element),
+                    apply_page_type=footer.apply_page_type or "BOTH",
+                    nested_blocks=_extract_hwpx_text_container_blocks(footer.section, footer.element),
+                ),
+                paragraph_index or 0,
+                order=source_order,
             )
         )
     return blocks
+
+
+def _source_paragraph_position_for_element(section, element: etree._Element) -> tuple[int | None, int | None]:
+    paragraphs = section.root_element.xpath("./hp:p", namespaces=NS)
+    for index, paragraph in enumerate(paragraphs):
+        if paragraph is element or element in paragraph.iterdescendants():
+            return index, _source_order_for_element(paragraph, element)
+    return None, None
+
+
+def _source_paragraph_index_for_element(section, element: etree._Element) -> int | None:
+    paragraphs = section.root_element.xpath("./hp:p", namespaces=NS)
+    for index, paragraph in enumerate(paragraphs):
+        if paragraph is element or element in paragraph.iterdescendants():
+            return index
+    return None
 
 
 def _extract_style_definition(style) -> StyleDefinition:
@@ -4156,6 +5022,10 @@ def _reset_hwpx_section(document: HwpxDocument, section_index: int) -> None:
 
 
 def _write_section_to_hwpx(document: HwpxDocument, section_index: int, section: HancomSection) -> None:
+    if _section_uses_source_paragraphs(section):
+        _write_grouped_section_to_hwpx(document, section_index, section)
+        return
+
     blocks_written = 0
     first_paragraph_consumed = False
     for block in section.blocks:
@@ -4194,13 +5064,17 @@ def _write_section_to_hwpx(document: HwpxDocument, section_index: int, section: 
                 paragraph_index=paragraph_index,
                 width=block.width,
                 height=block.height,
+                original_width=block.original_width,
+                original_height=block.original_height,
+                current_width=block.current_width,
+                current_height=block.current_height,
                 media_type=_media_type_for_extension(block.extension),
             )
             _apply_hwpx_picture_block(appended, block)
         elif isinstance(block, Hyperlink):
             document.append_hyperlink(
                 block.target,
-                display_text=block.display_text,
+                display_text=_block_owned_text_for_write(block),
                 section_index=section_index,
                 paragraph_index=paragraph_index,
             )
@@ -4213,7 +5087,7 @@ def _write_section_to_hwpx(document: HwpxDocument, section_index: int, section: 
         elif isinstance(block, Field):
             document.append_field(
                 field_type=block.effective_native_field_type,
-                display_text=block.display_text,
+                display_text=_block_owned_text_for_write(block),
                 name=block.name,
                 parameters=block.parameters,
                 editable=block.editable,
@@ -4259,13 +5133,14 @@ def _write_section_to_hwpx(document: HwpxDocument, section_index: int, section: 
                 paragraph_index=paragraph_index,
             )
         elif isinstance(block, Note):
-            document.append_note(
-                block.text,
+            appended = document.append_note(
+                "" if _has_nested_blocks(block) else block.text,
                 kind=block.kind,
                 number=block.number,
                 section_index=section_index,
                 paragraph_index=paragraph_index,
             )
+            _apply_hwpx_nested_text_blocks(document, appended, block, vertical_align="TOP")
         elif isinstance(block, Equation):
             appended = document.append_equation(
                 block.script,
@@ -4282,16 +5157,22 @@ def _write_section_to_hwpx(document: HwpxDocument, section_index: int, section: 
         elif isinstance(block, Shape):
             appended = document.append_shape(
                 kind=block.kind,
-                text=block.text,
+                text="" if _has_nested_blocks(block) else block.text,
                 width=block.width,
                 height=block.height,
                 fill_color=block.fill_color,
                 line_color=block.line_color,
+                line_width=block.line_width,
+                original_width=block.original_width,
+                original_height=block.original_height,
+                current_width=block.current_width,
+                current_height=block.current_height,
                 shape_comment=block.shape_comment,
                 section_index=section_index,
                 paragraph_index=paragraph_index,
             )
             _apply_hwpx_shape_block(appended, block)
+            _apply_hwpx_nested_text_blocks(document, appended, block)
         elif isinstance(block, Chart):
             appended = document.append_chart(
                 block.title,
@@ -4323,11 +5204,481 @@ def _write_section_to_hwpx(document: HwpxDocument, section_index: int, section: 
                 draw_aspect=block.draw_aspect,
                 has_moniker=block.has_moniker,
                 eq_baseline=block.eq_baseline,
+                original_width=block.original_width,
+                original_height=block.original_height,
+                current_width=block.current_width if block.current_width is not None else 0,
+                current_height=block.current_height if block.current_height is not None else 0,
                 section_index=section_index,
                 paragraph_index=paragraph_index,
             )
             _apply_hwpx_ole_block(appended, block)
         blocks_written += 1
+
+
+def _section_uses_source_paragraphs(section: HancomSection) -> bool:
+    return any(
+        getattr(block, "source_paragraph_index", None) is not None
+        for block in [*section.header_footer_blocks, *section.blocks]
+    )
+
+
+def _write_grouped_section_to_hwpx(document: HwpxDocument, section_index: int, section: HancomSection) -> None:
+    paragraph_map: dict[int, int] = {}
+    ordered_items = [
+        block
+        for _, block in sorted(
+            enumerate([*section.header_footer_blocks, *section.blocks]),
+            key=lambda item: (
+                getattr(item[1], "source_paragraph_index", 10**9),
+                getattr(item[1], "source_order", item[0]),
+                item[0],
+            ),
+        )
+    ]
+
+    index = 0
+    while index < len(ordered_items):
+        block = ordered_items[index]
+        next_block = ordered_items[index + 1] if index + 1 < len(ordered_items) else None
+        if _is_owned_text_shadow_paragraph(block, next_block):
+            index += 1
+            continue
+
+        source_paragraph_index = getattr(block, "source_paragraph_index", None)
+        if source_paragraph_index is None:
+            paragraph_index = _append_control_host_paragraph(document, section_index)
+        else:
+            paragraph_index = _ensure_hwpx_source_paragraph(
+                document,
+                section_index,
+                paragraph_map,
+                int(source_paragraph_index),
+            )
+
+        if isinstance(block, HeaderFooter):
+            _append_header_footer_block_to_hwpx(document, section_index, paragraph_index, block)
+        elif isinstance(block, Paragraph):
+            _apply_hwpx_paragraph_style_block(document, section_index, paragraph_index, block)
+            if block.text:
+                _append_text_to_hwpx_paragraph(
+                    document,
+                    section_index,
+                    paragraph_index,
+                    block.text,
+                    char_pr_id=_resolve_hwpx_char_pr_id(document, block),
+            )
+            index += 1
+            continue
+        else:
+            _append_non_paragraph_block_to_hwpx(document, section_index, paragraph_index, block)
+        index += 1
+
+
+def _ensure_hwpx_source_paragraph(
+    document: HwpxDocument,
+    section_index: int,
+    paragraph_map: dict[int, int],
+    source_paragraph_index: int,
+) -> int:
+    if source_paragraph_index in paragraph_map:
+        return paragraph_map[source_paragraph_index]
+    if not paragraph_map:
+        paragraph_map[source_paragraph_index] = 0
+        return 0
+    target_index = _append_control_host_paragraph(document, section_index)
+    paragraph_map[source_paragraph_index] = target_index
+    return target_index
+
+
+def _append_text_to_hwpx_paragraph(
+    document: HwpxDocument,
+    section_index: int,
+    paragraph_index: int,
+    text: str,
+    *,
+    char_pr_id: str | None = None,
+) -> None:
+    paragraph = document._paragraph_element(section_index, paragraph_index)
+    run = document._append_run(paragraph, char_pr_id=char_pr_id)
+    text_node = etree.SubElement(run, qname("hp", "t"))
+    text_node.text = text
+    document.sections[section_index].mark_modified()
+
+
+def _nested_blocks(block: object) -> list[HancomBlock]:
+    values = getattr(block, "nested_blocks", [])
+    return [value for value in values if _is_supported_nested_hwpx_block(value)]
+
+
+def _has_nested_blocks(block: object) -> bool:
+    return bool(_nested_blocks(block))
+
+
+def _is_supported_nested_hwpx_block(value: object) -> bool:
+    return isinstance(value, (Paragraph, Bookmark, Hyperlink, Field, AutoNumber))
+
+
+def _build_hwpx_nested_sublist(document: HwpxDocument, blocks: list[HancomBlock], *, vertical_align: str = "CENTER") -> etree._Element:
+    sublist = etree.Element(qname("hp", "subList"))
+    sublist.set("id", "")
+    sublist.set("textDirection", "HORIZONTAL")
+    sublist.set("lineWrap", "BREAK")
+    sublist.set("vertAlign", vertical_align)
+    sublist.set("linkListIDRef", "0")
+    sublist.set("linkListNextIDRef", "0")
+    sublist.set("textWidth", "0")
+    sublist.set("textHeight", "0")
+    sublist.set("hasTextRef", "0")
+    sublist.set("hasNumRef", "0")
+
+    grouped: dict[int, list[HancomBlock]] = {}
+    for block in blocks:
+        grouped.setdefault(int(getattr(block, "nested_paragraph_index", 0)), []).append(block)
+    if not grouped:
+        grouped[0] = []
+
+    for _paragraph_index, paragraph_blocks in sorted(grouped.items()):
+        first_paragraph = next((block for block in paragraph_blocks if isinstance(block, Paragraph)), None)
+        paragraph = etree.SubElement(sublist, qname("hp", "p"))
+        paragraph.set("id", document._next_control_number(".//hp:p/@id"))
+        paragraph.set("paraPrIDRef", first_paragraph.para_pr_id if isinstance(first_paragraph, Paragraph) and first_paragraph.para_pr_id else "0")
+        paragraph.set("styleIDRef", first_paragraph.style_id if isinstance(first_paragraph, Paragraph) and first_paragraph.style_id else "0")
+        paragraph.set("pageBreak", "0")
+        paragraph.set("columnBreak", "0")
+        paragraph.set("merged", "0")
+        for block in _sort_hwpx_nested_blocks_by_source_order(paragraph_blocks):
+            _append_nested_block_to_hwpx_paragraph(document, paragraph, block)
+    return sublist
+
+
+def _append_nested_block_to_hwpx_paragraph(document: HwpxDocument, paragraph: etree._Element, block: HancomBlock) -> None:
+    if isinstance(block, Paragraph):
+        if block.text:
+            run = etree.SubElement(paragraph, qname("hp", "run"))
+            run.set("charPrIDRef", block.char_pr_id or "0")
+            etree.SubElement(run, qname("hp", "t")).text = block.text
+        return
+    if isinstance(block, Bookmark):
+        run = etree.SubElement(paragraph, qname("hp", "run"))
+        run.set("charPrIDRef", "0")
+        ctrl = etree.SubElement(run, qname("hp", "ctrl"))
+        etree.SubElement(ctrl, qname("hp", "bookmark")).set("name", block.name)
+        return
+    if isinstance(block, Hyperlink):
+        _append_nested_field_to_hwpx_paragraph(
+            document,
+            paragraph,
+            field_type="HYPERLINK",
+            display_text=block.display_text,
+            parameters=_hwpx_hyperlink_parameters(block.target),
+        )
+        return
+    if isinstance(block, Field):
+        _append_nested_field_to_hwpx_paragraph(
+            document,
+            paragraph,
+            field_type=block.effective_native_field_type,
+            display_text=block.display_text,
+            name=block.name,
+            parameters=block.parameters,
+            editable=block.editable,
+            dirty=block.dirty,
+        )
+        return
+    if isinstance(block, AutoNumber):
+        run = etree.SubElement(paragraph, qname("hp", "run"))
+        run.set("charPrIDRef", "0")
+        ctrl = etree.SubElement(run, qname("hp", "ctrl"))
+        node = etree.SubElement(ctrl, qname("hp", block.kind))
+        node.set("num", str(block.number))
+        node.set("numType", str(block.number_type))
+
+
+def _append_nested_field_to_hwpx_paragraph(
+    document: HwpxDocument,
+    paragraph: etree._Element,
+    *,
+    field_type: str,
+    display_text: str | None = None,
+    name: str | None = None,
+    parameters: dict[str, int | str] | None = None,
+    editable: bool = False,
+    dirty: bool = False,
+) -> None:
+    begin_id = document._next_control_number(".//hp:fieldBegin/@id")
+    field_id = document._next_control_number(".//hp:fieldBegin/@fieldid | .//hp:fieldEnd/@fieldid")
+
+    begin_run = etree.SubElement(paragraph, qname("hp", "run"))
+    begin_run.set("charPrIDRef", "0")
+    begin_ctrl = etree.SubElement(begin_run, qname("hp", "ctrl"))
+    field_begin = etree.SubElement(begin_ctrl, qname("hp", "fieldBegin"))
+    field_begin.set("id", begin_id)
+    field_begin.set("type", field_type)
+    field_begin.set("name", name or "")
+    field_begin.set("editable", "1" if editable else "0")
+    field_begin.set("dirty", "1" if dirty else "0")
+    field_begin.set("zorder", "0")
+    field_begin.set("fieldid", field_id)
+
+    if parameters:
+        params = etree.SubElement(field_begin, qname("hp", "parameters"))
+        params.set("cnt", str(len(parameters)))
+        params.set("name", "")
+        for key, value in parameters.items():
+            tag_name = "integerParam" if isinstance(value, int) else "stringParam"
+            parameter = etree.SubElement(params, qname("hp", tag_name))
+            parameter.set("name", str(key))
+            parameter.text = str(value)
+
+    if display_text is not None:
+        display_run = etree.SubElement(paragraph, qname("hp", "run"))
+        display_run.set("charPrIDRef", "0")
+        etree.SubElement(display_run, qname("hp", "t")).text = display_text
+
+    end_run = etree.SubElement(paragraph, qname("hp", "run"))
+    end_run.set("charPrIDRef", "0")
+    end_ctrl = etree.SubElement(end_run, qname("hp", "ctrl"))
+    field_end = etree.SubElement(end_ctrl, qname("hp", "fieldEnd"))
+    field_end.set("beginIDRef", begin_id)
+    field_end.set("fieldid", field_id)
+
+
+def _hwpx_hyperlink_parameters(target: str) -> dict[str, int | str]:
+    parameters: dict[str, int | str] = {"Command": target, "Path": target}
+    if target.startswith("mailto:"):
+        parameters["Category"] = "HWPHYPERLINK_TYPE_EMAIL"
+    elif target.startswith(("http://", "https://")):
+        parameters["Category"] = "HWPHYPERLINK_TYPE_WEB"
+    else:
+        parameters["Category"] = "HWPHYPERLINK_TYPE_PATH"
+    return parameters
+
+
+def _apply_hwpx_nested_text_blocks(document: HwpxDocument, wrapper, block: object, *, vertical_align: str = "CENTER") -> None:
+    nested = _nested_blocks(block)
+    if not nested:
+        return
+    sublist = _build_hwpx_nested_sublist(document, nested, vertical_align=vertical_align)
+    element = wrapper.element
+    local_name = etree.QName(element).localname
+    if local_name in {"header", "footer", "footNote", "endNote", "hiddenComment"}:
+        old_nodes = element.xpath("./hp:subList", namespaces=NS)
+        if old_nodes:
+            element.replace(old_nodes[0], sublist)
+        else:
+            element.append(sublist)
+        wrapper.section.mark_modified()
+        return
+
+    draw_text_nodes = element.xpath("./hp:drawText", namespaces=NS)
+    draw_text = draw_text_nodes[0] if draw_text_nodes else etree.SubElement(element, qname("hp", "drawText"))
+    if not draw_text_nodes:
+        draw_text.set("lastWidth", str(getattr(block, "width", 12000)))
+        draw_text.set("name", "")
+        draw_text.set("editable", "0")
+    old_nodes = draw_text.xpath("./hp:subList", namespaces=NS)
+    if old_nodes:
+        draw_text.replace(old_nodes[0], sublist)
+    else:
+        draw_text.insert(0, sublist)
+    wrapper.section.mark_modified()
+
+
+def _append_non_paragraph_block_to_hwpx(
+    document: HwpxDocument,
+    section_index: int,
+    paragraph_index: int,
+    block: HancomBlock,
+) -> None:
+    if isinstance(block, Table):
+        appended = document.append_table(
+            block.rows,
+            block.cols,
+            section_index=section_index,
+            paragraph_index=paragraph_index,
+            cell_texts=block.cell_texts,
+        )
+        _apply_hwpx_table_block(appended, block)
+    elif isinstance(block, Picture):
+        appended = document.append_picture(
+            block.name,
+            block.data,
+            section_index=section_index,
+            paragraph_index=paragraph_index,
+            width=block.width,
+            height=block.height,
+            original_width=block.original_width,
+            original_height=block.original_height,
+            current_width=block.current_width,
+            current_height=block.current_height,
+            media_type=_media_type_for_extension(block.extension),
+        )
+        _apply_hwpx_picture_block(appended, block)
+    elif isinstance(block, Hyperlink):
+        document.append_hyperlink(
+            block.target,
+            display_text=_block_owned_text_for_write(block),
+            section_index=section_index,
+            paragraph_index=paragraph_index,
+        )
+    elif isinstance(block, Bookmark):
+        document.append_bookmark(
+            block.name,
+            section_index=section_index,
+            paragraph_index=paragraph_index,
+        )
+    elif isinstance(block, Field):
+        document.append_field(
+            field_type=block.effective_native_field_type,
+            display_text=_block_owned_text_for_write(block),
+            name=block.name,
+            parameters=block.parameters,
+            editable=block.editable,
+            dirty=block.dirty,
+            section_index=section_index,
+            paragraph_index=paragraph_index,
+        )
+    elif isinstance(block, Form):
+        document.append_form(
+            block.label,
+            form_type=block.form_type,
+            name=block.name,
+            value=block.value,
+            checked=block.checked,
+            items=block.items,
+            editable=block.editable,
+            locked=block.locked,
+            placeholder=block.placeholder,
+            section_index=section_index,
+            paragraph_index=paragraph_index,
+        )
+    elif isinstance(block, Memo):
+        document.append_memo(
+            block.text,
+            section_index=section_index,
+            paragraph_index=paragraph_index,
+        )
+        if _memo_requires_hwpx_carrier(block):
+            document.append_field(
+                field_type=_HWPX_MEMO_FIELD_TYPE,
+                display_text=None,
+                name=block.memo_id,
+                parameters=_build_hwpx_memo_parameters(block),
+                section_index=section_index,
+                paragraph_index=paragraph_index,
+            )
+    elif isinstance(block, AutoNumber):
+        document.append_auto_number(
+            number=block.number,
+            number_type=block.number_type,
+            kind=block.kind,
+            section_index=section_index,
+            paragraph_index=paragraph_index,
+        )
+    elif isinstance(block, Note):
+        appended = document.append_note(
+            "" if _has_nested_blocks(block) else block.text,
+            kind=block.kind,
+            number=block.number,
+            section_index=section_index,
+            paragraph_index=paragraph_index,
+        )
+        _apply_hwpx_nested_text_blocks(document, appended, block, vertical_align="TOP")
+    elif isinstance(block, Equation):
+        appended = document.append_equation(
+            block.script,
+            section_index=section_index,
+            paragraph_index=paragraph_index,
+            width=block.width,
+            height=block.height,
+            shape_comment=block.shape_comment,
+            text_color=block.text_color,
+            base_unit=block.base_unit,
+            font=block.font,
+        )
+        _apply_hwpx_equation_block(appended, block)
+    elif isinstance(block, Shape):
+        appended = document.append_shape(
+            kind=block.kind,
+            text="" if _has_nested_blocks(block) else block.text,
+            width=block.width,
+            height=block.height,
+            fill_color=block.fill_color,
+            line_color=block.line_color,
+            line_width=block.line_width,
+            original_width=block.original_width,
+            original_height=block.original_height,
+            current_width=block.current_width,
+            current_height=block.current_height,
+            shape_comment=block.shape_comment,
+            section_index=section_index,
+            paragraph_index=paragraph_index,
+        )
+        _apply_hwpx_shape_block(appended, block)
+        _apply_hwpx_nested_text_blocks(document, appended, block)
+    elif isinstance(block, Chart):
+        appended = document.append_chart(
+            block.title,
+            chart_type=block.chart_type,
+            categories=block.categories,
+            series=block.series,
+            data_ref=block.data_ref,
+            legend_visible=block.legend_visible,
+            width=block.width,
+            height=block.height,
+            shape_comment=block.shape_comment,
+            section_index=section_index,
+            paragraph_index=paragraph_index,
+        )
+        if block.layout:
+            appended.set_layout(**_hwpx_layout_kwargs(block.layout))
+        if block.out_margins:
+            appended.set_out_margins(**block.out_margins)
+        if block.rotation:
+            appended.set_rotation(**_hwpx_rotation_kwargs(block.rotation))
+    elif isinstance(block, Ole):
+        appended = document.append_ole(
+            block.name,
+            block.data,
+            width=block.width,
+            height=block.height,
+            shape_comment=block.shape_comment,
+            object_type=block.object_type,
+            draw_aspect=block.draw_aspect,
+            has_moniker=block.has_moniker,
+            eq_baseline=block.eq_baseline,
+            original_width=block.original_width,
+            original_height=block.original_height,
+            current_width=block.current_width if block.current_width is not None else 0,
+            current_height=block.current_height if block.current_height is not None else 0,
+            section_index=section_index,
+            paragraph_index=paragraph_index,
+        )
+        _apply_hwpx_ole_block(appended, block)
+
+
+def _append_header_footer_block_to_hwpx(
+    document: HwpxDocument,
+    section_index: int,
+    paragraph_index: int,
+    block: HeaderFooter,
+) -> None:
+    if block.kind == "header":
+        appended = document.append_header(
+            "" if _has_nested_blocks(block) else block.text,
+            apply_page_type=block.apply_page_type,
+            section_index=section_index,
+            paragraph_index=paragraph_index,
+        )
+        _apply_hwpx_nested_text_blocks(document, appended, block, vertical_align="TOP")
+    elif block.kind == "footer":
+        appended = document.append_footer(
+            "" if _has_nested_blocks(block) else block.text,
+            apply_page_type=block.apply_page_type,
+            section_index=section_index,
+            paragraph_index=paragraph_index,
+        )
+        _apply_hwpx_nested_text_blocks(document, appended, block, vertical_align="TOP")
 
 
 def _append_control_host_paragraph(document: HwpxDocument, section_index: int) -> int:
@@ -4389,7 +5740,13 @@ def _media_type_for_extension(extension: str | None) -> str | None:
     return None
 
 
-def _apply_section_settings(document: HwpxDocument, section_index: int, settings: SectionSettings) -> None:
+def _apply_section_settings(
+    document: HwpxDocument,
+    section_index: int,
+    settings: SectionSettings,
+    *,
+    apply_page_numbers: bool = True,
+) -> None:
     target = document.section_settings(section_index)
     if settings.page_width is not None or settings.page_height is not None or settings.landscape is not None:
         target.set_page_size(
@@ -4437,7 +5794,7 @@ def _apply_section_settings(document: HwpxDocument, section_index: int, settings
             footnote_pr=settings.footnote_pr or None,
             endnote_pr=settings.endnote_pr or None,
         )
-    if settings.page_numbers:
+    if apply_page_numbers and settings.page_numbers:
         _apply_page_numbers(document, section_index, settings.page_numbers)
 
 
@@ -4544,16 +5901,38 @@ def _apply_page_numbers(
             parent.remove(node.element)
     for page_number in page_numbers:
         paragraph_index = _append_control_host_paragraph(document, section_index)
-        document.append_control_xml(
-            (
-                '<hp:pageNum xmlns:hp="http://www.hancom.co.kr/hwpml/2011/paragraph" '
-                f'pos="{page_number.get("pos", "BOTTOM_CENTER")}" '
-                f'formatType="{page_number.get("formatType", "DIGIT")}" '
-                f'sideChar="{page_number.get("sideChar", "-")}"/>'
-            ),
-            section_index=section_index,
-            paragraph_index=paragraph_index,
-        )
+        document.append_control_xml(_page_number_xml(page_number), section_index=section_index, paragraph_index=paragraph_index)
+
+
+def _apply_page_numbers_to_source_paragraphs(
+    document: HwpxDocument,
+    section_index: int,
+    settings: SectionSettings,
+) -> None:
+    section_xml = document.section_xml(section_index)
+    for node in section_xml.findall(".//hp:pageNum"):
+        parent = node.element.getparent()
+        if parent is not None:
+            parent.remove(node.element)
+
+    paragraph_count = len(document.sections[section_index].paragraphs())
+    for index, page_number in enumerate(settings.page_numbers):
+        paragraph_index: int | None = None
+        if index < len(settings.page_number_positions):
+            paragraph_index = settings.page_number_positions[index][0]
+        if paragraph_index is None or paragraph_index >= paragraph_count:
+            paragraph_index = _append_control_host_paragraph(document, section_index)
+            paragraph_count += 1
+        document.append_control_xml(_page_number_xml(page_number), section_index=section_index, paragraph_index=paragraph_index)
+
+
+def _page_number_xml(page_number: dict[str, str]) -> str:
+    return (
+        '<hp:pageNum xmlns:hp="http://www.hancom.co.kr/hwpml/2011/paragraph" '
+        f'pos="{page_number.get("pos", "BOTTOM_CENTER")}" '
+        f'formatType="{page_number.get("formatType", "DIGIT")}" '
+        f'sideChar="{page_number.get("sideChar", "-")}"/>'
+    )
 
 
 def _apply_header_footer_blocks(document: HwpxDocument, section_index: int, blocks: list[HeaderFooter]) -> None:

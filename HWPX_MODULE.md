@@ -13,6 +13,8 @@
 | [docs/hwpx-document.md](./docs/hwpx-document.md) | `HwpxDocument`, HWPX package/XML API |
 | [docs/hwp-document.md](./docs/hwp-document.md) | `HwpDocument`, HWP 전용 객체 API |
 | [docs/bridge-and-binary.md](./docs/bridge-and-binary.md) | `HwpHwpxBridge`, `HwpBinaryDocument`, 저수준 조사 API |
+| [docs/hwpx2py.md](./docs/hwpx2py.md) | HWPX를 Python 작성 스크립트로 바꾸는 `hwpx2py` |
+| [docs/hwp2py.md](./docs/hwp2py.md) | HWP를 HWP 작성 스크립트로 바꾸는 `hwp2py` |
 | [STABILITY_CONTRACT.md](./STABILITY_CONTRACT.md) | 지원 범위, release gate, 안정성 기준 |
 
 ## 공개 import 규칙
@@ -41,6 +43,7 @@ from jakal_hwpx.document import HwpxDocument
 | HWP 포맷 모델 | `HwpDocument` | HWP binary 문서의 객체 API와 직접 저장 |
 | 포맷 전환 도우미 | `HwpHwpxBridge` | HWP/HWPX/HancomDocument materialization 경로 관리 |
 | HWP binary 모델 | `HwpBinaryDocument` | stream, record tree, DocInfo, SectionModel 조사와 재인코드 |
+| 코드 생성 도구 | `generate_hwpx_script()`, `generate_hwp_script()` | HWPX/HWP를 Python 작성 스크립트로 변환 |
 
 일반 애플리케이션 코드는 `HancomDocument`부터 시작하는 것이 기본입니다. 포맷별 내부 구조를 직접 제어해야 할 때만 `HwpxDocument` 또는 `HwpDocument`로 내려갑니다.
 
@@ -55,6 +58,10 @@ from jakal_hwpx.document import HwpxDocument
 | `HwpDocument` | HWP 직접 편집 모델 | [HwpDocument](./docs/hwp-document.md) |
 | `HwpHwpxBridge` | 포맷 전환 도우미 | [Bridge and binary](./docs/bridge-and-binary.md) |
 | `HwpBinaryDocument` | HWP binary 저수준 모델 | [Bridge and binary](./docs/bridge-and-binary.md) |
+| `generate_hwpx_script()` | HWPX 입력에서 Python 소스 문자열 생성 | [hwpx2py](./docs/hwpx2py.md) |
+| `write_hwpx_script()` | HWPX 입력에서 Python 파일 생성 | [hwpx2py](./docs/hwpx2py.md) |
+| `generate_hwp_script()` | HWP 입력에서 HWP 작성용 Python 소스 문자열 생성 | [hwp2py](./docs/hwp2py.md) |
+| `write_hwp_script()` | HWP 입력에서 Python 파일 생성 | [hwp2py](./docs/hwp2py.md) |
 
 ### 공통 문서 모델
 
@@ -77,6 +84,8 @@ from jakal_hwpx.document import HwpxDocument
 ### HWPX XML wrapper
 
 `HwpxDocument`의 selector와 append API는 XML wrapper를 반환합니다.
+
+기존 문서의 특정 위치를 GUI 편집기처럼 직접 다뤄야 할 때는 `paragraph_xml()`, `replace_paragraph_xml()`, `move_paragraph()`, `insert_control_xml_at()`, `move_control()`, `delete_control()` 같은 위치 기반 편집 API를 사용합니다.
 
 | 이름 | 대표 용도 |
 |---|---|
@@ -172,6 +181,26 @@ doc.append_paragraph("추가 문단")
 doc.strict_validate()
 doc.save("build/output.hwp")
 ```
+
+### HWPX를 Python 스크립트로 변환
+
+```bash
+hwpx2py input.hwpx -o recreate.py --strict
+python recreate.py build/recreated.hwpx
+```
+
+생성된 스크립트는 `HancomDocument` 공개 API로 문서를 다시 만듭니다. Picture와 OLE payload는 base64로 넣어 `append_picture()`와 `append_ole()`로 복원하며, 구조만 비교할 때는 `--skip-binary-assets`로 제외할 수 있습니다.
+
+`raw` 모드는 원본 package part를 embed하는 디버그 기준선입니다. 실제 개선 목표는 `semantic` 모드가 공개 API 호출만으로 더 많은 문단, 표, control 구조를 재생성하는 것입니다.
+
+### HWP를 Python 스크립트로 변환
+
+```bash
+hwp2py input.hwp -o recreate.py
+python recreate.py build/recreated.hwp
+```
+
+`hwp2py`는 raw 모드를 제공하지 않습니다. HWP를 `HancomDocument`로 읽은 뒤 공개 API 호출만으로 문서를 다시 만드는 스크립트를 생성하며, 생성된 스크립트의 기본 출력은 HWP입니다. 같은 모델을 HWPX로 저장해야 하면 생성된 스크립트의 `write_hwpx()`를 호출하면 됩니다.
 
 ## 검증과 release check
 
