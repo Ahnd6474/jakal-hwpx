@@ -1,191 +1,213 @@
 # `HwpxDocument`
 
-`HwpxDocument`는 HWPX package를 직접 다루는 공개 API입니다. HWPX는 zip 안에 XML과 binary part를 담는 구조이므로, 이 클래스는 package part 접근, XML wrapper, HWPX 전용 validation을 제공합니다.
+`HwpxDocument` is the direct HWPX package editing layer.
+
+Use it when you need:
+
+- exact paragraph or control placement
+- direct XML access
+- package part inspection or mutation
+- HWPX validation and strict linting
 
 ```python
 from jakal_hwpx import HwpxDocument
 ```
 
-## 생성과 직렬화
+## Create, open, and save
 
-| API | 설명 |
+| API | Purpose |
 |---|---|
-| `HwpxDocument.blank()` | 빈 HWPX 문서를 만듭니다. |
-| `HwpxDocument.open(path)` | HWPX 파일을 엽니다. |
-| `HwpxDocument.from_bytes(raw_bytes)` | bytes에서 HWPX package를 엽니다. |
-| `compile(validate=True)` | 현재 문서를 HWPX bytes로 컴파일합니다. |
-| `save(path, validate=True)` | HWPX 파일로 저장합니다. |
-| `to_hancom_document(*, converter=None)` | 공통 모델로 변환합니다. |
-| `to_hwp_document(*, converter=None)` | HWP 문서로 materialize합니다. |
-| `save_as_hwp(path, *, converter=None, force_refresh=True)` | HWP 파일로 저장합니다. |
-| `bridge(*, converter=None)` | `HwpHwpxBridge`로 감쌉니다. |
+| `HwpxDocument.blank()` | build a new blank HWPX document |
+| `HwpxDocument.open(path, validate=True)` | open an existing HWPX package |
+| `HwpxDocument.from_bytes(raw_bytes)` | open from bytes |
+| `compile(validate=True, auto_repair=True)` | compile the current package to bytes |
+| `save(path, validate=True, auto_repair=True)` | save to `.hwpx` |
+| `to_hancom_document()` | convert to `HancomDocument` |
+| `to_hwp_document()` | materialize native `HwpDocument` |
+| `save_as_hwp(path, *, converter=None, force_refresh=True)` | write native HWP |
 
-## Package part
+## Package and XML access
 
-| API | 설명 |
+| API | Purpose |
 |---|---|
-| `list_part_paths()` | package 안의 part path 목록을 반환합니다. |
-| `get_part(path, expected_type=None)` | part wrapper를 반환합니다. |
-| `add_part(path, raw_bytes)` | 새 package part를 추가합니다. |
-| `remove_part(path)` | package part를 제거합니다. |
-| `add_or_replace_binary(name, data, *, media_type=None, manifest_id=None, is_embedded=True)` | binary part를 추가하거나 교체합니다. |
-| `mimetype()` | `mimetype` part를 반환합니다. |
-| `content_hpf()` | content metadata part를 반환합니다. |
-| `header()` | header part를 반환합니다. |
-| `container()` | container part를 반환합니다. |
-| `preview_text()` | preview text part를 반환합니다. |
+| `list_part_paths()` | list package parts |
+| `get_part(path, expected_type=None)` | return a part wrapper |
+| `add_part(path, raw_bytes)` | add a package part |
+| `remove_part(path)` | remove a package part |
+| `add_or_replace_binary(name, data, *, media_type=None, manifest_id=None, is_embedded=True)` | manage binary parts |
+| `xml_part(path)` | return a generic XML wrapper |
+| `section_xml(section_index=0)` | return a section XML wrapper |
+| `header_xml()` | return the header XML wrapper |
+| `content_hpf_xml()` | return content metadata XML |
+| `settings_xml()` | return settings XML |
 
-## XML 접근
+## Paragraph editing
 
-| API | 설명 |
+| API | Purpose |
 |---|---|
-| `xml_part(path)` | XML part를 `HwpxXmlNode`로 반환합니다. |
-| `section_xml(section_index=0)` | 섹션 XML을 반환합니다. |
-| `header_xml()` | header XML을 반환합니다. |
-| `content_hpf_xml()` | content metadata XML을 반환합니다. |
-| `settings_xml()` | settings XML을 반환합니다. |
-| `append_control_xml(xml, *, section_index=0, paragraph_index=None, char_pr_id=None)` | control XML을 본문에 삽입합니다. |
-| `append_run_xml(xml, *, section_index=0, paragraph_index=None, char_pr_id=None)` | run XML을 본문에 삽입합니다. |
+| `append_paragraph(text, ...)` | add a paragraph |
+| `insert_paragraph(...)` | insert a paragraph at an index |
+| `set_paragraph_text(section_index, paragraph_index, text)` | replace paragraph text while preserving structural controls |
+| `delete_paragraph(section_index, paragraph_index)` | delete a paragraph |
+| `paragraph_count(section_index=0)` | count paragraphs |
+| `paragraph_xml(section_index, paragraph_index, pretty_print=False)` | inspect a paragraph as XML |
+| `insert_paragraph_xml(...)` | insert raw `hp:p` XML |
+| `replace_paragraph_xml(...)` | replace a paragraph with raw `hp:p` XML |
+| `move_paragraph(...)` | move a paragraph |
+| `copy_paragraph(...)` | copy a paragraph |
 
-## Metadata와 text
+## Generic authoring dispatchers
 
-| API | 설명 |
+Two generic dispatchers are now available on top of the existing explicit `append_*` APIs.
+
+### `append_block(type, content=None, **kwargs)`
+
+Insert a block-level control or paragraph.
+
+```python
+doc.append_block("equ", "x+y")
+doc.append_block("table", [["A", "B"], ["1", "2"]])
+doc.append_block("bookmark", "anchor_1")
+```
+
+### `append_inline(type, content=None, **kwargs)`
+
+Reuse the target paragraph instead of creating a new one.
+
+```python
+doc.append_paragraph("Inline math:")
+doc.append_inline("equ", "x+y")
+doc.append_inline("text", " = z")
+```
+
+If `paragraph_index` is omitted, `append_inline()` uses the current section's last paragraph.
+
+### Supported aliases
+
+| Alias examples | Canonical target |
 |---|---|
-| `metadata()` | `DocumentMetadata`를 반환합니다. |
-| `set_metadata(**values)` | metadata를 수정합니다. |
-| `get_document_text(section_separator="\n\n")` | 본문 텍스트를 추출합니다. |
-| `replace_text(old, new, count=-1, include_header=True)` | 텍스트를 치환하고 치환 횟수를 반환합니다. |
-| `set_preview_text(text)` | preview text를 설정합니다. |
+| `text`, `para`, `paragraph` | paragraph |
+| `eq`, `equ`, `equation` | equation |
+| `pic`, `image`, `picture` | picture |
+| `table`, `tbl` | table |
+| `bookmark` | bookmark |
+| `field` | field |
+| `link`, `hyperlink` | hyperlink |
+| `note`, `footnote`, `endnote` | note |
+| `form` | form |
+| `memo`, `comment` | memo |
+| `chart` | chart |
+| `autonum`, `newnum` | auto number |
+| `header`, `footer` | header or footer |
+| `shape`, `ole` | same name |
+
+Notes:
+
+- `append_inline("header", ...)` and `append_inline("footer", ...)` are rejected.
+- `append_block("picture", ...)` and `append_block("ole", ...)` require `data=...`.
+- `append_block("table", content=[[...]])` will infer `rows`, `columns`, and `cell_texts`.
+
+## Explicit append APIs
+
+The lower-level explicit APIs remain available and are still the most stable surface when you want precise control over arguments.
+
+| API | Return |
+|---|---|
+| `append_header(...)` | `HeaderFooterXml` |
+| `append_footer(...)` | `HeaderFooterXml` |
+| `append_note(...)` | `NoteXml` |
+| `append_footnote(...)` | `NoteXml` |
+| `append_endnote(...)` | `NoteXml` |
+| `append_form(...)` | `FormXml` |
+| `append_memo(...)` | `MemoXml` |
+| `append_chart(...)` | `ChartXml` |
+| `append_auto_number(...)` | `AutoNumberXml` |
+| `append_new_number(...)` | `AutoNumberXml` |
+| `append_equation(...)` | `EquationXml` |
+| `append_inline_equation(...)` | `EquationXml` |
+| `append_table(...)` | `TableXml` |
+| `append_picture(...)` | `PictureXml` |
+| `append_shape(...)` | `ShapeXml` |
+| `append_ole(...)` | `OleXml` |
+| `append_bookmark(...)` | `BookmarkXml` |
+| `append_field(...)` | `FieldXml` |
+| `append_hyperlink(...)` | `FieldXml` |
+| `append_mail_merge_field(...)` | `FieldXml` |
+| `append_calculation_field(...)` | `FieldXml` |
+| `append_cross_reference(...)` | `FieldXml` |
+
+## Control-level XML editing
+
+| API | Purpose |
+|---|---|
+| `append_control_xml(xml, *, section_index=0, paragraph_index=None, char_pr_id=None)` | append control XML |
+| `append_run_xml(xml, *, section_index=0, paragraph_index=None, char_pr_id=None)` | append run XML |
+| `control_count(section_index, paragraph_index)` | count top-level controls in a paragraph |
+| `insert_control_xml_at(...)` | insert control XML at an exact index |
+| `move_control(...)` | move a top-level control |
+| `copy_control(...)` | copy a top-level control |
+| `delete_control(...)` | delete a top-level control |
+
+These APIs are close to the raw HWPX structure. Use them when the higher-level append APIs are too restrictive.
 
 ## Selectors
 
-Selector는 XML wrapper list를 반환합니다. `section_index=None`이면 전체 섹션에서 찾습니다.
+Selectors return wrapper lists.
 
-| API | 반환 |
+| API | Return |
 |---|---|
-| `headers(section_index=None)`, `footers(section_index=None)` | `list[HeaderFooterXml]` |
-| `tables(section_index=None)` | `list[TableXml]` |
-| `pictures(section_index=None)` | `list[PictureXml]` |
-| `oles(section_index=None)` | `list[OleXml]` |
-| `notes(section_index=None)` | `list[NoteXml]` |
-| `memos(section_index=None)` | `list[MemoXml]` |
-| `forms(section_index=None)` | `list[FormXml]` |
-| `charts(section_index=None)` | `list[ChartXml]` |
-| `bookmarks(section_index=None)` | `list[BookmarkXml]` |
-| `fields(section_index=None)` | `list[FieldXml]` |
-| `hyperlinks(section_index=None)` | `list[FieldXml]` |
-| `auto_numbers(section_index=None)` | `list[AutoNumberXml]` |
-| `equations(section_index=None)` | `list[EquationXml]` |
-| `shapes(section_index=None)` | `list[ShapeXml]` |
-| `styles()`, `paragraph_styles()`, `character_styles()` | style wrapper list |
+| `headers()`, `footers()` | `list[HeaderFooterXml]` |
+| `tables()` | `list[TableXml]` |
+| `pictures()` | `list[PictureXml]` |
+| `oles()` | `list[OleXml]` |
+| `notes()` | `list[NoteXml]` |
+| `memos()` | `list[MemoXml]` |
+| `forms()` | `list[FormXml]` |
+| `charts()` | `list[ChartXml]` |
+| `bookmarks()` | `list[BookmarkXml]` |
+| `fields()` | `list[FieldXml]` |
+| `hyperlinks()` | `list[FieldXml]` |
+| `auto_numbers()` | `list[AutoNumberXml]` |
+| `equations()` | `list[EquationXml]` |
+| `shapes()` | `list[ShapeXml]` |
+| `styles()`, `paragraph_styles()`, `character_styles()` | style wrappers |
 | `memo_shapes()` | `list[MemoShapeXml]` |
 
-## 문단 편집
+## Validation and repair
 
-| API | 설명 |
+| API | Purpose |
 |---|---|
-| `append_paragraph(text, *, section_index=0, template_index=None, para_pr_id=None, style_id=None, char_pr_id=None)` | 문단을 추가합니다. |
-| `insert_paragraph(...)` | 지정 위치에 문단을 삽입합니다. |
-| `set_paragraph_text(section_index, paragraph_index, text)` | 문단 텍스트를 교체합니다. |
-| `delete_paragraph(section_index, paragraph_index)` | 문단을 삭제합니다. |
-| `apply_style_to_paragraph(section_index, paragraph_index, *, style_id=None, para_pr_id=None, char_pr_id=None)` | 문단에 스타일을 적용합니다. |
-| `apply_style_batch(*, section_index=None, text_contains=None, regex=None, style_id=None, para_pr_id=None, char_pr_id=None)` | 조건에 맞는 문단에 일괄 스타일을 적용하고 개수를 반환합니다. |
+| `validation_errors()` | basic validation issues |
+| `validate()` | raise on basic validation failure |
+| `reference_validation_errors()` | broken part or relationship references |
+| `roundtrip_validate()` | compile and reopen validation |
+| `strict_lint_errors()` | stricter semantic lint issues |
+| `strict_validate()` | raise on strict lint failure |
+| `strict_lint_report()` | structured lint report |
+| `format_strict_lint_errors()` | human-readable lint report |
+| `repair_stale_paragraph_layout()` | clear stale paragraph `linesegarray` cache patterns |
+| `HwpxDocument.repair(path, output_path=None)` | repair a file on disk |
 
-## 위치 기반 편집
+`save()` and `compile()` run with `auto_repair=True` by default.
 
-GUI 편집기처럼 기존 문서의 특정 위치를 직접 다뤄야 할 때 쓰는 API입니다. `append_*()`가 모르는 control도 raw XML로 넣을 수 있습니다.
-
-| API | 설명 |
-|---|---|
-| `paragraph_count(section_index=0)` | 섹션의 문단 수를 반환합니다. |
-| `paragraph_xml(section_index, paragraph_index, pretty_print=False)` | 문단 XML 문자열을 반환합니다. |
-| `insert_paragraph_xml(section_index, paragraph_index, xml)` | `hp:p` XML을 지정 위치에 삽입합니다. `paragraph_index=None`이면 끝에 추가합니다. |
-| `replace_paragraph_xml(section_index, paragraph_index, xml)` | 기존 문단을 `hp:p` XML로 교체합니다. |
-| `move_paragraph(source_section_index, source_paragraph_index, *, target_section_index=None, target_paragraph_index=None)` | 문단을 같은 섹션 또는 다른 섹션으로 이동합니다. |
-| `copy_paragraph(source_section_index, source_paragraph_index, *, target_section_index=None, target_paragraph_index=None)` | 문단을 복사합니다. 복사된 문단의 paragraph id는 새로 잡습니다. |
-| `control_count(section_index, paragraph_index)` | 문단 안의 top-level control 수를 반환합니다. |
-| `insert_control_xml_at(xml, *, section_index=0, paragraph_index=0, control_index=None, char_pr_id=None)` | control XML을 문단의 지정 위치에 삽입합니다. |
-| `move_control(source_section_index, source_paragraph_index, control_index, *, target_section_index=None, target_paragraph_index, target_control_index=None)` | 문단 안의 top-level control을 이동합니다. |
-| `copy_control(source_section_index, source_paragraph_index, control_index, *, target_section_index=None, target_paragraph_index, target_control_index=None)` | 문단 안의 top-level control을 복사합니다. |
-| `delete_control(section_index, paragraph_index, control_index)` | 문단 안의 top-level control을 삭제합니다. |
-
-이 API는 HWPX XML을 그대로 노출하므로 호출자가 구조를 책임져야 합니다. 저장 전에는 `strict_validate()`를 같이 쓰는 편이 안전합니다.
-
-## Control 추가
-
-| API | 반환 |
-|---|---|
-| `append_header(text="", *, apply_page_type="BOTH", hide_first=None, ...)` | `HeaderFooterXml` |
-| `append_footer(text="", *, apply_page_type="BOTH", hide_first=None, ...)` | `HeaderFooterXml` |
-| `append_note(text="", *, kind="footNote", number=None, ...)` | `NoteXml` |
-| `append_footnote(text="", *, number=None, ...)` | `NoteXml` |
-| `append_endnote(text="", *, number=None, ...)` | `NoteXml` |
-| `append_form(label="", *, form_type="INPUT", ...)` | `FormXml` |
-| `append_memo(text="", ...)` | `MemoXml` |
-| `append_chart(title="", *, chart_type="BAR", ...)` | `ChartXml` |
-| `append_auto_number(*, number=1, number_type="PAGE", kind="newNum", ...)` | `AutoNumberXml` |
-| `append_new_number(*, number=1, number_type="PAGE", ...)` | `AutoNumberXml` |
-| `append_equation(script, *, width=4800, height=2300, ...)` | `EquationXml` |
-| `append_table(rows, columns, *, cell_texts=None, ...)` | `TableXml` |
-| `append_picture(name, data, *, media_type=None, width=7200, height=7200, ...)` | `PictureXml` |
-| `append_shape(*, kind="rect", text="", width=12000, height=3200, ...)` | `ShapeXml` |
-| `append_ole(name, data, *, media_type="application/ole", ...)` | `OleXml` |
-| `append_bookmark(name, ...)` | `BookmarkXml` |
-| `append_field(*, field_type, display_text=None, name=None, parameters=None, ...)` | `FieldXml` |
-| `append_hyperlink(target, *, display_text=None, ...)` | `FieldXml` |
-| `append_mail_merge_field(field_name, *, display_text=None, ...)` | `FieldXml` |
-| `append_calculation_field(expression, *, display_text=None, ...)` | `FieldXml` |
-| `append_cross_reference(bookmark_name, *, display_text=None, ...)` | `FieldXml` |
-
-## Styles
-
-| API | 반환 |
-|---|---|
-| `append_style(name, *, english_name=None, style_id=None, style_type="PARA", ...)` | `StyleDefinitionXml` |
-| `append_paragraph_style(*, style_id=None, template_id=None, alignment_horizontal=None, ...)` | `ParagraphStyleXml` |
-| `append_character_style(*, style_id=None, template_id=None, text_color=None, ...)` | `CharacterStyleXml` |
-| `append_memo_shape(...)` | `MemoShapeXml` |
-| `get_style(style_id)` | `StyleDefinitionXml` |
-| `get_paragraph_style(style_id)` | `ParagraphStyleXml` |
-| `get_character_style(style_id)` | `CharacterStyleXml` |
-| `get_memo_shape(memo_shape_id)` | `MemoShapeXml` |
-
-## Validation
-
-| API | 설명 |
-|---|---|
-| `validation_errors()` | 기본 validation issue 목록 |
-| `validate()` | validation issue가 있으면 예외를 발생시킵니다. |
-| `roundtrip_validate()` | compile/reopen 경로를 검증합니다. |
-| `xml_validation_errors()` | XML 구조 issue |
-| `schema_validation_errors(schema_map)` | XSD schema validation issue |
-| `reference_validation_errors()` | part/reference issue |
-| `save_reopen_validation_errors()` | 저장 후 다시 열기 issue |
-| `strict_lint_errors()` | 엄격 lint issue |
-| `strict_validate()` | strict lint issue가 있으면 예외를 발생시킵니다. |
-| `strict_lint_report(include_none=False)` | 사람이 읽기 쉬운 report list |
-| `format_strict_lint_errors()` | report를 문자열로 formatting |
-
-## 예제
+## Example
 
 ```python
 from jakal_hwpx import HwpxDocument
 
-doc = HwpxDocument.open("input.hwpx")
-doc.set_metadata(title="최종본")
-doc.replace_text("초안", "최종")
-doc.append_footer("내부용", apply_page_type="BOTH")
-
-errors = doc.format_strict_lint_errors()
-if errors:
-    print(errors)
+doc = HwpxDocument.blank()
+doc.append_paragraph("Answer:")
+doc.append_inline("equ", "x+y")
+doc.append_inline("text", " = z")
+doc.append_block("note", "Check derivation", kind="footNote", number=1)
 
 doc.strict_validate()
 doc.save("build/output.hwpx")
 ```
 
-## 참고
+## Related docs
 
-- HWPX wrapper API는 XML 구조에 가까운 레이어입니다. 포맷 독립적인 문서 자동화에는 [`HancomDocument`](./hancom-document.md)를 먼저 고려하세요.
-- `append_control_xml()`과 `append_run_xml()`은 강력하지만, XML 구조를 직접 책임져야 합니다.
-- `save(validate=True)`는 저장 전 기본 validation을 실행합니다.
+- [README.md](../README.md)
+- [HWPX_MODULE.md](../HWPX_MODULE.md)
+- [hancom-document.md](./hancom-document.md)
+- [hwp-document.md](./hwp-document.md)

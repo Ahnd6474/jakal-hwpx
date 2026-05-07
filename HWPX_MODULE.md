@@ -1,220 +1,160 @@
-# `jakal_hwpx` 모듈 문서
+# `jakal_hwpx` module guide
 
-`jakal_hwpx`는 HWP/HWPX 문서를 Python 객체로 읽고, 편집하고, 다시 저장하기 위한 공개 모듈입니다. 이 문서는 `jakal_hwpx`의 public API 표면을 정리하는 인덱스입니다. 클래스별 세부 사용법은 `docs/` 아래 문서에서 관리합니다.
+This file is the public API index for `jakal_hwpx`.
 
-![jakal_hwpx의 문서 레이어](./docs/images/module-layers.svg)
+If you are starting fresh, read this in order:
 
-## 문서 구성
+1. [README.md](./README.md)
+2. [docs/hancom-document.md](./docs/hancom-document.md)
+3. [docs/hwpx-document.md](./docs/hwpx-document.md)
+4. [docs/hwp-document.md](./docs/hwp-document.md)
 
-| 문서 | 내용 |
-|---|---|
-| [docs/README.md](./docs/README.md) | `docs/` 폴더의 문서 목록과 읽는 순서 |
-| [docs/hancom-document.md](./docs/hancom-document.md) | `HancomDocument`와 공통 문서 모델 |
-| [docs/hwpx-document.md](./docs/hwpx-document.md) | `HwpxDocument`, HWPX package/XML API |
-| [docs/hwp-document.md](./docs/hwp-document.md) | `HwpDocument`, HWP 전용 객체 API |
-| [docs/bridge-and-binary.md](./docs/bridge-and-binary.md) | `HwpHwpxBridge`, `HwpBinaryDocument`, 저수준 조사 API |
-| [docs/hwpx2py.md](./docs/hwpx2py.md) | HWPX를 Python 작성 스크립트로 바꾸는 `hwpx2py` |
-| [docs/hwp2py.md](./docs/hwp2py.md) | HWP를 HWP 작성 스크립트로 바꾸는 `hwp2py` |
-| [STABILITY_CONTRACT.md](./STABILITY_CONTRACT.md) | 지원 범위, release gate, 안정성 기준 |
+## Public import rule
 
-## 공개 import 규칙
-
-공개 API는 루트 패키지에서 import하는 형태를 기준으로 문서화합니다.
+Prefer root-package imports:
 
 ```python
 from jakal_hwpx import HancomDocument, HwpxDocument, HwpDocument
 ```
 
-아래처럼 내부 모듈 경로를 직접 import하는 코드는 구현 세부사항에 묶일 수 있습니다.
+Direct submodule imports still work, but the root import path is the documented public entry point.
 
-```python
-from jakal_hwpx.hancom_document import HancomDocument
-from jakal_hwpx.document import HwpxDocument
-```
+## Main layers
 
-이 문서에 이름이 있더라도, 안정적인 진입점은 `jakal_hwpx` 루트 import입니다.
-
-## API 레이어
-
-| 레이어 | 공개 클래스 | 역할 |
+| Layer | Primary objects | Use it for |
 |---|---|---|
-| 공통 문서 모델 | `HancomDocument` | HWP/HWPX를 같은 객체 모델로 읽고 편집하고 저장 |
-| HWPX 포맷 모델 | `HwpxDocument` | HWPX package, XML part, HWPX 검증과 직접 편집 |
-| HWP 포맷 모델 | `HwpDocument` | HWP binary 문서의 객체 API와 직접 저장 |
-| 포맷 전환 도우미 | `HwpHwpxBridge` | HWP/HWPX/HancomDocument materialization 경로 관리 |
-| HWP binary 모델 | `HwpBinaryDocument` | stream, record tree, DocInfo, SectionModel 조사와 재인코드 |
-| 코드 생성 도구 | `generate_hwpx_script()`, `generate_hwp_script()` | HWPX/HWP를 Python 작성 스크립트로 변환 |
+| Format-neutral model | `HancomDocument`, `HancomSection`, block dataclasses | authoring, conversion, roundtrip-safe document workflows |
+| HWPX package model | `HwpxDocument`, `*Xml` wrappers, `HwpxXmlNode` | direct HWPX editing, XML placement, validation, package parts |
+| Native HWP model | `HwpDocument`, `Hwp*Object` wrappers | direct native HWP editing and inspection |
+| Binary inspection | `HwpBinaryDocument`, `RecordNode`, `SectionModel` | streams, records, DocInfo, low-level debugging |
+| Code generation | `generate_hwpx_script()`, `generate_hwp_script()` | recreate documents as Python scripts |
 
-일반 애플리케이션 코드는 `HancomDocument`부터 시작하는 것이 기본입니다. 포맷별 내부 구조를 직접 제어해야 할 때만 `HwpxDocument` 또는 `HwpDocument`로 내려갑니다.
+## Common public objects
 
-## 공개 API 맵
+### Document models
 
-### 주요 편집 클래스
+- `HancomDocument`
+- `HwpxDocument`
+- `HwpDocument`
+- `HwpHwpxBridge`
+- `HwpBinaryDocument`
 
-| 이름 | 설명 | 세부 문서 |
-|---|---|---|
-| `HancomDocument` | 공통 문서 편집 모델 | [HancomDocument](./docs/hancom-document.md) |
-| `HwpxDocument` | HWPX 직접 편집 모델 | [HwpxDocument](./docs/hwpx-document.md) |
-| `HwpDocument` | HWP 직접 편집 모델 | [HwpDocument](./docs/hwp-document.md) |
-| `HwpHwpxBridge` | 포맷 전환 도우미 | [Bridge and binary](./docs/bridge-and-binary.md) |
-| `HwpBinaryDocument` | HWP binary 저수준 모델 | [Bridge and binary](./docs/bridge-and-binary.md) |
-| `generate_hwpx_script()` | HWPX 입력에서 Python 소스 문자열 생성 | [hwpx2py](./docs/hwpx2py.md) |
-| `write_hwpx_script()` | HWPX 입력에서 Python 파일 생성 | [hwpx2py](./docs/hwpx2py.md) |
-| `generate_hwp_script()` | HWP 입력에서 HWP 작성용 Python 소스 문자열 생성 | [hwp2py](./docs/hwp2py.md) |
-| `write_hwp_script()` | HWP 입력에서 Python 파일 생성 | [hwp2py](./docs/hwp2py.md) |
+### Hancom block types
 
-### 공통 문서 모델
+- `Paragraph`
+- `Table`
+- `Picture`
+- `Shape`
+- `Equation`
+- `Ole`
+- `Field`
+- `Hyperlink`
+- `Bookmark`
+- `AutoNumber`
+- `Note`
+- `HeaderFooter`
+- `Memo`
+- `Form`
+- `Chart`
 
-`HancomDocument`는 문서를 dataclass 기반 block으로 표현합니다.
+### HWPX XML wrappers
 
-| 이름 | 역할 |
-|---|---|
-| `HancomMetadata` | 제목, 작성자, 주제, 날짜 같은 문서 metadata |
-| `HancomSection` | 섹션 설정, 머리말/꼬리말, 본문 block을 묶는 단위 |
-| `SectionSettings` | 용지, 여백, visibility, numbering, note 설정 |
-| `Paragraph`, `Table`, `Picture`, `Shape`, `Equation`, `Ole` | 본문 block |
-| `Field`, `Hyperlink`, `Bookmark`, `AutoNumber`, `Note` | 문서 참조와 control block |
-| `HeaderFooter` | 머리말/꼬리말 block |
-| `StyleDefinition`, `ParagraphStyle`, `CharacterStyle` | 스타일 정의 |
-| `NumberingDefinition`, `BulletDefinition`, `MemoShapeDefinition` | 번호, bullet, memo shape 정의 |
-| `Memo`, `Form`, `Chart` | memo/comment, form object, chart 표현 |
+- `HeaderFooterXml`
+- `TableXml`, `TableCellXml`
+- `PictureXml`
+- `ShapeXml`
+- `EquationXml`
+- `OleXml`
+- `FieldXml`
+- `BookmarkXml`
+- `AutoNumberXml`
+- `NoteXml`
+- `MemoXml`
+- `FormXml`
+- `ChartXml`
+- `ParagraphStyleXml`
+- `CharacterStyleXml`
+- `StyleDefinitionXml`
+- `SectionSettingsXml`
+- `HwpxXmlNode`
 
-필드 목록과 예제는 [docs/hancom-document.md](./docs/hancom-document.md)에 있습니다.
+### Native HWP wrappers
 
-### HWPX XML wrapper
+- `HwpParagraphObject`
+- `HwpTableObject`, `HwpTableCellObject`
+- `HwpPictureObject`
+- `HwpShapeObject`
+- `HwpEquationObject`
+- `HwpOleObject`
+- `HwpFieldObject`
+- `HwpHyperlinkObject`
+- `HwpBookmarkObject`
+- `HwpHeaderFooterObject`
+- `HwpNoteObject`
+- `HwpPageNumObject`
+- `HwpFormObject`
+- `HwpMemoObject`
+- `HwpChartObject`
 
-`HwpxDocument`의 selector와 append API는 XML wrapper를 반환합니다.
+### Exceptions
 
-기존 문서의 특정 위치를 GUI 편집기처럼 직접 다뤄야 할 때는 `paragraph_xml()`, `replace_paragraph_xml()`, `move_paragraph()`, `insert_control_xml_at()`, `move_control()`, `delete_control()` 같은 위치 기반 편집 API를 사용합니다.
+- `HwpxError`
+- `InvalidHwpxFileError`
+- `HwpxValidationError`
+- `InvalidHwpFileError`
+- `HwpBinaryEditError`
+- `HancomInteropError`
+- `ValidationIssue`
 
-| 이름 | 대표 용도 |
-|---|---|
-| `ParagraphStyleXml`, `CharacterStyleXml`, `StyleDefinitionXml` | HWPX 스타일 XML |
-| `HeaderFooterXml`, `SectionSettingsXml` | 섹션 관련 XML |
-| `TableXml`, `TableCellXml`, `PictureXml`, `ShapeXml`, `EquationXml`, `OleXml` | 본문 control XML |
-| `FieldXml`, `BookmarkXml`, `AutoNumberXml`, `NoteXml`, `MemoXml`, `FormXml`, `ChartXml` | 문서 control XML |
-| `HwpxXmlNode` | 임의 XML 노드 wrapper |
-| `HwpxPart`, `XmlPart`, `GenericXmlPart`, `GenericBinaryPart` 등 | package part wrapper |
+## Recommended entry points
 
-### HWP object wrapper
+### Start with `HancomDocument`
 
-`HwpDocument`는 HWP native control을 객체 wrapper로 노출합니다.
-
-| 이름 | 대표 용도 |
-|---|---|
-| `HwpParagraphObject`, `HwpSection` | 본문 문단과 섹션 |
-| `HwpTableObject`, `HwpTableCellObject` | HWP 표와 셀 |
-| `HwpPictureObject`, `HwpShapeObject`, `HwpEquationObject`, `HwpOleObject` | 그래픽/control object |
-| `HwpFieldObject`, `HwpHyperlinkObject`, `HwpBookmarkObject` | 필드와 참조 |
-| `HwpHeaderFooterObject`, `HwpNoteObject`, `HwpPageNumObject` | 섹션 보조 control |
-| `HwpFormObject`, `HwpMemoObject`, `HwpChartObject` | form, memo, chart |
-| `HwpLineShapeObject`, `HwpRectangleShapeObject`, `HwpEllipseShapeObject`, `HwpConnectLineShapeObject` 등 | shape subtype wrapper |
-
-### HWP binary record와 utility
-
-저수준 조사 API는 HWP stream과 record를 직접 다룹니다.
-
-| 이름 | 대표 용도 |
-|---|---|
-| `HwpRecord`, `RecordNode`, `TypedRecord` | binary record와 record tree |
-| `DocInfoModel`, `SectionModel`, `SectionParagraphModel` | DocInfo와 section model |
-| `HwpBinaryFileHeader`, `HwpDocumentProperties`, `HwpStreamCapacity` | 파일 헤더, 문서 속성, stream capacity |
-| `DocumentPropertiesRecord`, `IdMappingsRecord`, `BinDataRecord`, `FaceNameRecord`, `StyleRecord` 등 | 주요 DocInfo record |
-| `ControlHeaderRecord`, `TableControlRecord`, `PictureControlRecord`, `FieldControlRecord` 등 | HWP control record |
-| `build_record_tree()`, `flatten_record_tree()`, `hwp_tag_name()` | record tree 보조 함수 |
-
-### 예외
-
-| 이름 | 발생 상황 |
-|---|---|
-| `HwpxError` | HWPX 처리 중 기본 예외 |
-| `InvalidHwpxFileError` | HWPX package가 아니거나 필수 구조가 없을 때 |
-| `HwpxValidationError` | HWPX validation 실패 |
-| `InvalidHwpFileError` | HWP 파일 구조가 잘못됐을 때 |
-| `HwpBinaryEditError` | HWP binary edit가 안전하지 않을 때 |
-| `HancomInteropError` | 외부 Hancom converter/smoke 경로 실패 |
-| `ValidationIssue` | strict lint와 validation report의 단위 항목 |
-
-## 자주 쓰는 흐름
-
-### 한 번 만들고 두 포맷으로 저장
+Use this when the caller does not need to care whether the source is HWP or HWPX.
 
 ```python
 from jakal_hwpx import HancomDocument
 
-doc = HancomDocument.blank()
-doc.metadata.title = "보고서"
-doc.append_paragraph("본문")
-doc.append_table(rows=2, cols=2, cell_texts=[["A", "B"], ["1", "2"]])
-
-doc.write_to_hwpx("build/report.hwpx")
-doc.write_to_hwp("build/report.hwp")
+doc = HancomDocument.read_hwpx("input.hwpx")
+doc.append_paragraph("Done")
+doc.write_to_hwp("build/output.hwp")
 ```
 
-### HWP를 읽어 HWPX로 저장
+### Use `HwpxDocument` for exact placement
 
-```python
-from jakal_hwpx import HancomDocument
-
-doc = HancomDocument.read_hwp("input.hwp")
-doc.write_to_hwpx("build/output.hwpx")
-```
-
-### HWPX 직접 편집
+This layer now has both explicit append APIs and generic dispatchers.
 
 ```python
 from jakal_hwpx import HwpxDocument
 
-doc = HwpxDocument.open("input.hwpx")
-doc.replace_text("초안", "최종")
-doc.strict_validate()
-doc.save("build/output.hwpx")
+doc = HwpxDocument.blank()
+doc.append_paragraph("Inline math:")
+doc.append_inline("equ", "x+y")
+doc.append_inline("text", " = z")
+doc.append_block("equ", "a+b")
 ```
 
-### HWP 직접 편집
+### Use `HwpDocument` for native HWP work
 
 ```python
 from jakal_hwpx import HwpDocument
 
 doc = HwpDocument.open("input.hwp")
-doc.append_paragraph("추가 문단")
-doc.strict_validate()
+doc.append_paragraph("Added in native HWP mode")
 doc.save("build/output.hwp")
 ```
 
-### HWPX를 Python 스크립트로 변환
+## Detailed docs
 
-```bash
-hwpx2py input.hwpx -o recreate.py --strict
-python recreate.py build/recreated.hwpx
-```
+| File | Scope |
+|---|---|
+| [docs/hancom-document.md](./docs/hancom-document.md) | format-neutral document model |
+| [docs/hwpx-document.md](./docs/hwpx-document.md) | HWPX package editing and authoring |
+| [docs/hwp-document.md](./docs/hwp-document.md) | native HWP object model |
+| [docs/bridge-and-binary.md](./docs/bridge-and-binary.md) | bridge and binary internals |
+| [docs/hwpx2py.md](./docs/hwpx2py.md) | HWPX to Python script generation |
+| [docs/hwp2py.md](./docs/hwp2py.md) | HWP to Python script generation |
 
-생성된 스크립트는 `HancomDocument` 공개 API로 문서를 다시 만듭니다. Picture와 OLE payload는 base64로 넣어 `append_picture()`와 `append_ole()`로 복원하며, 구조만 비교할 때는 `--skip-binary-assets`로 제외할 수 있습니다.
+## Release and packaging
 
-`raw` 모드는 원본 package part를 embed하는 디버그 기준선입니다. 실제 개선 목표는 `semantic` 모드가 공개 API 호출만으로 더 많은 문단, 표, control 구조를 재생성하는 것입니다.
-
-### HWP를 Python 스크립트로 변환
-
-```bash
-hwp2py input.hwp -o recreate.py
-python recreate.py build/recreated.hwp
-```
-
-`hwp2py`는 raw 모드를 제공하지 않습니다. HWP를 `HancomDocument`로 읽은 뒤 공개 API 호출만으로 문서를 다시 만드는 스크립트를 생성하며, 생성된 스크립트의 기본 출력은 HWP입니다. 같은 모델을 HWPX로 저장해야 하면 생성된 스크립트의 `write_hwpx()`를 호출하면 됩니다.
-
-## 검증과 release check
-
-문서 저장 API는 내부 구조를 만들지만, 운영 코드에서는 저장 전후 검증을 함께 두는 것이 좋습니다.
-
-```bash
-python -m pytest tests/test_hancom_document.py tests/test_bridge.py -q
-python scripts/check_release.py
-```
-
-실제 한컴 프로그램에서 열림 여부를 검증하려면 Windows에서 smoke validation 스크립트를 사용합니다.
-
-```powershell
-powershell -ExecutionPolicy Bypass -File scripts/run_hancom_smoke_validation.ps1 -InputPath input.hwpx -OutputPath build\roundtrip.hwpx
-```
-
-지원 범위의 최종 기준은 [STABILITY_CONTRACT.md](./STABILITY_CONTRACT.md)를 따릅니다.
+Release checks and packaging steps are documented in [RELEASING.md](./RELEASING.md).

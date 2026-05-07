@@ -393,3 +393,197 @@ def test_replace_text_invalidates_linesegarray() -> None:
     assert replaced == 1
     assert "".join(paragraph.xpath(".//hp:t/text()", namespaces=NS)) == "alpha beta_LAYOUT_REFRESH gamma"
     assert not paragraph.xpath("./hp:linesegarray", namespaces=NS)
+
+
+def test_validate_flags_empty_paragraph_with_stale_lineseg_textpos() -> None:
+    document = HwpxDocument.blank()
+    paragraph = document.append_paragraph("", section_index=0).element
+
+    line_seg_array = etree.SubElement(paragraph, "{http://www.hancom.co.kr/hwpml/2011/paragraph}linesegarray")
+    line_seg = etree.SubElement(line_seg_array, "{http://www.hancom.co.kr/hwpml/2011/paragraph}lineseg")
+    line_seg.set("textpos", "18")
+
+    errors = document.validation_errors()
+
+    issue = next(error for error in errors if error.kind == "paragraph_layout_cache")
+    assert issue.section_index == 0
+    assert issue.paragraph_index == 1
+    assert issue.context == "textpos=18"
+
+
+def test_validate_allows_zero_textpos_on_empty_paragraph_linesegarray() -> None:
+    document = HwpxDocument.blank()
+    paragraph = document.append_paragraph("", section_index=0).element
+
+    line_seg_array = etree.SubElement(paragraph, "{http://www.hancom.co.kr/hwpml/2011/paragraph}linesegarray")
+    line_seg = etree.SubElement(line_seg_array, "{http://www.hancom.co.kr/hwpml/2011/paragraph}lineseg")
+    line_seg.set("textpos", "0")
+
+    assert not any(error.kind == "paragraph_layout_cache" for error in document.validation_errors())
+
+
+def test_save_auto_repairs_stale_paragraph_layout(tmp_path: Path) -> None:
+    document = HwpxDocument.blank()
+    paragraph = document.append_paragraph("", section_index=0).element
+
+    line_seg_array = etree.SubElement(paragraph, "{http://www.hancom.co.kr/hwpml/2011/paragraph}linesegarray")
+    line_seg = etree.SubElement(line_seg_array, "{http://www.hancom.co.kr/hwpml/2011/paragraph}lineseg")
+    line_seg.set("textpos", "18")
+
+    assert any(error.kind == "paragraph_layout_cache" for error in document.validation_errors())
+
+    output_path = tmp_path / "auto_repair_layout.hwpx"
+    document.save(output_path)
+
+    assert not any(error.kind == "paragraph_layout_cache" for error in document.validation_errors())
+
+    reopened = HwpxDocument.open(output_path)
+    assert not any(error.kind == "paragraph_layout_cache" for error in reopened.validation_errors())
+
+
+def test_repair_utility_fixes_saved_invalid_hwpx(tmp_path: Path) -> None:
+    document = HwpxDocument.blank()
+    paragraph = document.append_paragraph("", section_index=0).element
+
+    line_seg_array = etree.SubElement(paragraph, "{http://www.hancom.co.kr/hwpml/2011/paragraph}linesegarray")
+    line_seg = etree.SubElement(line_seg_array, "{http://www.hancom.co.kr/hwpml/2011/paragraph}lineseg")
+    line_seg.set("textpos", "18")
+
+    broken_path = tmp_path / "broken.hwpx"
+    document.save(broken_path, validate=False, auto_repair=False)
+
+    with pytest.raises(HwpxValidationError):
+        HwpxDocument.open(broken_path)
+
+    unrepaired = HwpxDocument.open(broken_path, validate=False)
+    repairs = unrepaired.repair_stale_paragraph_layout()
+    assert len(repairs) == 1
+    assert repairs[0].kind == "paragraph_layout_cache_repair"
+
+    repaired_path = HwpxDocument.repair(broken_path)
+    assert repaired_path.name == "broken_repaired.hwpx"
+
+    reopened = HwpxDocument.open(repaired_path)
+    assert reopened.validation_errors() == []
+
+
+def test_validate_flags_plain_text_lineseg_textpos_overflow() -> None:
+    document = HwpxDocument.blank()
+    paragraph = document.append_paragraph("2.1 기본 식별 정보", section_index=0).element
+
+    line_seg_array = etree.SubElement(paragraph, "{http://www.hancom.co.kr/hwpml/2011/paragraph}linesegarray")
+    first = etree.SubElement(line_seg_array, "{http://www.hancom.co.kr/hwpml/2011/paragraph}lineseg")
+    first.set("textpos", "0")
+    second = etree.SubElement(line_seg_array, "{http://www.hancom.co.kr/hwpml/2011/paragraph}lineseg")
+    second.set("textpos", "22")
+
+    issue = next(error for error in document.validation_errors() if error.kind == "paragraph_layout_cache")
+    assert issue.section_index == 0
+    assert issue.paragraph_index == 1
+    assert issue.context == "max_textpos=22;text_len=12;textpos=0,22"
+
+
+def test_save_auto_repairs_plain_text_lineseg_textpos_overflow(tmp_path: Path) -> None:
+    document = HwpxDocument.blank()
+    paragraph = document.append_paragraph("2.1 기본 식별 정보", section_index=0).element
+
+    line_seg_array = etree.SubElement(paragraph, "{http://www.hancom.co.kr/hwpml/2011/paragraph}linesegarray")
+    first = etree.SubElement(line_seg_array, "{http://www.hancom.co.kr/hwpml/2011/paragraph}lineseg")
+    first.set("textpos", "0")
+    second = etree.SubElement(line_seg_array, "{http://www.hancom.co.kr/hwpml/2011/paragraph}lineseg")
+    second.set("textpos", "22")
+
+    assert any(error.kind == "paragraph_layout_cache" for error in document.validation_errors())
+
+    output_path = tmp_path / "auto_repair_plaintext_lineseg.hwpx"
+    document.save(output_path)
+
+    reopened = HwpxDocument.open(output_path)
+    assert reopened.validation_errors() == []
+
+
+def test_validate_flags_caption_lineseg_textpos_overflow() -> None:
+    document = HwpxDocument.blank()
+    paragraph = etree.fromstring(
+        """
+        <hp:p xmlns:hp="http://www.hancom.co.kr/hwpml/2011/paragraph" id="0" paraPrIDRef="0" styleIDRef="0" pageBreak="0" columnBreak="0" merged="0">
+          <hp:run charPrIDRef="0">
+            <hp:pic id="1" zOrder="0" numberingType="PICTURE" textWrap="TOP_AND_BOTTOM" textFlow="BOTH_SIDES" lock="0" dropcapstyle="None" href="" groupLevel="0" instid="1" reverse="0">
+              <hp:caption side="BOTTOM" fullSz="0" width="100" gap="0" lastWidth="100">
+                <hp:subList id="" textDirection="HORIZONTAL" lineWrap="BREAK" vertAlign="TOP" linkListIDRef="0" linkListNextIDRef="0" textWidth="0" textHeight="0" hasTextRef="0" hasNumRef="0">
+                  <hp:p id="1" paraPrIDRef="21" styleIDRef="0" pageBreak="0" columnBreak="0" merged="0">
+                    <hp:run charPrIDRef="8">
+                      <hp:t>Figure 1. Example caption text</hp:t>
+                      <hp:ctrl>
+                        <hp:autoNum num="1" numType="PICTURE">
+                          <hp:autoNumFormat type="DIGIT" userChar="" prefixChar="" suffixChar="" supscript="0"/>
+                        </hp:autoNum>
+                      </hp:ctrl>
+                      <hp:t/>
+                    </hp:run>
+                    <hp:linesegarray>
+                      <hp:lineseg textpos="0"/>
+                      <hp:lineseg textpos="34"/>
+                      <hp:lineseg textpos="63"/>
+                    </hp:linesegarray>
+                  </hp:p>
+                </hp:subList>
+              </hp:caption>
+            </hp:pic>
+            <hp:t/>
+          </hp:run>
+        </hp:p>
+        """
+    )
+    section_root = document.sections[0].root_element
+    section_root.append(paragraph)
+    document.sections[0].mark_modified()
+
+    issue = next(error for error in document.validation_errors() if error.kind == "paragraph_layout_cache")
+    assert issue.section_index == 0
+    assert issue.paragraph_index == 1
+    assert issue.context == "max_textpos=63;text_len=30;textpos=0,34,63"
+
+
+def test_save_auto_repairs_caption_lineseg_textpos_overflow(tmp_path: Path) -> None:
+    document = HwpxDocument.blank()
+    paragraph = etree.fromstring(
+        """
+        <hp:p xmlns:hp="http://www.hancom.co.kr/hwpml/2011/paragraph" id="0" paraPrIDRef="0" styleIDRef="0" pageBreak="0" columnBreak="0" merged="0">
+          <hp:run charPrIDRef="0">
+            <hp:pic id="1" zOrder="0" numberingType="PICTURE" textWrap="TOP_AND_BOTTOM" textFlow="BOTH_SIDES" lock="0" dropcapstyle="None" href="" groupLevel="0" instid="1" reverse="0">
+              <hp:caption side="BOTTOM" fullSz="0" width="100" gap="0" lastWidth="100">
+                <hp:subList id="" textDirection="HORIZONTAL" lineWrap="BREAK" vertAlign="TOP" linkListIDRef="0" linkListNextIDRef="0" textWidth="0" textHeight="0" hasTextRef="0" hasNumRef="0">
+                  <hp:p id="1" paraPrIDRef="21" styleIDRef="0" pageBreak="0" columnBreak="0" merged="0">
+                    <hp:run charPrIDRef="8">
+                      <hp:t>Figure 1. Example caption text</hp:t>
+                      <hp:ctrl>
+                        <hp:autoNum num="1" numType="PICTURE">
+                          <hp:autoNumFormat type="DIGIT" userChar="" prefixChar="" suffixChar="" supscript="0"/>
+                        </hp:autoNum>
+                      </hp:ctrl>
+                      <hp:t/>
+                    </hp:run>
+                    <hp:linesegarray>
+                      <hp:lineseg textpos="0"/>
+                      <hp:lineseg textpos="34"/>
+                      <hp:lineseg textpos="63"/>
+                    </hp:linesegarray>
+                  </hp:p>
+                </hp:subList>
+              </hp:caption>
+            </hp:pic>
+            <hp:t/>
+          </hp:run>
+        </hp:p>
+        """
+    )
+    section_root = document.sections[0].root_element
+    section_root.append(paragraph)
+    document.sections[0].mark_modified()
+
+    output_path = tmp_path / "auto_repair_caption_lineseg.hwpx"
+    document.save(output_path)
+
+    reopened = HwpxDocument.open(output_path)
+    assert reopened.validation_errors() == []

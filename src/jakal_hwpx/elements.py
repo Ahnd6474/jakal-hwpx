@@ -173,6 +173,18 @@ def _set_optional_attributes(element: etree._Element | None, **attrs: object) ->
             element.set(key, str(value))
 
 
+def _optional_int_attr(node: etree._Element | None, attr_name: str) -> int | None:
+    if node is None:
+        return None
+    value = node.get(attr_name)
+    if value in (None, ""):
+        return None
+    try:
+        return int(value)
+    except ValueError:
+        return None
+
+
 def _graphic_layout(element: etree._Element) -> dict[str, str]:
     pos = _first_node(element, "./hp:pos")
     layout = {
@@ -279,10 +291,56 @@ def _set_graphic_size(
     extent_x: int | str | None = None,
     extent_y: int | str | None = None,
 ) -> None:
-    _set_optional_attributes(_first_node(element, "./hp:sz"), width=width, height=height)
-    _set_optional_attributes(_first_node(element, "./hp:orgSz"), width=original_width, height=original_height)
-    _set_optional_attributes(_first_node(element, "./hp:curSz"), width=current_width, height=current_height)
+    size_node = _first_node(element, "./hp:sz")
+    original_node = _first_node(element, "./hp:orgSz")
+    current_node = _first_node(element, "./hp:curSz")
+    previous_width = _optional_int_attr(size_node, "width")
+    previous_height = _optional_int_attr(size_node, "height")
+    previous_original_width = _optional_int_attr(original_node, "width")
+    previous_original_height = _optional_int_attr(original_node, "height")
+
+    _set_optional_attributes(size_node, width=width, height=height)
+    _set_optional_attributes(original_node, width=original_width, height=original_height)
+    _set_optional_attributes(current_node, width=current_width, height=current_height)
     _set_optional_attributes(_first_node(element, "./hc:extent"), x=extent_x, y=extent_y)
+
+    resolved_width = _optional_int_attr(size_node, "width")
+    resolved_height = _optional_int_attr(size_node, "height")
+    resolved_original_width = _optional_int_attr(original_node, "width")
+    resolved_original_height = _optional_int_attr(original_node, "height")
+
+    _sync_rotation_center_for_size(
+        element,
+        width=resolved_width,
+        height=resolved_height,
+        previous_width=previous_width,
+        previous_height=previous_height,
+    )
+    _sync_picture_size_geometry(
+        element,
+        width=resolved_width,
+        height=resolved_height,
+        original_width=resolved_original_width,
+        original_height=resolved_original_height,
+        previous_original_width=previous_original_width,
+        previous_original_height=previous_original_height,
+    )
+    _sync_shape_point_geometry(
+        element,
+        width=resolved_width,
+        height=resolved_height,
+        previous_width=previous_width,
+        previous_height=previous_height,
+    )
+    _sync_extent_for_size(
+        element,
+        width=resolved_width,
+        height=resolved_height,
+        previous_width=previous_width,
+        previous_height=previous_height,
+        extent_x=extent_x,
+        extent_y=extent_y,
+    )
 
 
 def _graphic_rotation(element: etree._Element) -> dict[str, str]:
@@ -313,6 +371,164 @@ def _set_graphic_rotation(
         centerY=center_y,
         rotateimage=rotate_image,
     )
+
+
+def _sync_rotation_center_for_size(
+    element: etree._Element,
+    *,
+    width: int | None,
+    height: int | None,
+    previous_width: int | None,
+    previous_height: int | None,
+) -> None:
+    if width is None and height is None:
+        return
+    node = _first_node(element, "./hp:rotationInfo")
+    if node is None:
+        return
+
+    angle = (node.get("angle") or "").strip()
+    current_center_x = _optional_int_attr(node, "centerX")
+    current_center_y = _optional_int_attr(node, "centerY")
+
+    if width is not None:
+        previous_default_x = None if previous_width is None else previous_width // 2
+        if (
+            current_center_x is None
+            or (previous_default_x is not None and current_center_x == previous_default_x)
+            or (current_center_x == 0 and angle in {"", "0"})
+        ):
+            node.set("centerX", str(width // 2))
+
+    if height is not None:
+        previous_default_y = None if previous_height is None else previous_height // 2
+        if (
+            current_center_y is None
+            or (previous_default_y is not None and current_center_y == previous_default_y)
+            or (current_center_y == 0 and angle in {"", "0"})
+        ):
+            node.set("centerY", str(height // 2))
+
+
+def _sync_picture_size_geometry(
+    element: etree._Element,
+    *,
+    width: int | None,
+    height: int | None,
+    original_width: int | None,
+    original_height: int | None,
+    previous_original_width: int | None,
+    previous_original_height: int | None,
+) -> None:
+    if width is not None and height is not None and original_width not in (None, 0) and original_height not in (None, 0):
+        scale = _first_node(element, "./hp:renderingInfo/hc:scaMatrix")
+        if scale is not None:
+            scale.set("e1", f"{width / original_width:.6f}")
+            scale.set("e5", f"{height / original_height:.6f}")
+
+    if original_width is None or original_height is None:
+        return
+
+    image_rect = _first_node(element, "./hp:imgRect")
+    if image_rect is not None:
+        for index, (x, y) in enumerate(((0, 0), (original_width, 0), (original_width, original_height), (0, original_height))):
+            point = _first_node(image_rect, f"./hc:pt{index}")
+            if point is not None:
+                point.set("x", str(x))
+                point.set("y", str(y))
+
+    image_dim = _first_node(element, "./hp:imgDim")
+    _set_optional_attributes(image_dim, dimwidth=original_width, dimheight=original_height)
+
+    image_clip = _first_node(element, "./hp:imgClip")
+    if image_clip is None:
+        return
+
+    current_left = _optional_int_attr(image_clip, "left")
+    current_right = _optional_int_attr(image_clip, "right")
+    current_top = _optional_int_attr(image_clip, "top")
+    current_bottom = _optional_int_attr(image_clip, "bottom")
+    if current_left is None or current_right is None or current_top is None or current_bottom is None:
+        return
+
+    if (
+        current_left == 0
+        and current_top == 0
+        and (
+            (current_right == 0 and current_bottom == 0)
+            or (
+                previous_original_width is not None
+                and previous_original_height is not None
+                and current_right == previous_original_width
+                and current_bottom == previous_original_height
+            )
+        )
+    ):
+        image_clip.set("left", "0")
+        image_clip.set("right", str(original_width))
+        image_clip.set("top", "0")
+        image_clip.set("bottom", str(original_height))
+
+
+def _sync_shape_point_geometry(
+    element: etree._Element,
+    *,
+    width: int | None,
+    height: int | None,
+    previous_width: int | None,
+    previous_height: int | None,
+) -> None:
+    if width is None or height is None or previous_width is None or previous_height is None:
+        return
+
+    draw_text = _first_node(element, "./hp:drawText")
+    if draw_text is not None:
+        draw_text.set("lastWidth", str(width))
+
+    points = [_first_node(element, f"./hc:pt{index}") for index in range(4)]
+    present_points = [point for point in points if point is not None]
+    if len(present_points) not in {2, 4}:
+        return
+
+    current_pairs = [(_optional_int_attr(point, "x"), _optional_int_attr(point, "y")) for point in present_points]
+    if len(present_points) == 2:
+        expected_pairs = [(0, 0), (previous_width, previous_height)]
+        replacement_pairs = [(0, 0), (width, height)]
+    else:
+        expected_pairs = [(0, 0), (previous_width, 0), (previous_width, previous_height), (0, previous_height)]
+        replacement_pairs = [(0, 0), (width, 0), (width, height), (0, height)]
+
+    if current_pairs != expected_pairs:
+        return
+
+    for point, (x, y) in zip(present_points, replacement_pairs, strict=True):
+        point.set("x", str(x))
+        point.set("y", str(y))
+
+
+def _sync_extent_for_size(
+    element: etree._Element,
+    *,
+    width: int | None,
+    height: int | None,
+    previous_width: int | None,
+    previous_height: int | None,
+    extent_x: int | str | None,
+    extent_y: int | str | None,
+) -> None:
+    node = _first_node(element, "./hc:extent")
+    if node is None:
+        return
+    if extent_x is not None or extent_y is not None:
+        _set_optional_attributes(node, x=extent_x, y=extent_y)
+        return
+
+    current_x = _optional_int_attr(node, "x")
+    current_y = _optional_int_attr(node, "y")
+    if width is not None and previous_width is not None and current_x == previous_width:
+        node.set("x", str(width))
+    if height is not None and previous_height is not None and current_y == previous_height:
+        node.set("y", str(height))
 
 
 def _line_style(element: etree._Element) -> dict[str, str]:
@@ -3376,6 +3592,17 @@ class ChartXml:
         height: int | str | None = None,
     ) -> None:
         _set_graphic_size(self.element, width=width, height=height)
+        fallback_ole = self._fallback_ole_element()
+        if fallback_ole is not None:
+            _set_graphic_size(
+                fallback_ole,
+                width=width,
+                height=height,
+                original_width=width,
+                original_height=height,
+                extent_x=width,
+                extent_y=height,
+            )
         self.section.mark_modified()
 
     def set_out_margins(

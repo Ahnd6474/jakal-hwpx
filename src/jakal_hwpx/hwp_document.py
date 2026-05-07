@@ -12,8 +12,10 @@ from .document import HwpxDocument
 from .hwp_binary import (
     _AUTO_NUMBER_TYPE_VALUES,
     _build_auto_number_payload,
+    _build_bookmark_ctrl_data_payload,
     _build_colorref,
     _build_control_id_payload,
+    _build_control_marker_text,
     _build_control_native_metadata_payload,
     _build_header_footer_control_payload,
     _build_ole_attribute_flags,
@@ -1888,9 +1890,15 @@ class HwpDocument:
         *,
         apply_page_type: str = "BOTH",
         section_index: int = 0,
-    ) -> None:
+    ) -> "HwpHeaderFooterObject | None":
         self._invalidate_bridge()
         self._binary_document.append_header(text, apply_page_type=apply_page_type, section_index=section_index)
+        controls = [
+            control
+            for control in self.section(section_index).controls()
+            if isinstance(control, HwpHeaderFooterObject) and control.kind == "header"
+        ]
+        return controls[-1] if controls else None
 
     def append_footer(
         self,
@@ -1898,9 +1906,15 @@ class HwpDocument:
         *,
         apply_page_type: str = "BOTH",
         section_index: int = 0,
-    ) -> None:
+    ) -> "HwpHeaderFooterObject | None":
         self._invalidate_bridge()
         self._binary_document.append_footer(text, apply_page_type=apply_page_type, section_index=section_index)
+        controls = [
+            control
+            for control in self.section(section_index).controls()
+            if isinstance(control, HwpHeaderFooterObject) and control.kind == "footer"
+        ]
+        return controls[-1] if controls else None
 
     def append_equation(
         self,
@@ -2524,11 +2538,11 @@ class HwpSection:
             paragraph_index=paragraph_index,
         )
 
-    def append_header(self, text: str, *, apply_page_type: str = "BOTH") -> None:
-        self.document.append_header(text, apply_page_type=apply_page_type, section_index=self.index)
+    def append_header(self, text: str, *, apply_page_type: str = "BOTH") -> "HwpHeaderFooterObject | None":
+        return self.document.append_header(text, apply_page_type=apply_page_type, section_index=self.index)
 
-    def append_footer(self, text: str, *, apply_page_type: str = "BOTH") -> None:
-        self.document.append_footer(text, apply_page_type=apply_page_type, section_index=self.index)
+    def append_footer(self, text: str, *, apply_page_type: str = "BOTH") -> "HwpHeaderFooterObject | None":
+        return self.document.append_footer(text, apply_page_type=apply_page_type, section_index=self.index)
 
     def append_equation(
         self,
@@ -4040,6 +4054,132 @@ class HwpHeaderFooterObject(HwpControlObject):
         control_node.payload = _build_header_footer_control_payload(self.control_id, apply_page_type=str(value).upper())
         self._commit(section_model)
 
+    def set_nested_blocks(self, blocks: Sequence[object]) -> None:
+        from .hancom_document import AutoNumber as HancomAutoNumber
+        from .hancom_document import Bookmark as HancomBookmark
+        from .hancom_document import Field as HancomField
+        from .hancom_document import Hyperlink as HancomHyperlink
+        from .hancom_document import Paragraph as HancomParagraph
+
+        section_model, _paragraph, control_node = self._live_context()
+        list_header = next((child.clone() for child in control_node.children if child.tag_id == TAG_LIST_HEADER), None)
+        template = next((child for child in control_node.children if isinstance(child, ParagraphHeaderRecord)), None)
+        if template is None:
+            raise ValueError("HWP header/footer control does not contain a writable paragraph header.")
+
+        grouped: dict[int, list[object]] = {}
+        for block in blocks:
+            grouped.setdefault(int(getattr(block, "nested_paragraph_index", 0)), []).append(block)
+        if not grouped:
+            grouped[0] = [HancomParagraph(text="")]
+
+        new_children: list[RecordNode] = []
+        if list_header is not None:
+            new_children.append(list_header)
+
+        for paragraph_index in sorted(grouped):
+            paragraph_blocks = grouped[paragraph_index]
+            paragraph_header = ParagraphHeaderRecord(
+                level=template.level,
+                char_count=0,
+                control_mask=template.control_mask,
+                para_shape_id=template.para_shape_id,
+                style_id=template.style_id,
+                split_flags=template.split_flags,
+                header_size=template.header_size,
+                offset=template.offset,
+                trailing_payload=template.trailing_payload,
+            )
+            raw_text_parts: list[str] = []
+            control_children: list[RecordNode] = []
+            hyperlink_only_payload: str | None = None
+
+            for block in paragraph_blocks:
+                if isinstance(block, HancomParagraph):
+                    if block.text:
+                        raw_text_parts.append(block.text)
+                    continue
+                if isinstance(block, HancomBookmark):
+                    raw_text_parts.append(_build_control_marker_text("bokm"))
+                    control_node_child = RecordNode(tag_id=TAG_CTRL_HEADER, level=template.level + 1, payload=_build_control_id_payload("bokm"))
+                    control_node_child.add_child(
+                        RecordNode(
+                            tag_id=TAG_CTRL_DATA,
+                            level=template.level + 2,
+                            payload=_build_bookmark_ctrl_data_payload(block.name),
+                        )
+                    )
+                    control_children.append(control_node_child)
+                    continue
+                if isinstance(block, HancomAutoNumber):
+                    control_id = "nwno" if str(block.kind).strip() == "newNum" else "atno"
+                    raw_text_parts.append(_build_control_marker_text(control_id))
+                    control_children.append(
+                        RecordNode(
+                            tag_id=TAG_CTRL_HEADER,
+                            level=template.level + 1,
+                            payload=_build_auto_number_payload(
+                                str(block.kind).strip(),
+                                number=block.number,
+                                number_type=block.number_type,
+                            ),
+                        )
+                    )
+                    continue
+                if isinstance(block, HancomHyperlink):
+                    display_text = block.display_text or block.target
+                    if len(paragraph_blocks) == 1:
+                        hyperlink_only_payload = _build_hyperlink_para_text_payload(display_text).decode("utf-16-le", errors="ignore")
+                    else:
+                        raw_text_parts.append(display_text)
+                    control_children.append(
+                        RecordNode(
+                            tag_id=TAG_CTRL_HEADER,
+                            level=template.level + 1,
+                            payload=_build_hyperlink_ctrl_payload(block.target, metadata_fields=block.metadata_fields),
+                        )
+                    )
+                    continue
+                if isinstance(block, HancomField):
+                    display_text = block.display_text or block.name or block.effective_native_field_type
+                    raw_text_parts.append(display_text)
+                    field_node = RecordNode(
+                        tag_id=TAG_CTRL_HEADER,
+                        level=template.level + 1,
+                        payload=_build_control_id_payload(_normalize_field_control_id(block.effective_native_field_type)),
+                    )
+                    parameters = dict(block.parameters)
+                    if block.name and not any(key in parameters for key in ("FieldName", "Name", "name")):
+                        parameters["FieldName"] = block.name
+                    if parameters:
+                        parameter_text = ";".join(f"{key}={value}" for key, value in parameters.items())
+                        field_node.add_child(
+                            RecordNode(
+                                tag_id=TAG_CTRL_DATA,
+                                level=template.level + 2,
+                                payload=parameter_text.encode("utf-16-le"),
+                            )
+                        )
+                    control_children.append(field_node)
+                    continue
+                if hasattr(block, "text") and getattr(block, "text", None):
+                    raw_text_parts.append(str(getattr(block, "text")))
+
+            raw_text = hyperlink_only_payload or (("".join(raw_text_parts)) + "\r" if raw_text_parts else "\r")
+            paragraph_header.char_count = len(raw_text)
+            paragraph_header.add_child(ParagraphTextRecord(level=template.level + 1, raw_text=raw_text))
+            for child in template.children:
+                if isinstance(child, ParagraphTextRecord) or child.tag_id == TAG_CTRL_HEADER:
+                    continue
+                paragraph_header.add_child(child.clone())
+            for child in control_children:
+                paragraph_header.add_child(child)
+            paragraph_header.sync_payload()
+            new_children.append(paragraph_header)
+
+        control_node.children = new_children
+        self._commit(section_model)
+
 
 class HwpNoteObject(HwpControlObject):
     def _note_ordinal(self, numbering_type: str) -> int:
@@ -4410,6 +4550,19 @@ class HwpShapeObject(HwpControlObject):
         fill_payload = common_payload[11:]
         return _parse_shape_fill_payload(fill_payload).get("faceColor", "#FFFFFF")
 
+    @property
+    def line_width(self) -> int:
+        metadata = self._shape_native_metadata()
+        if "line_width" in metadata:
+            try:
+                return int(metadata["line_width"])
+            except ValueError:
+                pass
+        shape_component = self._shape_component_record()
+        if shape_component is not None and len(shape_component.payload) >= 202:
+            return int.from_bytes(shape_component.payload[200:202], "little", signed=False)
+        return 33
+
     def descendant_tag_ids(self) -> list[int]:
         return [node.tag_id for node in self.control_node.iter_descendants()]
 
@@ -4418,6 +4571,9 @@ class HwpShapeObject(HwpControlObject):
 
     def out_margins(self) -> dict[str, int]:
         return self._graphic_out_margins()
+
+    def text_margins(self) -> dict[str, int]:
+        return _metadata_prefixed_int_map(self._shape_native_metadata(), "textMargin.")
 
     def rotation(self) -> dict[str, str]:
         shape_component = self._shape_component_record()
@@ -4444,6 +4600,15 @@ class HwpShapeObject(HwpControlObject):
             return {"width": width, "height": height}
         native_width, native_height = self._control_size()
         return {"width": native_width, "height": native_height}
+
+    def line_style(self) -> dict[str, str]:
+        metadata = _metadata_prefixed_str_map(self._shape_native_metadata(), "lineStyle.")
+        result = {
+            "color": self.line_color,
+            "width": str(self.line_width),
+        }
+        result.update(metadata)
+        return result
 
     def specific_fields(self) -> dict[str, object]:
         record = self._shape_specific_record()
@@ -4613,6 +4778,70 @@ class HwpShapeObject(HwpControlObject):
             control_node,
             updates={"rotation.rotateimage": rotate_image},
             remove_prefixes=("rotation.angle", "rotation.centerX", "rotation.centerY"),
+        )
+        self._commit(section_model)
+
+    def set_line_style(
+        self,
+        *,
+        color: str | None = None,
+        width: int | None = None,
+        style: str | None = None,
+        end_cap: str | None = None,
+        head_style: str | None = None,
+        tail_style: str | None = None,
+        head_fill: bool | None = None,
+        tail_fill: bool | None = None,
+        head_size: str | None = None,
+        tail_size: str | None = None,
+        outline_style: str | None = None,
+        alpha: int | str | None = None,
+    ) -> None:
+        section_model, _paragraph, control_node = self._live_context()
+        shape_component = self._shape_component_record(control_node)
+        if shape_component is not None and len(shape_component.payload) >= 202:
+            payload = bytearray(shape_component.payload)
+            if color is not None:
+                payload[196:200] = _build_colorref(color)
+            if width is not None:
+                payload[200:202] = max(0, min(int(width), 0xFFFF)).to_bytes(2, "little", signed=False)
+            shape_component.payload = bytes(payload)
+        _update_shape_native_metadata(
+            control_node,
+            updates={
+                "line_width": width,
+                "line_color": color,
+                "lineStyle.style": style,
+                "lineStyle.endCap": end_cap,
+                "lineStyle.headStyle": head_style,
+                "lineStyle.tailStyle": tail_style,
+                "lineStyle.headfill": head_fill,
+                "lineStyle.tailfill": tail_fill,
+                "lineStyle.headSz": head_size,
+                "lineStyle.tailSz": tail_size,
+                "lineStyle.outlineStyle": outline_style,
+                "lineStyle.alpha": alpha,
+            },
+        )
+        self._commit(section_model)
+
+    def set_text_margins(
+        self,
+        *,
+        left: int | str | None = None,
+        right: int | str | None = None,
+        top: int | str | None = None,
+        bottom: int | str | None = None,
+    ) -> None:
+        section_model, _paragraph, control_node = self._live_context()
+        _update_shape_native_metadata(
+            control_node,
+            updates={
+                "textMargin.left": left,
+                "textMargin.right": right,
+                "textMargin.top": top,
+                "textMargin.bottom": bottom,
+            },
         )
         self._commit(section_model)
 

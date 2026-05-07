@@ -214,6 +214,7 @@ def test_append_native_chart_roundtrip(tmp_path: Path) -> None:
         section_index=0,
     )
     chart.set_layout(text_wrap="SQUARE", text_flow="LEFT_ONLY", treat_as_char=False)
+    chart.set_size(width=4800, height=2600)
     chart.set_out_margins(left=1, right=2, top=3, bottom=4)
     chart.set_rotation(angle=15, center_x=120, center_y=240)
 
@@ -232,6 +233,7 @@ def test_append_native_chart_roundtrip(tmp_path: Path) -> None:
     assert charts[0].data_ref == "dataset-7"
     assert charts[0].legend_visible is False
     assert charts[0].shape_comment == "chart-note"
+    assert charts[0].size() == {"width": 4800, "height": 2600}
     assert charts[0].layout()["textFlow"] == "LEFT_ONLY"
     assert charts[0].rotation()["angle"] == "15"
     assert charts[0].rotation()["centerX"] == "120"
@@ -239,6 +241,19 @@ def test_append_native_chart_roundtrip(tmp_path: Path) -> None:
     assert reopened.oles() == []
     assert reopened.sections[0].root_element.xpath(".//hp:chart", namespaces=PARA_NS)
     assert reopened.sections[0].root_element.xpath(".//hp:chart/hp:shapeComment[text()='chart-note']", namespaces=PARA_NS)
+    assert reopened.sections[0].root_element.xpath(".//hp:chart/hp:sz[@width='4800'][@height='2600']", namespaces=PARA_NS)
+    assert reopened.sections[0].root_element.xpath(
+        ".//hp:switch[hp:case/hp:chart]/hp:default/hp:ole/hp:sz[@width='4800'][@height='2600']",
+        namespaces=PARA_NS,
+    )
+    assert reopened.sections[0].root_element.xpath(
+        ".//hp:switch[hp:case/hp:chart]/hp:default/hp:ole/hc:extent[@x='4800'][@y='2600']",
+        namespaces=PARA_NS,
+    )
+    assert reopened.sections[0].root_element.xpath(
+        ".//hp:switch[hp:case/hp:chart]/hp:default/hp:ole/hp:rotationInfo[@centerX='120'][@centerY='240']",
+        namespaces=PARA_NS,
+    )
     assert reopened.sections[0].root_element.xpath(".//hp:default/hp:ole", namespaces=PARA_NS)
     assert reopened.sections[0].root_element.xpath(
         ".//hp:switch[hp:case/hp:chart]/hp:default/hp:ole/hp:rotationInfo[@angle='15'][@centerX='120'][@centerY='240']",
@@ -661,6 +676,18 @@ def test_low_level_authoring_roundtrip(tmp_path: Path) -> None:
     assert reopened_picture.rotation()["rotateimage"] == "0"
     assert reopened_picture.image_adjustment() == {"bright": "5", "contrast": "6", "effect": "GRAY_SCALE", "alpha": "7"}
     assert reopened_picture.crop() == {"left": 1, "right": 2222, "top": 2, "bottom": 3333}
+    assert reopened_picture.element.xpath("./hp:orgSz/@width", namespaces=PARA_NS) == ["5555"]
+    assert reopened_picture.element.xpath("./hp:orgSz/@height", namespaces=PARA_NS) == ["6666"]
+    assert reopened_picture.element.xpath("./hp:curSz/@width", namespaces=PARA_NS) == ["3333"]
+    assert reopened_picture.element.xpath("./hp:curSz/@height", namespaces=PARA_NS) == ["4444"]
+    assert reopened_picture.element.xpath("./hp:rotationInfo/@centerX", namespaces=PARA_NS) == ["111"]
+    assert reopened_picture.element.xpath("./hp:rotationInfo/@centerY", namespaces=PARA_NS) == ["222"]
+    assert reopened_picture.element.xpath("./hp:renderingInfo/hc:scaMatrix/@e1", namespaces=PARA_NS) == ["0.600000"]
+    assert reopened_picture.element.xpath("./hp:renderingInfo/hc:scaMatrix/@e5", namespaces=PARA_NS) == ["0.666667"]
+    assert reopened_picture.element.xpath("./hp:imgRect/hc:pt2/@x", namespaces=PARA_NS) == ["5555"]
+    assert reopened_picture.element.xpath("./hp:imgRect/hc:pt2/@y", namespaces=PARA_NS) == ["6666"]
+    assert reopened_picture.element.xpath("./hp:imgDim/@dimwidth", namespaces=PARA_NS) == ["5555"]
+    assert reopened_picture.element.xpath("./hp:imgDim/@dimheight", namespaces=PARA_NS) == ["6666"]
 
     assert reopened_shape.size() == {"width": 5100, "height": 2200}
     assert reopened_shape.rotation()["angle"] == "25"
@@ -670,6 +697,13 @@ def test_low_level_authoring_roundtrip(tmp_path: Path) -> None:
     assert reopened_shape.line_style()["width"] == "55"
     assert reopened_shape.fill_style() == {"faceColor": "#ABCDEF", "hatchColor": "#123456", "alpha": "11"}
     assert reopened_shape.text_margins() == {"left": 1, "right": 2, "top": 3, "bottom": 4}
+    assert reopened_shape.element.xpath("./hp:orgSz/@width", namespaces=PARA_NS) == ["5300"]
+    assert reopened_shape.element.xpath("./hp:orgSz/@height", namespaces=PARA_NS) == ["2400"]
+    assert reopened_shape.element.xpath("./hp:curSz/@width", namespaces=PARA_NS) == ["5100"]
+    assert reopened_shape.element.xpath("./hp:curSz/@height", namespaces=PARA_NS) == ["2200"]
+    assert reopened_shape.element.xpath("./hp:drawText/@lastWidth", namespaces=PARA_NS) == ["5100"]
+    assert reopened_shape.element.xpath("./hc:pt1/@x", namespaces=PARA_NS) == ["5100"]
+    assert reopened_shape.element.xpath("./hc:pt2/@y", namespaces=PARA_NS) == ["2200"]
 
     assert reopened_equation.size() == {"width": 3200, "height": 1900}
     assert reopened_equation.rotation()["angle"] == "35"
@@ -681,6 +715,34 @@ def test_low_level_authoring_roundtrip(tmp_path: Path) -> None:
     assert reopened_ole.draw_aspect == "ICON"
     assert reopened_ole.has_moniker is True
     assert reopened_ole.extent() == {"x": 43000, "y": 14000}
+    assert reopened_ole.element.xpath("./hp:orgSz/@width", namespaces=PARA_NS) == ["43000"]
+    assert reopened_ole.element.xpath("./hp:orgSz/@height", namespaces=PARA_NS) == ["14000"]
+    assert reopened_ole.element.xpath("./hp:curSz/@width", namespaces=PARA_NS) == ["123"]
+    assert reopened_ole.element.xpath("./hp:curSz/@height", namespaces=PARA_NS) == ["456"]
+
+
+def test_picture_resize_updates_default_clip_but_preserves_explicit_crop() -> None:
+    image_bytes = base64.b64decode(
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO8B3ioAAAAASUVORK5CYII="
+    )
+
+    document = HwpxDocument.blank()
+    picture = document.append_picture("clip-sync.png", image_bytes, width=2400, height=1600)
+    picture.set_size(width=3000, height=2000, original_width=6000, original_height=4000)
+
+    assert picture.element.xpath("./hp:imgClip/@left", namespaces=PARA_NS) == ["0"]
+    assert picture.element.xpath("./hp:imgClip/@right", namespaces=PARA_NS) == ["6000"]
+    assert picture.element.xpath("./hp:imgClip/@top", namespaces=PARA_NS) == ["0"]
+    assert picture.element.xpath("./hp:imgClip/@bottom", namespaces=PARA_NS) == ["4000"]
+
+    picture.set_crop(left=10, right=5900, top=20, bottom=3980)
+    picture.set_size(width=3600, height=2400, original_width=7200, original_height=4800)
+
+    assert picture.crop() == {"left": 10, "right": 5900, "top": 20, "bottom": 3980}
+    assert picture.element.xpath("./hp:renderingInfo/hc:scaMatrix/@e1", namespaces=PARA_NS) == ["0.500000"]
+    assert picture.element.xpath("./hp:renderingInfo/hc:scaMatrix/@e5", namespaces=PARA_NS) == ["0.500000"]
+    assert picture.element.xpath("./hp:imgRect/hc:pt2/@x", namespaces=PARA_NS) == ["7200"]
+    assert picture.element.xpath("./hp:imgRect/hc:pt2/@y", namespaces=PARA_NS) == ["4800"]
 
 
 def test_hard_example_like_generation_roundtrip(tmp_path: Path) -> None:
@@ -932,6 +994,65 @@ def test_append_header_footer_notes_number_equation_and_styles_roundtrip(tmp_pat
     assert reopened_char_style.element.xpath("./hh:spacing/@hangul", namespaces=HEAD_NS)[0] == "5"
     assert reopened_char_style.element.xpath("./hh:ratio/@hangul", namespaces=HEAD_NS)[0] == "95"
     assert reopened_char_style.element.xpath("./hh:offset/@hangul", namespaces=HEAD_NS)[0] == "2"
+
+
+def test_append_inline_equation_reuses_current_paragraph(tmp_path: Path) -> None:
+    document = HwpxDocument.blank()
+    document.append_paragraph("INLINE-TEXT")
+
+    before = document.paragraph_count(0)
+    equation = document.append_inline_equation("x+y", width=3200, height=1800, shape_comment="INLINE-EQ")
+
+    assert document.paragraph_count(0) == before
+    assert equation.script == "x+y"
+
+    paragraph_xml = document.paragraph_xml(0, before - 1)
+    assert "INLINE-TEXT" in paragraph_xml
+    assert "<hp:equation" in paragraph_xml
+
+    output_path = tmp_path / "inline_equation.hwpx"
+    document.save(output_path)
+
+    reopened = HwpxDocument.open(output_path)
+    assert reopened.paragraph_count(0) == before
+    eq_paragraph = reopened.sections[0].root_element.xpath("./hp:p[.//hp:equation]", namespaces=PARA_NS)[0]
+    assert "".join(eq_paragraph.xpath(".//hp:t/text()", namespaces=PARA_NS)) == "INLINE-TEXT"
+    assert reopened.equations()[0].script == "x+y"
+    assert reopened.equations()[0].shape_comment == "INLINE-EQ"
+
+
+def test_append_block_and_append_inline_dispatchers_roundtrip(tmp_path: Path) -> None:
+    document = HwpxDocument.blank()
+    document.append_paragraph("INLINE")
+
+    before_inline = document.paragraph_count(0)
+    inline_text = document.append_inline("text", "-TEXT")
+    inline_equation = document.append_inline("equ", "x+y", width=3200, height=1800, shape_comment="INLINE-DISPATCH")
+    block_equation = document.append_block("equ", "z+w", width=2800, height=1700, shape_comment="BLOCK-DISPATCH")
+
+    assert inline_text is not None
+    assert inline_equation.script == "x+y"
+    assert block_equation.script == "z+w"
+    assert document.paragraph_count(0) == before_inline + 1
+
+    paragraphs = document.sections[0].root_element.xpath("./hp:p", namespaces=PARA_NS)
+    inline_paragraph = paragraphs[before_inline - 1]
+    block_paragraph = paragraphs[-1]
+
+    assert "".join(inline_paragraph.xpath(".//hp:t/text()", namespaces=PARA_NS)) == "INLINE-TEXT"
+    assert len(inline_paragraph.xpath(".//hp:equation", namespaces=PARA_NS)) == 1
+    assert len(block_paragraph.xpath(".//hp:equation", namespaces=PARA_NS)) == 1
+
+    output_path = tmp_path / "append_dispatchers.hwpx"
+    document.save(output_path)
+
+    reopened = HwpxDocument.open(output_path)
+    reopened_paragraphs = reopened.sections[0].root_element.xpath("./hp:p", namespaces=PARA_NS)
+    assert reopened.paragraph_count(0) == before_inline + 1
+    assert "".join(reopened_paragraphs[before_inline - 1].xpath(".//hp:t/text()", namespaces=PARA_NS)) == "INLINE-TEXT"
+    assert len(reopened_paragraphs[before_inline - 1].xpath(".//hp:equation", namespaces=PARA_NS)) == 1
+    assert len(reopened_paragraphs[-1].xpath(".//hp:equation", namespaces=PARA_NS)) == 1
+    assert {equation.script for equation in reopened.equations()} == {"x+y", "z+w"}
 
 
 def test_validation_errors_return_structured_issues() -> None:

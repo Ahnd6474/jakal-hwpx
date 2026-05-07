@@ -337,6 +337,7 @@ _CONTROL_MARKER_CODES = {
     "nwno": 0x15,
     "pgnp": 0x15,
     "gso ": 0x0B,
+    "eqed": 0x0B,
     "fn  ": 0x11,
     "en  ": 0x11,
     "bokm": 0x16,

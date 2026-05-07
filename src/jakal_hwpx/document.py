@@ -167,6 +167,36 @@ def _issue(
     )
 
 
+def _paragraph_has_visible_text(paragraph: etree._Element) -> bool:
+    return any((text or "").strip() for text in paragraph.xpath(".//hp:t//text()", namespaces=NS))
+
+
+def _paragraph_has_nontext_run_content(paragraph: etree._Element) -> bool:
+    return bool(paragraph.xpath("./hp:run/*[not(self::hp:t)]", namespaces=NS))
+
+
+def _paragraph_plain_text(paragraph: etree._Element) -> str:
+    return "".join(paragraph.xpath(".//hp:t/text()", namespaces=NS))
+
+
+def _paragraph_text_node_count(paragraph: etree._Element) -> int:
+    return len(paragraph.xpath("./hp:run/hp:t", namespaces=NS))
+
+
+def _containing_top_level_paragraph_index(
+    section_root: etree._Element,
+    paragraph: etree._Element,
+    top_level_indexes: dict[int, int],
+) -> int | None:
+    current: etree._Element | None = paragraph
+    while current is not None:
+        if current.getparent() is section_root:
+            return top_level_indexes.get(id(current))
+        parent = current.getparent()
+        current = parent if isinstance(parent, etree._Element) else None
+    return None
+
+
 def _clone_zip_info(source: zipfile.ZipInfo, filename: str) -> zipfile.ZipInfo:
     clone = zipfile.ZipInfo(filename=filename, date_time=source.date_time)
     clone.comment = source.comment
@@ -218,6 +248,50 @@ _MEMO_CARRIER_FIELD_TYPE = "JAKAL_MEMO"
 _BUTTON_FORM_TAGS = {"checkBtn", "radioBtn", "btn"}
 _DEFAULT_CHART_FALLBACK_OLE_FIXTURE = "tests/fixtures/charts/chart_01_single_column.hwpx"
 _DEFAULT_CHART_FALLBACK_OLE_BYTES: bytes | None = None
+
+_APPEND_BLOCK_TYPE_ALIASES = {
+    "text": "paragraph",
+    "para": "paragraph",
+    "paragraph": "paragraph",
+    "eq": "equation",
+    "equ": "equation",
+    "equation": "equation",
+    "image": "picture",
+    "img": "picture",
+    "pic": "picture",
+    "picture": "picture",
+    "shape": "shape",
+    "ole": "ole",
+    "table": "table",
+    "tbl": "table",
+    "bookmark": "bookmark",
+    "field": "field",
+    "link": "hyperlink",
+    "hyperlink": "hyperlink",
+    "note": "note",
+    "footnote": "note",
+    "endnote": "note",
+    "form": "form",
+    "memo": "memo",
+    "comment": "memo",
+    "chart": "chart",
+    "autonum": "auto_number",
+    "auto_number": "auto_number",
+    "auto-number": "auto_number",
+    "newnum": "auto_number",
+    "new_number": "auto_number",
+    "new-number": "auto_number",
+    "header": "header",
+    "footer": "footer",
+}
+
+
+def _canonical_append_block_type(value: str) -> str:
+    normalized = value.strip().lower().replace(" ", "_")
+    resolved = _APPEND_BLOCK_TYPE_ALIASES.get(normalized)
+    if resolved is None:
+        raise ValueError(f"Unsupported block type: {value!r}")
+    return resolved
 
 
 def _graphic_attribute_xpath(attribute: str) -> str:
@@ -562,22 +636,28 @@ class HwpxDocument:
         return cls()
 
     @classmethod
-    def open(cls, path: str | os.PathLike[str]) -> "HwpxDocument":
+    def open(cls, path: str | os.PathLike[str], *, validate: bool = True) -> "HwpxDocument":
         input_path = Path(path)
         if not input_path.exists():
             raise FileNotFoundError(input_path)
         if not zipfile.is_zipfile(input_path):
             raise InvalidHwpxFileError(f"{input_path} is not a valid zip-based HWPX package.")
         with zipfile.ZipFile(input_path) as archive:
-            return cls._from_zipfile(archive=archive, source_path=input_path)
+            return cls._from_zipfile(archive=archive, source_path=input_path, validate=validate)
 
     @classmethod
-    def from_bytes(cls, raw_bytes: bytes) -> "HwpxDocument":
+    def from_bytes(cls, raw_bytes: bytes, *, validate: bool = True) -> "HwpxDocument":
         with zipfile.ZipFile(io.BytesIO(raw_bytes)) as archive:
-            return cls._from_zipfile(archive=archive, source_path=None)
+            return cls._from_zipfile(archive=archive, source_path=None, validate=validate)
 
     @classmethod
-    def _from_zipfile(cls, archive: zipfile.ZipFile, source_path: Path | None) -> "HwpxDocument":
+    def _from_zipfile(
+        cls,
+        archive: zipfile.ZipFile,
+        source_path: Path | None,
+        *,
+        validate: bool,
+    ) -> "HwpxDocument":
         parts, part_order, zip_infos, duplicates = cls._read_zipfile_state(archive)
         document = cls(
             parts=parts,
@@ -586,8 +666,24 @@ class HwpxDocument:
             source_path=source_path,
             duplicate_entries=duplicates,
         )
-        document.validate()
+        if validate:
+            document.validate()
         return document
+
+    @classmethod
+    def repair(
+        cls,
+        path: str | os.PathLike[str],
+        output_path: str | os.PathLike[str] | None = None,
+    ) -> Path:
+        source_path = Path(path)
+        if output_path is None:
+            target_path = source_path.with_name(f"{source_path.stem}_repaired{source_path.suffix}")
+        else:
+            target_path = Path(output_path)
+        document = cls.open(source_path, validate=False)
+        document.repair_stale_paragraph_layout()
+        return document.save(target_path, validate=True)
 
     @staticmethod
     def _read_zipfile_state(
@@ -930,6 +1026,141 @@ class HwpxDocument:
                 errors.append(replace(issue, message=f"lost preserved nodes after edit: {', '.join(missing)}"))
         return errors
 
+    def _stale_paragraph_layout_targets(
+        self,
+    ) -> list[tuple[SectionPart, int, int | None, etree._Element, str, str]]:
+        targets: list[tuple[SectionPart, int, int | None, etree._Element, str, str]] = []
+        for section_index, section in enumerate(self.sections):
+            top_level_paragraphs = section.root_element.xpath("./hp:p", namespaces=NS)
+            top_level_indexes = {id(paragraph): index for index, paragraph in enumerate(top_level_paragraphs)}
+            for paragraph in section.root_element.xpath(".//hp:p[hp:linesegarray]", namespaces=NS):
+                text = _paragraph_plain_text(paragraph)
+                has_nontext_content = _paragraph_has_nontext_run_content(paragraph)
+                numeric_positions: list[int] = []
+                raw_positions: list[str] = []
+                for line_seg in paragraph.xpath("./hp:linesegarray/hp:lineseg[@textpos]", namespaces=NS):
+                    value = line_seg.get("textpos")
+                    if value is None:
+                        continue
+                    raw_positions.append(value)
+                    try:
+                        numeric_positions.append(int(value))
+                    except ValueError:
+                        continue
+                if not numeric_positions:
+                    continue
+
+                paragraph_index = _containing_top_level_paragraph_index(section.root_element, paragraph, top_level_indexes)
+                if not text.strip() and not has_nontext_content:
+                    stale_positions = [str(value) for value in numeric_positions if value > 0]
+                    if stale_positions:
+                        targets.append(
+                            (
+                                section,
+                                section_index,
+                                paragraph_index,
+                                paragraph,
+                                "empty_paragraph_textpos",
+                                f"textpos={','.join(stale_positions)}",
+                            )
+                        )
+                    continue
+
+                if has_nontext_content or _paragraph_text_node_count(paragraph) != 1:
+                    continue
+
+                max_textpos = max(numeric_positions)
+                if max_textpos > len(text):
+                    targets.append(
+                        (
+                            section,
+                            section_index,
+                            paragraph_index,
+                            paragraph,
+                            "plain_text_textpos_overflow",
+                            f"max_textpos={max_textpos};text_len={len(text)};textpos={','.join(raw_positions)}",
+                        )
+                    )
+
+            for paragraph in section.root_element.xpath(".//hp:caption/hp:subList/hp:p[hp:linesegarray]", namespaces=NS):
+                text = _paragraph_plain_text(paragraph)
+                if not text.strip():
+                    continue
+                raw_positions = [
+                    value
+                    for value in paragraph.xpath("./hp:linesegarray/hp:lineseg/@textpos", namespaces=NS)
+                    if str(value).lstrip("-").isdigit()
+                ]
+                if not raw_positions:
+                    continue
+                numeric_positions = [int(value) for value in raw_positions]
+                max_textpos = max(numeric_positions)
+                if max_textpos <= len(text):
+                    continue
+                paragraph_index = _containing_top_level_paragraph_index(section.root_element, paragraph, top_level_indexes)
+                targets.append(
+                    (
+                        section,
+                        section_index,
+                        paragraph_index,
+                        paragraph,
+                        "caption_textpos_overflow",
+                        f"max_textpos={max_textpos};text_len={len(text)};textpos={','.join(raw_positions)}",
+                    )
+                )
+        return targets
+
+    def stale_paragraph_layout_validation_errors(self) -> list[ValidationIssue]:
+        errors: list[ValidationIssue] = []
+        for section, section_index, paragraph_index, _paragraph, reason, context in self._stale_paragraph_layout_targets():
+            if reason == "plain_text_textpos_overflow":
+                message = (
+                    "Plain-text paragraph carries linesegarray text positions beyond the text length; "
+                    "Hancom may drop following content."
+                )
+            elif reason == "caption_textpos_overflow":
+                message = (
+                    "Caption paragraph carries linesegarray text positions beyond the caption text length; "
+                    "Hancom may drop the anchored object."
+                )
+            else:
+                message = "Empty paragraph carries stale linesegarray text positions; Hancom may drop following content."
+            errors.append(
+                _issue(
+                    "paragraph_layout_cache",
+                    message,
+                    part_path=section.path,
+                    section_index=section_index,
+                    paragraph_index=paragraph_index,
+                    xpath="./hp:linesegarray",
+                    context=context,
+                )
+            )
+        return errors
+
+    def repair_stale_paragraph_layout(self) -> list[ValidationIssue]:
+        repairs: list[ValidationIssue] = []
+        for section, section_index, paragraph_index, paragraph, reason, context in self._stale_paragraph_layout_targets():
+            _invalidate_paragraph_layout(paragraph)
+            section.mark_modified()
+            if reason == "plain_text_textpos_overflow":
+                message = "Removed stale linesegarray from plain-text paragraph."
+            elif reason == "caption_textpos_overflow":
+                message = "Removed stale linesegarray from caption paragraph."
+            else:
+                message = "Removed stale linesegarray from empty paragraph."
+            repairs.append(
+                _issue(
+                    "paragraph_layout_cache_repair",
+                    message,
+                    part_path=section.path,
+                    section_index=section_index,
+                    paragraph_index=paragraph_index,
+                    context=context,
+                )
+            )
+        return repairs
+
     def replace_text(self, old: str, new: str, count: int = -1, include_header: bool = True) -> int:
         targets: list[XmlPart] = list(self.sections)
         if include_header:
@@ -963,6 +1194,48 @@ class HwpxDocument:
             para_pr_id=para_pr_id,
             style_id=style_id,
             char_pr_id=char_pr_id,
+        )
+
+    def append_block(
+        self,
+        type: str,
+        content: object | None = None,
+        *,
+        section_index: int = 0,
+        paragraph_index: int | None = None,
+        char_pr_id: str | None = None,
+        **kwargs,
+    ):
+        self._ensure_editable_sections()
+        return self._dispatch_append_block(
+            type,
+            content,
+            section_index=section_index,
+            paragraph_index=paragraph_index,
+            char_pr_id=char_pr_id,
+            inline=False,
+            extra_kwargs=kwargs,
+        )
+
+    def append_inline(
+        self,
+        type: str,
+        content: object | None = None,
+        *,
+        section_index: int = 0,
+        paragraph_index: int | None = None,
+        char_pr_id: str | None = None,
+        **kwargs,
+    ):
+        self._ensure_editable_sections()
+        return self._dispatch_append_block(
+            type,
+            content,
+            section_index=section_index,
+            paragraph_index=paragraph_index,
+            char_pr_id=char_pr_id,
+            inline=True,
+            extra_kwargs=kwargs,
         )
 
     def insert_paragraph(
@@ -1990,6 +2263,224 @@ class HwpxDocument:
         section = self._append_run_child(section_index, paragraph_index, equation, char_pr_id=char_pr_id)
         return EquationXml(self, section, equation)
 
+    def append_inline_equation(
+        self,
+        script: str,
+        *,
+        section_index: int = 0,
+        paragraph_index: int | None = None,
+        char_pr_id: str | None = None,
+        width: int = 4800,
+        height: int = 2300,
+        treat_as_char: bool = True,
+        shape_comment: str | None = None,
+        text_color: str = "#000000",
+        base_unit: int = 1100,
+        font: str = "HYhwpEQ",
+        text_wrap: str = "TOP_AND_BOTTOM",
+        text_flow: str = "BOTH_SIDES",
+        affect_line_spacing: bool = False,
+        flow_with_text: bool = True,
+        allow_overlap: bool = False,
+        hold_anchor_and_so: bool = False,
+        vert_rel_to: str = "PARA",
+        horz_rel_to: str = "COLUMN",
+        vert_align: str = "TOP",
+        horz_align: str = "LEFT",
+        vert_offset: int = 0,
+        horz_offset: int = 0,
+        out_margin_left: int = 0,
+        out_margin_right: int = 0,
+        out_margin_top: int = 0,
+        out_margin_bottom: int = 0,
+    ) -> EquationXml:
+        self._ensure_editable_sections()
+        resolved_paragraph_index = paragraph_index
+        if resolved_paragraph_index is None:
+            paragraph_count = self.paragraph_count(section_index)
+            if paragraph_count <= 0:
+                self.append_paragraph("", section_index=section_index, char_pr_id=char_pr_id)
+                paragraph_count = self.paragraph_count(section_index)
+            resolved_paragraph_index = paragraph_count - 1
+        return self.append_equation(
+            script,
+            section_index=section_index,
+            paragraph_index=resolved_paragraph_index,
+            char_pr_id=char_pr_id,
+            width=width,
+            height=height,
+            treat_as_char=treat_as_char,
+            shape_comment=shape_comment,
+            text_color=text_color,
+            base_unit=base_unit,
+            font=font,
+            text_wrap=text_wrap,
+            text_flow=text_flow,
+            affect_line_spacing=affect_line_spacing,
+            flow_with_text=flow_with_text,
+            allow_overlap=allow_overlap,
+            hold_anchor_and_so=hold_anchor_and_so,
+            vert_rel_to=vert_rel_to,
+            horz_rel_to=horz_rel_to,
+            vert_align=vert_align,
+            horz_align=horz_align,
+            vert_offset=vert_offset,
+            horz_offset=horz_offset,
+            out_margin_left=out_margin_left,
+            out_margin_right=out_margin_right,
+            out_margin_top=out_margin_top,
+            out_margin_bottom=out_margin_bottom,
+        )
+
+    def _dispatch_append_block(
+        self,
+        type: str,
+        content: object | None,
+        *,
+        section_index: int,
+        paragraph_index: int | None,
+        char_pr_id: str | None,
+        inline: bool,
+        extra_kwargs: dict[str, object],
+    ):
+        requested_type = type.strip().lower().replace(" ", "_")
+        normalized_type = _canonical_append_block_type(type)
+        kwargs = dict(extra_kwargs)
+        kwargs.setdefault("section_index", section_index)
+        if char_pr_id is not None:
+            kwargs.setdefault("char_pr_id", char_pr_id)
+
+        if inline:
+            if normalized_type in {"header", "footer"}:
+                raise ValueError(f"append_inline() does not support block type {type!r}.")
+            kwargs["paragraph_index"] = self._resolve_inline_paragraph_index(
+                section_index=section_index,
+                paragraph_index=paragraph_index,
+                char_pr_id=char_pr_id,
+            )
+        elif paragraph_index is not None:
+            kwargs["paragraph_index"] = paragraph_index
+
+        if normalized_type == "paragraph":
+            if inline:
+                return self._append_inline_text(
+                    str(content or ""),
+                    section_index=section_index,
+                    paragraph_index=int(kwargs["paragraph_index"]),
+                    char_pr_id=char_pr_id,
+                )
+            return self.append_paragraph(str(content or ""), **kwargs)
+
+        if normalized_type == "equation":
+            script = str(content or "")
+            if inline:
+                return self.append_inline_equation(script, **kwargs)
+            return self.append_equation(script, **kwargs)
+
+        if normalized_type == "picture":
+            data = kwargs.pop("data", None)
+            if not isinstance(data, bytes):
+                raise ValueError("append_block(type='picture') requires bytes data=...")
+            return self.append_picture(str(content or ""), data, **kwargs)
+
+        if normalized_type == "shape":
+            if content is not None and "text" not in kwargs:
+                kwargs["text"] = str(content)
+            return self.append_shape(**kwargs)
+
+        if normalized_type == "ole":
+            data = kwargs.pop("data", None)
+            if not isinstance(data, bytes):
+                raise ValueError("append_block(type='ole') requires bytes data=...")
+            return self.append_ole(str(content or ""), data, **kwargs)
+
+        if normalized_type == "table":
+            if isinstance(content, list):
+                cell_texts = [[str(value) for value in row] for row in content]
+                kwargs.setdefault("cell_texts", cell_texts)
+                kwargs.setdefault("rows", len(cell_texts))
+                kwargs.setdefault("columns", max((len(row) for row in cell_texts), default=0))
+            rows = kwargs.pop("rows", None)
+            columns = kwargs.pop("columns", None)
+            if not isinstance(rows, int) or not isinstance(columns, int):
+                raise ValueError("append_block(type='table') requires rows=... and columns=..., or a 2D content list.")
+            return self.append_table(rows, columns, **kwargs)
+
+        if normalized_type == "bookmark":
+            return self.append_bookmark(str(content or ""), **kwargs)
+
+        if normalized_type == "field":
+            if content is not None and "display_text" not in kwargs:
+                kwargs["display_text"] = str(content)
+            return self.append_field(**kwargs)
+
+        if normalized_type == "hyperlink":
+            kwargs.setdefault("display_text", None)
+            return self.append_hyperlink(str(content or ""), **kwargs)
+
+        if normalized_type == "note":
+            if requested_type == "endnote":
+                kwargs.setdefault("kind", "endNote")
+            elif requested_type in {"note", "footnote"}:
+                kwargs.setdefault("kind", "footNote")
+            return self.append_note(str(content or ""), **kwargs)
+
+        if normalized_type == "form":
+            return self.append_form(str(content or ""), **kwargs)
+
+        if normalized_type == "memo":
+            return self.append_memo(str(content or ""), **kwargs)
+
+        if normalized_type == "chart":
+            return self.append_chart(str(content or ""), **kwargs)
+
+        if normalized_type == "auto_number":
+            if requested_type in {"newnum", "new_number", "new-number"}:
+                kwargs.setdefault("kind", "newNum")
+            if content is not None and "number" not in kwargs:
+                kwargs["number"] = content
+            return self.append_auto_number(**kwargs)
+
+        if normalized_type == "header":
+            return self.append_header(str(content or ""), **kwargs)
+
+        if normalized_type == "footer":
+            return self.append_footer(str(content or ""), **kwargs)
+
+        raise ValueError(f"Unsupported block type: {type!r}")
+
+    def _resolve_inline_paragraph_index(
+        self,
+        *,
+        section_index: int,
+        paragraph_index: int | None,
+        char_pr_id: str | None = None,
+    ) -> int:
+        if paragraph_index is not None:
+            return paragraph_index
+        paragraph_count = self.paragraph_count(section_index)
+        if paragraph_count <= 0:
+            self.append_paragraph("", section_index=section_index, char_pr_id=char_pr_id)
+            paragraph_count = self.paragraph_count(section_index)
+        return paragraph_count - 1
+
+    def _append_inline_text(
+        self,
+        text: str,
+        *,
+        section_index: int,
+        paragraph_index: int,
+        char_pr_id: str | None = None,
+    ) -> HwpxXmlNode:
+        paragraph = self._paragraph_element(section_index, paragraph_index)
+        run = self._append_run(paragraph, char_pr_id=char_pr_id)
+        text_node = etree.SubElement(run, qname("hp", "t"))
+        text_node.text = text
+        _invalidate_paragraph_layout(paragraph)
+        section = self.sections[section_index]
+        section.mark_modified()
+        return HwpxXmlNode(text_node, section)
+
     def append_paragraph_style(
         self,
         *,
@@ -2984,7 +3475,9 @@ class HwpxDocument:
         field.configure_cross_reference(bookmark_name, display_text=display_text)
         return field
 
-    def compile(self, validate: bool = True) -> bytes:
+    def compile(self, validate: bool = True, *, auto_repair: bool = True) -> bytes:
+        if auto_repair:
+            self.repair_stale_paragraph_layout()
         if validate:
             self.validate()
 
@@ -3004,10 +3497,10 @@ class HwpxDocument:
                 archive.writestr(info, data)
         return buffer.getvalue()
 
-    def save(self, path: str | os.PathLike[str], validate: bool = True) -> Path:
+    def save(self, path: str | os.PathLike[str], validate: bool = True, *, auto_repair: bool = True) -> Path:
         output_path = Path(path)
         output_path.parent.mkdir(parents=True, exist_ok=True)
-        output_path.write_bytes(self.compile(validate=validate))
+        output_path.write_bytes(self.compile(validate=validate, auto_repair=auto_repair))
         return output_path
 
     def to_hwp_document(self, *, converter=None):
@@ -3170,6 +3663,7 @@ class HwpxDocument:
             errors.append(_issue("document_structure", "Document must contain at least one section part"))
 
         errors.extend(self.control_preservation_validation_errors())
+        errors.extend(self.stale_paragraph_layout_validation_errors())
         return errors
 
     def validate(self) -> None:

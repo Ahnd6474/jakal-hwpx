@@ -13,11 +13,14 @@ from .document import DocumentMetadata, HwpxDocument
 from .hwp_binary import (
     TAG_BULLET,
     TAG_CHAR_SHAPE,
+    TAG_CTRL_HEADER,
     TAG_CTRL_DATA,
     TAG_MEMO_SHAPE,
     TAG_NUMBERING,
     TAG_PARA_SHAPE,
     TAG_STYLE,
+    ParagraphHeaderRecord,
+    SectionParagraphModel,
     TypedRecord,
     _build_memo_shape_native_metadata_payload,
 )
@@ -201,6 +204,7 @@ class Picture:
     crop: dict[str, int] = field(default_factory=dict)
     line_color: str = "#000000"
     line_width: int = 0
+    line_style: dict[str, str] = field(default_factory=dict)
     original_width: int | None = None
     original_height: int | None = None
     current_width: int | None = None
@@ -424,6 +428,7 @@ class Ole:
     eq_baseline: int = 0
     line_color: str = "#000000"
     line_width: int = 0
+    line_style: dict[str, str] = field(default_factory=dict)
     layout: dict[str, str] = field(default_factory=dict)
     out_margins: dict[str, int] = field(default_factory=dict)
     rotation: dict[str, str] = field(default_factory=dict)
@@ -1649,10 +1654,14 @@ class HancomDocument:
             footer_written = False
             for block in section.header_footer_blocks:
                 if block.kind == "header" and not header_written:
-                    document.append_header(block.text, apply_page_type=block.apply_page_type, section_index=section_index)
+                    header = document.append_header(block.text, apply_page_type=block.apply_page_type, section_index=section_index)
+                    if header is not None and block.nested_blocks and hasattr(header, "set_nested_blocks"):
+                        header.set_nested_blocks(block.nested_blocks)
                     header_written = True
                 elif block.kind == "footer" and not footer_written:
-                    document.append_footer(block.text, apply_page_type=block.apply_page_type, section_index=section_index)
+                    footer = document.append_footer(block.text, apply_page_type=block.apply_page_type, section_index=section_index)
+                    if footer is not None and block.nested_blocks and hasattr(footer, "set_nested_blocks"):
+                        footer.set_nested_blocks(block.nested_blocks)
                     footer_written = True
             binary_document = document.binary_document()
             batch_active = False
@@ -1723,7 +1732,9 @@ def _extract_hwp_section(section) -> HancomSection:
 def _extract_hwp_paragraph_blocks(paragraph, controls: list[object]) -> list[HancomBlock]:
     if not controls:
         text = _normalize_hwp_text(paragraph.text)
-        return [_build_hwp_paragraph_block(paragraph, text)] if text else []
+        if not text:
+            return []
+        return [_mark_hwpx_source_paragraph(_build_hwp_paragraph_block(paragraph, text), paragraph.index, order=0)]
 
     blocks: list[HancomBlock] = []
     pending_text_parts: list[str] = []
@@ -1758,7 +1769,10 @@ def _extract_hwp_paragraph_blocks(paragraph, controls: list[object]) -> list[Han
         block = _extract_hwp_control(control)
         if block is not None:
             blocks.append(block)
-    return blocks
+    return [
+        _mark_hwpx_source_paragraph(block, paragraph.index, order=index)
+        for index, block in enumerate(blocks)
+    ]
 
 
 def _extract_supported_nested_hwp_blocks(controls: list[object]) -> list[HancomBlock]:
@@ -1768,6 +1782,14 @@ def _extract_supported_nested_hwp_blocks(controls: list[object]) -> list[HancomB
         if isinstance(block, (AutoNumber, Bookmark, Note)):
             blocks.append(block)
     return blocks
+
+
+def _extract_hwp_nested_paragraph_blocks(paragraph, controls: list[object], paragraph_index: int) -> list[HancomBlock]:
+    blocks = _extract_hwp_paragraph_blocks(paragraph, controls)
+    return [
+        _mark_hwpx_nested_paragraph(block, paragraph_index, order=index)
+        for index, block in enumerate(blocks)
+    ]
 
 
 def _extract_hwp_section_settings(section) -> SectionSettings:
@@ -1949,6 +1971,7 @@ def _extract_hwp_control(control) -> HancomBlock | None:
     if isinstance(control, HwpPictureObject):
         size = control.size() if hasattr(control, "size") else {"width": 7200, "height": 7200}
         path = control.bindata_path()
+        line_style = dict(control.line_style()) if hasattr(control, "line_style") else {}
         return Picture(
             name=Path(path).name,
             data=control.binary_data(),
@@ -1963,6 +1986,7 @@ def _extract_hwp_control(control) -> HancomBlock | None:
             crop=dict(control.crop()) if hasattr(control, "crop") else {},
             line_color=getattr(control, "line_color", "#000000"),
             line_width=int(getattr(control, "line_width", 0)),
+            line_style=line_style,
         )
     if isinstance(control, HwpHyperlinkObject):
         return Hyperlink(
@@ -2004,6 +2028,7 @@ def _extract_hwp_control(control) -> HancomBlock | None:
         return Note(kind=control.kind, text=control.text, number=number)
     if isinstance(control, HwpOleObject):
         size = control.size()
+        line_style = dict(control.line_style()) if hasattr(control, "line_style") else {}
         return Ole(
             name=control.text or "embedded.ole",
             data=control.binary_data(),
@@ -2016,6 +2041,7 @@ def _extract_hwp_control(control) -> HancomBlock | None:
             eq_baseline=int(getattr(control, "eq_baseline", 0)),
             line_color=getattr(control, "line_color", "#000000"),
             line_width=int(getattr(control, "line_width", 0)),
+            line_style=line_style,
             layout=dict(control.layout()) if hasattr(control, "layout") else {},
             out_margins=dict(control.out_margins()) if hasattr(control, "out_margins") else {},
             rotation=dict(control.rotation()) if hasattr(control, "rotation") else {},
@@ -2039,6 +2065,7 @@ def _extract_hwp_control(control) -> HancomBlock | None:
         )
     if isinstance(control, HwpShapeObject):
         size = control.size()
+        line_style = dict(control.line_style()) if hasattr(control, "line_style") else {}
         return Shape(
             kind=control.kind,
             text=control.text,
@@ -2050,7 +2077,10 @@ def _extract_hwp_control(control) -> HancomBlock | None:
             layout=dict(control.layout()) if hasattr(control, "layout") else {},
             out_margins=dict(control.out_margins()) if hasattr(control, "out_margins") else {},
             rotation=dict(control.rotation()) if hasattr(control, "rotation") else {},
+            text_margins=dict(control.text_margins()) if hasattr(control, "text_margins") else {},
             specific_fields=dict(control.specific_fields()) if hasattr(control, "specific_fields") else {},
+            line_width=int(getattr(control, "line_width", 33)),
+            line_style=line_style,
         )
     if isinstance(control, HwpEquationObject):
         size = control.size() if hasattr(control, "size") else {"width": 4800, "height": 2300}
@@ -2487,7 +2517,10 @@ def _apply_hwpx_picture_block(picture, block: Picture) -> None:
         picture.set_image_adjustment(**block.image_adjustment)
     if block.crop:
         picture.set_crop(**block.crop)
-    if block.has_line_node or block.line_width > 0 or block.line_color != "#000000":
+    line_style_kwargs = _hwpx_line_style_kwargs(block.line_style)
+    if line_style_kwargs:
+        picture.set_line_style(**line_style_kwargs)
+    elif block.has_line_node or block.line_width > 0 or block.line_color != "#000000":
         picture.set_line_style(color=block.line_color, width=block.line_width, style="SOLID" if block.line_width > 0 else "NONE")
     _apply_hwpx_optional_graphic_nodes(
         picture,
@@ -2622,7 +2655,11 @@ def _apply_hwpx_ole_block(ole, block: Ole) -> None:
         ole.set_rotation(**_hwpx_rotation_kwargs(block.rotation))
     if block.extent:
         ole.set_extent(**block.extent)
-    ole.set_line_style(color=block.line_color, width=block.line_width, style="SOLID" if block.line_width > 0 else "NONE")
+    line_style_kwargs = _hwpx_line_style_kwargs(block.line_style)
+    if line_style_kwargs:
+        ole.set_line_style(**line_style_kwargs)
+    else:
+        ole.set_line_style(color=block.line_color, width=block.line_width, style="SOLID" if block.line_width > 0 else "NONE")
     _apply_hwpx_optional_graphic_nodes(
         ole,
         has_position_node=block.has_position_node,
@@ -2761,7 +2798,10 @@ def _append_hancom_block_to_hwp(
             picture.set_image_adjustment(**block.image_adjustment)
         if block.crop:
             picture.set_crop(**block.crop)
-        if block.line_color or block.line_width:
+        line_style_kwargs = _hwpx_line_style_kwargs(block.line_style)
+        if line_style_kwargs:
+            picture.set_line_style(**line_style_kwargs)
+        elif block.line_color or block.line_width:
             picture.set_line_style(color=block.line_color, width=block.line_width)
         return
     if isinstance(block, Hyperlink):
@@ -2857,6 +2897,11 @@ def _append_hancom_block_to_hwp(
             shape.set_out_margins(**block.out_margins)
         if block.rotation:
             shape.set_rotation(**_hwpx_rotation_kwargs(block.rotation))
+        line_style_kwargs = _hwpx_line_style_kwargs(block.line_style)
+        if line_style_kwargs:
+            shape.set_line_style(**line_style_kwargs)
+        if block.text_margins and hasattr(shape, "set_text_margins"):
+            shape.set_text_margins(**block.text_margins)
         return
     if isinstance(block, Chart):
         chart = document.append_chart(
@@ -2905,7 +2950,10 @@ def _append_hancom_block_to_hwp(
             ole.set_rotation(**_hwpx_rotation_kwargs(block.rotation))
         if block.extent:
             ole.set_extent(**block.extent)
-        if block.line_color or block.line_width:
+        line_style_kwargs = _hwpx_line_style_kwargs(block.line_style)
+        if line_style_kwargs:
+            ole.set_line_style(**line_style_kwargs)
+        elif block.line_color or block.line_width:
             ole.set_line_style(color=block.line_color, width=block.line_width)
         return
 
@@ -2962,11 +3010,47 @@ def _normalize_hwp_setting_scalar(value: object | None) -> str | None:
 def _extract_hwp_header_footer(control) -> HeaderFooter | None:
     text = getattr(control, "text", "")
     if not text:
-        return None
+        text = ""
     kind = getattr(control, "kind", "")
     if kind not in {"header", "footer"}:
         return None
-    return HeaderFooter(kind=kind, text=text, apply_page_type=getattr(control, "apply_page_type", "BOTH") or "BOTH")
+    nested_blocks = _extract_hwp_header_footer_nested_blocks(control)
+    if not text and not nested_blocks:
+        return None
+    return HeaderFooter(
+        kind=kind,
+        text=text,
+        apply_page_type=getattr(control, "apply_page_type", "BOTH") or "BOTH",
+        nested_blocks=nested_blocks,
+    )
+
+
+def _extract_hwp_header_footer_nested_blocks(control) -> list[HancomBlock]:
+    from .hwp_document import _build_control_wrapper
+
+    blocks: list[HancomBlock] = []
+    paragraph_index = 0
+    section_model = control.document.section_model(control.section_index)
+    for child in control.control_node.children:
+        if not isinstance(child, ParagraphHeaderRecord):
+            continue
+        paragraph = SectionParagraphModel(
+            section_index=control.section_index,
+            index=paragraph_index,
+            header=child,
+        )
+        control_ordinal = 0
+        controls: list[object] = []
+        for nested_child in child.children:
+            if nested_child.tag_id != TAG_CTRL_HEADER:
+                continue
+            wrapper = _build_control_wrapper(control.document, section_model, paragraph, nested_child, control_ordinal)
+            if wrapper is not None:
+                controls.append(wrapper)
+                control_ordinal += 1
+        blocks.extend(_extract_hwp_nested_paragraph_blocks(paragraph, controls, paragraph_index))
+        paragraph_index += 1
+    return blocks
 
 
 def _extract_hwpx_section(section) -> HancomSection:
@@ -3451,6 +3535,7 @@ def _extract_hwpx_picture(picture) -> Picture:
         crop=_normalize_int_map(picture.crop()) if hasattr(picture, "crop") else {},
         line_color=line_style.get("color", "#000000"),
         line_width=int(line_style.get("width") or "0"),
+        line_style=_normalize_str_map(line_style),
         has_size_node=bool(size_nodes),
         size_attributes=_extract_hwpx_graphic_size_attributes(picture.element),
         has_line_node=bool(picture.element.xpath("./hp:lineShape", namespaces=NS)),
@@ -3576,6 +3661,7 @@ def _extract_hwpx_ole(ole) -> Ole:
         eq_baseline=int(ole.element.get("eqBaseLine", "0")),
         line_color=line_style.get("color", "#000000"),
         line_width=int(line_style.get("width") or "0"),
+        line_style=_normalize_str_map(line_style),
         layout=_normalize_str_map(ole.layout()),
         out_margins=_normalize_int_map(ole.out_margins()),
         rotation=_normalize_str_map(ole.rotation()),
@@ -5937,18 +6023,8 @@ def _page_number_xml(page_number: dict[str, str]) -> str:
 
 def _apply_header_footer_blocks(document: HwpxDocument, section_index: int, blocks: list[HeaderFooter]) -> None:
     for block in blocks:
-        if block.kind == "header":
-            document.append_header(
-                block.text,
-                apply_page_type=block.apply_page_type,
-                section_index=section_index,
-            )
-        elif block.kind == "footer":
-            document.append_footer(
-                block.text,
-                apply_page_type=block.apply_page_type,
-                section_index=section_index,
-            )
+        paragraph_index = _append_control_host_paragraph(document, section_index)
+        _append_header_footer_block_to_hwpx(document, section_index, paragraph_index, block)
 
 
 def _apply_styles(document: HwpxDocument, hancom_document: HancomDocument) -> None:

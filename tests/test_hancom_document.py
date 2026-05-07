@@ -25,7 +25,17 @@ from jakal_hwpx import (
     Shape,
     Table,
 )
-from jakal_hwpx.hwp_binary import TAG_BULLET, TAG_NUMBERING
+from jakal_hwpx.hwp_binary import (
+    TAG_BULLET,
+    TAG_CTRL_HEADER,
+    TAG_EQEDIT,
+    TAG_NUMBERING,
+    RecordNode,
+    _DEFAULT_EQUATION_CTRL_HEADER,
+    _append_control_marker_to_paragraph,
+    _build_equation_payload,
+    _build_graphic_control_header_payload,
+)
 from jakal_hwpx.hancom_document import _normalize_hwp_text, _tokenize_hwp_paragraph_raw_text
 from jakal_hwpx.namespaces import NS
 
@@ -1205,6 +1215,81 @@ def test_hancom_document_reads_richer_native_hwp_equation_shape_and_ole_controls
     assert reopened_hwpx.oles()[0].layout()["treatAsChar"] == "0"
 
 
+def test_hancom_document_preserves_inline_native_hwp_equation_paragraphs_through_hwpx_bridge(tmp_path: Path) -> None:
+    source = HwpDocument.blank()
+    source.append_paragraph("INLINE-EQ")
+
+    section_model = source.section_model(0)
+    paragraph = section_model.paragraphs()[-1]
+    _append_control_marker_to_paragraph(paragraph, "eqed")
+    control_node = RecordNode(
+        tag_id=TAG_CTRL_HEADER,
+        level=1,
+        payload=_build_graphic_control_header_payload(
+            _DEFAULT_EQUATION_CTRL_HEADER,
+            "eqed",
+            width=3200,
+            height=1800,
+            description="INLINE-EQ-COMMENT",
+        ),
+    )
+    control_node.add_child(
+        RecordNode(
+            tag_id=TAG_EQEDIT,
+            level=2,
+            payload=_build_equation_payload("x+y", font="Batang"),
+        )
+    )
+    paragraph.header.add_child(control_node)
+    source.binary_document().replace_section_model(0, section_model)
+
+    source_path = tmp_path / "inline_equation_source.hwp"
+    source.save(source_path)
+
+    document = HancomDocument.read_hwp(source_path)
+    paragraphs = [block for block in document.sections[0].blocks if isinstance(block, Paragraph)]
+    equations = [block for block in document.sections[0].blocks if isinstance(block, Equation)]
+
+    assert len(paragraphs) == 1
+    assert len(equations) == 1
+    assert getattr(paragraphs[0], "source_paragraph_index", None) == getattr(equations[0], "source_paragraph_index", None)
+
+    reopened_hwpx = document.to_hwpx_document()
+    section_root = reopened_hwpx.sections[0].root_element
+    eq_paragraphs = section_root.xpath("./hp:p[.//hp:equation]", namespaces=NS)
+
+    assert len(eq_paragraphs) == 1
+    assert len(section_root.xpath("./hp:p", namespaces=NS)) == 1
+    assert "".join(eq_paragraphs[0].xpath(".//hp:t/text()", namespaces=NS)) == "INLINE-EQ"
+
+
+def test_hancom_document_preserves_inline_hwpx_equation_paragraphs_through_hwpx_roundtrip(tmp_path: Path) -> None:
+    source = HwpxDocument.blank()
+    source.append_paragraph("INLINE-HWPX")
+    source.append_equation("x+y", paragraph_index=1, width=3200, height=1800)
+
+    source_path = tmp_path / "inline_equation_source.hwpx"
+    source.save(source_path)
+
+    document = HancomDocument.read_hwpx(source_path)
+    paragraphs = [block for block in document.sections[0].blocks if isinstance(block, Paragraph)]
+    equations = [block for block in document.sections[0].blocks if isinstance(block, Equation)]
+
+    inline_paragraph = next(block for block in paragraphs if block.text == "INLINE-HWPX")
+    inline_equation = next(block for block in equations if block.script == "x+y")
+
+    assert getattr(inline_paragraph, "source_paragraph_index", None) == 1
+    assert getattr(inline_paragraph, "source_paragraph_index", None) == getattr(inline_equation, "source_paragraph_index", None)
+
+    reopened_hwpx = document.to_hwpx_document()
+    section_root = reopened_hwpx.sections[0].root_element
+    eq_paragraphs = section_root.xpath("./hp:p[.//hp:equation]", namespaces=NS)
+
+    assert len(eq_paragraphs) == 1
+    assert len(section_root.xpath("./hp:p", namespaces=NS)) == 2
+    assert "".join(eq_paragraphs[0].xpath(".//hp:t/text()", namespaces=NS)) == "INLINE-HWPX"
+
+
 def test_hancom_document_pure_hwp_roundtrip_preserves_native_shape_and_ole_metadata(tmp_path: Path) -> None:
     image_bytes = HwpDocument.blank().binary_document().read_stream("BinData/BIN0001.bmp", decompress=False)
     document = HancomDocument.blank()
@@ -1241,6 +1326,7 @@ def test_hancom_document_pure_hwp_roundtrip_preserves_native_shape_and_ole_metad
     picture.crop = {"left": 1, "right": 3599, "top": 2, "bottom": 2398}
     picture.line_color = "#223344"
     picture.line_width = 66
+    picture.line_style = {"color": "#223344", "width": "66", "style": "SOLID", "alpha": "9"}
     shape = document.append_shape(
         kind="rect",
         text="IR-SHAPE",
@@ -1263,6 +1349,9 @@ def test_hancom_document_pure_hwp_roundtrip_preserves_native_shape_and_ole_metad
     }
     shape.out_margins = {"left": 6, "right": 7, "top": 8, "bottom": 9}
     shape.rotation = {"angle": "25", "centerX": "333", "centerY": "444"}
+    shape.text_margins = {"left": 4, "right": 5, "top": 6, "bottom": 7}
+    shape.line_width = 88
+    shape.line_style = {"color": "#234567", "width": "88", "style": "DASH", "alpha": "5"}
     ole = document.append_ole(
         "ir.ole",
         b"IR-OLE-DATA",
@@ -1290,6 +1379,7 @@ def test_hancom_document_pure_hwp_roundtrip_preserves_native_shape_and_ole_metad
     ole.out_margins = {"left": 9, "right": 10, "top": 11, "bottom": 12}
     ole.rotation = {"angle": "45", "centerX": "777", "centerY": "888"}
     ole.extent = {"x": 43000, "y": 14000}
+    ole.line_style = {"color": "#556677", "width": "55", "style": "DASH", "alpha": "4"}
 
     output_path = tmp_path / "hancom_native_full_parity.hwp"
     document.write_to_hwp(output_path)
@@ -1321,9 +1411,11 @@ def test_hancom_document_pure_hwp_roundtrip_preserves_native_shape_and_ole_metad
     assert picture.crop == {"left": 1, "right": 3599, "top": 2, "bottom": 2398}
     assert picture.line_color == "#223344"
     assert picture.line_width == 66
+    assert picture.line_style["style"] == "SOLID"
     assert shape.shape_comment == "IR-SHAPE-COMMENT"
     assert shape.fill_color == "#FEDCBA"
     assert shape.line_color == "#234567"
+    assert shape.line_width == 88
     assert shape.layout["textWrap"] == "SQUARE"
     assert shape.layout["textFlow"] == "LEFT_ONLY"
     assert shape.layout["treatAsChar"] == "0"
@@ -1331,6 +1423,8 @@ def test_hancom_document_pure_hwp_roundtrip_preserves_native_shape_and_ole_metad
     assert shape.rotation["angle"] == "25"
     assert shape.rotation["centerX"] == "333"
     assert shape.rotation["centerY"] == "444"
+    assert shape.text_margins == {"left": 4, "right": 5, "top": 6, "bottom": 7}
+    assert shape.line_style["style"] == "DASH"
     assert ole.shape_comment == "IR-OLE-COMMENT"
     assert ole.object_type == "LINK"
     assert ole.draw_aspect == "ICON"
@@ -1338,6 +1432,7 @@ def test_hancom_document_pure_hwp_roundtrip_preserves_native_shape_and_ole_metad
     assert ole.eq_baseline == 9
     assert ole.line_color == "#556677"
     assert ole.line_width == 55
+    assert ole.line_style["style"] == "DASH"
     assert ole.layout["textWrap"] == "SQUARE"
     assert ole.layout["textFlow"] == "LEFT_ONLY"
     assert ole.layout["treatAsChar"] == "0"
@@ -1375,6 +1470,7 @@ def test_hancom_document_pure_hwp_roundtrip_preserves_native_shape_and_ole_metad
     assert reopened_picture.crop() == {"left": 1, "right": 3599, "top": 2, "bottom": 2398}
     assert reopened_picture.line_style()["color"] == "#223344"
     assert reopened_picture.line_style()["width"] == "66"
+    assert reopened_picture.line_style()["style"] == "SOLID"
     assert reopened_shape.shape_comment == "IR-SHAPE-COMMENT"
     assert reopened_shape.layout()["textWrap"] == "SQUARE"
     assert reopened_shape.layout()["textFlow"] == "LEFT_ONLY"
@@ -1383,6 +1479,9 @@ def test_hancom_document_pure_hwp_roundtrip_preserves_native_shape_and_ole_metad
     assert reopened_shape.rotation()["angle"] == "25"
     assert reopened_shape.rotation()["centerX"] == "333"
     assert reopened_shape.rotation()["centerY"] == "444"
+    assert reopened_shape.text_margins() == {"left": 4, "right": 5, "top": 6, "bottom": 7}
+    assert reopened_shape.line_style()["width"] == "88"
+    assert reopened_shape.line_style()["style"] == "DASH"
     assert reopened_ole.shape_comment == "IR-OLE-COMMENT"
     assert reopened_ole.layout()["textWrap"] == "SQUARE"
     assert reopened_ole.layout()["textFlow"] == "LEFT_ONLY"
@@ -1390,6 +1489,7 @@ def test_hancom_document_pure_hwp_roundtrip_preserves_native_shape_and_ole_metad
     assert reopened_ole.out_margins() == {"left": 9, "right": 10, "top": 11, "bottom": 12}
     assert reopened_ole.rotation()["angle"] == "45"
     assert reopened_ole.extent() == {"x": 43000, "y": 14000}
+    assert reopened_ole.line_style()["style"] == "DASH"
 
 
 def test_hancom_document_native_hwp_roundtrip_preserves_richer_shape_kinds(tmp_path: Path) -> None:
@@ -1763,6 +1863,50 @@ def test_hancom_document_pure_hwp_roundtrip_preserves_header_footer_and_new_numb
     assert reopened.footers()[0].text == "PURE-FOOTER"
     assert reopened.footers()[0].apply_page_type == "ODD"
     assert any(item.kind == "newNum" and item.number == "7" for item in reopened.auto_numbers())
+
+
+def test_hancom_document_pure_hwp_roundtrip_preserves_header_footer_nested_blocks(tmp_path: Path) -> None:
+    document = HancomDocument.blank()
+    header = document.append_header("", apply_page_type="EVEN")
+    header.nested_blocks = [
+        Paragraph(text="HEADER-TEXT"),
+        Bookmark(name="hdr_anchor"),
+        Field(field_type="DOCPROPERTY", display_text="SUBJECT", name="Subject", parameters={"FieldName": "Subject"}),
+        AutoNumber(kind="newNum", number=3, number_type="PAGE"),
+        Hyperlink(target="https://example.com/header", display_text="HEADER-LINK"),
+    ]
+    for index, block in enumerate(header.nested_blocks):
+        setattr(block, "nested_paragraph_index", index)
+
+    footer = document.append_footer("", apply_page_type="ODD")
+    footer.nested_blocks = [Paragraph(text="FOOTER-TEXT")]
+    setattr(footer.nested_blocks[0], "nested_paragraph_index", 0)
+
+    output_path = tmp_path / "hancom_header_footer_nested.hwp"
+    document.write_to_hwp(output_path)
+
+    reopened = HancomDocument.read_hwp(output_path)
+    reopened_header = next(block for block in reopened.sections[0].header_footer_blocks if block.kind == "header")
+    reopened_footer = next(block for block in reopened.sections[0].header_footer_blocks if block.kind == "footer")
+
+    assert reopened_header.apply_page_type == "EVEN"
+    assert any(isinstance(block, Paragraph) and block.text == "HEADER-TEXT" for block in reopened_header.nested_blocks)
+    assert any(isinstance(block, Bookmark) and block.name == "hdr_anchor" for block in reopened_header.nested_blocks)
+    assert any(isinstance(block, Field) and block.display_text == "SUBJECT" for block in reopened_header.nested_blocks)
+    assert any(isinstance(block, AutoNumber) and str(block.number) == "3" for block in reopened_header.nested_blocks)
+    assert any(isinstance(block, Hyperlink) and block.target == "https://example.com/header" for block in reopened_header.nested_blocks)
+    assert any(isinstance(block, Paragraph) and block.text == "FOOTER-TEXT" for block in reopened_footer.nested_blocks)
+
+    hwpx_path = tmp_path / "hancom_header_footer_nested.hwpx"
+    reopened.write_to_hwpx(hwpx_path)
+    reopened_hwpx = HancomDocument.read_hwpx(hwpx_path)
+    hwpx_header = next(block for block in reopened_hwpx.sections[0].header_footer_blocks if block.kind == "header")
+
+    assert any(isinstance(block, Paragraph) and block.text == "HEADER-TEXT" for block in hwpx_header.nested_blocks)
+    assert any(isinstance(block, Bookmark) and block.name == "hdr_anchor" for block in hwpx_header.nested_blocks)
+    assert any(isinstance(block, Field) and block.display_text == "SUBJECT" for block in hwpx_header.nested_blocks)
+    assert any(isinstance(block, AutoNumber) and str(block.number) == "3" for block in hwpx_header.nested_blocks)
+    assert any(isinstance(block, Hyperlink) and block.display_text == "HEADER-LINK" for block in hwpx_header.nested_blocks)
 
 
 def test_hancom_document_pure_hwp_roundtrip_preserves_bookmark_and_notes(tmp_path: Path) -> None:

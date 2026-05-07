@@ -1,70 +1,78 @@
 # Releasing `jakal-hwpx`
 
-This project already includes GitHub Actions workflows for building and publishing packages. This guide captures the last manual checks so a PyPI release is repeatable and low-risk.
+This project already has GitHub Actions workflows for build and publish. This file covers the local checks that should happen before pushing a PyPI release.
 
-The release gate is now defined by [`STABILITY_CONTRACT.md`](./STABILITY_CONTRACT.md) and enforced by [`scripts/check_release.py`](./scripts/check_release.py).
+## Release checklist
 
-## Before the first public release
+Before tagging a release:
 
-1. Choose the project's license and add a top-level `LICENSE` file.
-2. Review bundled third-party tools and sample documents, then update `THIRD_PARTY_NOTICES.md` if the redistribution scope changed.
-3. Create the `jakal-hwpx` project on TestPyPI and PyPI, or confirm that you own the existing project.
-4. Configure PyPI trusted publishing for this repository.
-5. Add the `pypi` and `testpypi` GitHub environments if they are not already configured.
+1. Update the version in:
+   - `pyproject.toml`
+   - `src/jakal_hwpx/__init__.py`
+2. Update user-facing docs if the public API changed:
+   - `README.md`
+   - `HWPX_MODULE.md`
+   - `docs/hwpx-document.md`
+3. Re-run the focused tests for the changed surface.
+4. Rebuild `dist/`.
+5. Run `twine check`.
 
-Without a real `LICENSE` file and a reviewed third-party notice, packaging still builds, but the release is not ready for public redistribution.
-
-## Local validation
-
-Install the release tools:
+## Local packaging setup
 
 ```bash
 python -m pip install --upgrade build twine tox
 ```
 
-Run the CI-compatible release gate:
+## Recommended validation flow
+
+### 1. Fast document-model gate
+
+```bash
+python -m pytest tests/test_document_model.py tests/test_hancom_document.py -q
+```
+
+### 2. CI-compatible release gate
 
 ```bash
 tox -e release
 ```
 
-That command:
+This gate is expected to:
 
-- validates the stability contract and sample corpus
-- runs the full pytest suite
-- runs the HWPX, HWP, and bridge stability matrices
-- rebuilds `dist/`
-- runs `python -m twine check dist/*`
-- verifies the package version is consistent
-- checks the wheel and source distribution for required package files
-- warns if a top-level `LICENSE` file is still missing
+- run the release-oriented test matrix
+- rebuild `dist/`
+- run `python -m twine check dist/*`
+- verify version consistency
+- verify required packaged files
 
-For the full Windows release gate with Hancom validation, run:
+### 3. Full Windows release gate
+
+On the Windows release machine with Hancom installed:
 
 ```powershell
 python scripts/check_release.py --profile release
 ```
 
-That profile adds:
+That profile adds the Hancom-facing smoke and roundtrip checks.
 
-- Hancom corpus smoke validation
-- zero-dialog enforcement for warning/recovery popups
-- rejection of Hancom-related skips
+## Build commands
 
-If you only want the lightweight packaging check used by CI:
+If you only want to prepare the package artifacts locally:
 
 ```bash
-tox -e pkg
+python -m build
+python -m twine check dist/*
 ```
 
 ## TestPyPI
 
-Use the publish workflow manually:
+After a clean local gate:
 
-1. Open GitHub Actions.
-2. Run the `Publish` workflow.
-3. Select `testpypi`.
-4. Install from TestPyPI and smoke-test the package:
+```bash
+python -m twine upload --repository testpypi dist/*
+```
+
+Then verify installation:
 
 ```bash
 python -m pip install --upgrade pip
@@ -74,24 +82,18 @@ python -c "from jakal_hwpx import HwpxDocument; print(HwpxDocument)"
 
 ## PyPI
 
-There are two supported release paths:
-
-1. Create a GitHub Release. The `Publish` workflow will publish to PyPI automatically.
-2. Run the `Publish` workflow manually and choose `pypi`.
-
-For a manual upload outside GitHub Actions:
+For a manual upload:
 
 ```bash
-python scripts/check_release.py --profile ci
 python -m twine upload dist/*
 ```
 
-## Suggested release sequence
+Preferred release sequence:
 
-1. Update the version in `pyproject.toml` and `src/jakal_hwpx/__init__.py`.
-2. Run `tox -e py312` or the full test matrix you want before release.
+1. Update version and docs.
+2. Run targeted tests.
 3. Run `tox -e release`.
-4. On the Windows release machine, run `python scripts/check_release.py --profile release`.
-5. Publish to TestPyPI.
-6. Smoke-test installation from TestPyPI.
-7. Create the GitHub Release or run the PyPI publish workflow manually.
+4. Run `python scripts/check_release.py --profile release` on the Windows release machine.
+5. Upload to TestPyPI.
+6. Smoke-test install from TestPyPI.
+7. Upload to PyPI or trigger the publish workflow.
