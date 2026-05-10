@@ -3,617 +3,677 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>jakal-hwpx — ChatGPT 한 줄로 한글 문서 자동 완성</title>
+  <title>jakal-hwpx | HWPX AI 프롬프트</title>
   <link rel="preconnect" href="https://fonts.googleapis.com" />
-  <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@300;400;500;700;900&family=Fira+Code:wght@400;500&display=swap" rel="stylesheet" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;500;700;800;900&family=Fira+Code:wght@400;500;600&display=swap" rel="stylesheet" />
   <style>
     :root {
-      --blue: #3b82f6; --blue-dark: #1d4ed8; --blue-light: #dbeafe;
-      --green: #22c55e; --green-dark: #15803d; --green-bg: #f0fdf4;
-      --yellow: #fbbf24; --yellow-bg: #fefce8;
-      --gray-50: #f9fafb; --gray-100: #f3f4f6; --gray-200: #e5e7eb;
-      --gray-300: #d1d5db; --gray-500: #6b7280; --gray-600: #4b5563;
-      --gray-700: #374151; --gray-800: #1f2937; --gray-900: #111827;
+      --ink: #18212f;
+      --muted: #5d6978;
+      --line: #d9e0ea;
+      --paper: #f7f9fc;
+      --white: #ffffff;
+      --blue: #2563eb;
+      --blue-dark: #1d4ed8;
+      --mint: #0f766e;
+      --mint-soft: #e7f7f4;
+      --amber: #f59e0b;
+      --amber-soft: #fff7df;
+      --red-soft: #fff0f0;
+      --shadow: 0 18px 45px rgba(24, 33, 47, 0.11);
     }
-    * { box-sizing: border-box; margin: 0; padding: 0; }
-    body { font-family: 'Noto Sans KR', sans-serif; color: var(--gray-800); background: #fff; line-height: 1.6; }
 
-    /* NAV */
-    nav {
-      position: sticky; top: 0; z-index: 100;
-      background: rgba(255,255,255,0.93); backdrop-filter: blur(12px);
-      border-bottom: 1px solid var(--gray-200);
-      height: 56px; padding: 0 2rem;
-      display: flex; align-items: center; justify-content: space-between;
+    * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; }
+    body {
+      margin: 0;
+      font-family: "Noto Sans KR", system-ui, sans-serif;
+      color: var(--ink);
+      background: var(--white);
+      line-height: 1.65;
     }
-    .nav-logo { font-family: 'Fira Code', monospace; font-weight: 700; font-size: 1rem; color: var(--blue-dark); }
-    .nav-links { display: flex; gap: 1.5rem; }
-    .nav-links a { text-decoration: none; color: var(--gray-600); font-size: 0.88rem; font-weight: 500; }
+    a { color: inherit; }
+    button { font: inherit; }
+
+    .nav {
+      position: sticky;
+      top: 0;
+      z-index: 20;
+      height: 64px;
+      padding: 0 24px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      background: rgba(255, 255, 255, 0.9);
+      border-bottom: 1px solid rgba(217, 224, 234, 0.9);
+      backdrop-filter: blur(14px);
+    }
+    .logo {
+      font-family: "Fira Code", monospace;
+      font-weight: 700;
+      color: var(--blue-dark);
+    }
+    .nav-links {
+      display: flex;
+      gap: 18px;
+      color: var(--muted);
+      font-size: 14px;
+      font-weight: 700;
+    }
+    .nav-links a { text-decoration: none; }
     .nav-links a:hover { color: var(--blue); }
-    .nav-cta {
-      background: var(--blue); color: #fff; text-decoration: none;
-      padding: 0.35rem 1rem; border-radius: 99px;
-      font-size: 0.82rem; font-weight: 700;
+    .contact {
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      padding: 8px 14px;
+      text-decoration: none;
+      font-size: 13px;
+      font-weight: 800;
+      background: var(--white);
     }
-    @media(max-width:640px){ .nav-links{display:none;} }
 
-    /* HERO */
     .hero {
-      background: linear-gradient(160deg, #0f172a 0%, #1e3a8a 65%, #2563eb 100%);
-      color: #fff; text-align: center;
-      padding: 3.5rem 1.5rem 3rem;
-      position: relative; overflow: hidden;
+      min-height: calc(100vh - 64px);
+      padding: 64px 24px 54px;
+      color: var(--white);
+      background:
+        linear-gradient(90deg, rgba(10, 17, 30, 0.92), rgba(10, 17, 30, 0.64)),
+        url("images/result-doc.png") center right / contain no-repeat,
+        linear-gradient(135deg, #0f172a, #1d4ed8 70%, #0f766e);
+      display: flex;
+      align-items: center;
     }
-    .hero::before {
-      content: ''; position: absolute; inset: 0;
-      background: radial-gradient(ellipse at 50% -10%, rgba(96,165,250,0.2) 0%, transparent 65%);
-      pointer-events: none;
+    .hero-inner {
+      width: min(1120px, 100%);
+      margin: 0 auto;
+      display: grid;
+      grid-template-columns: minmax(0, 1.02fr) minmax(360px, 0.98fr);
+      gap: 34px;
+      align-items: center;
     }
-    .hero-eyebrow {
-      display: inline-flex; align-items: center; gap: 0.5rem;
-      background: rgba(255,255,255,0.1); border: 1px solid rgba(255,255,255,0.2);
-      border-radius: 99px; padding: 0.3rem 1rem;
-      font-size: 0.8rem; margin-bottom: 1.5rem;
+    .badge-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      margin-bottom: 20px;
     }
-    .live-dot { width: 7px; height: 7px; background: var(--green); border-radius: 50%; animation: pulse 2s infinite; }
-    @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.4} }
-    .hero h1 { font-size: clamp(2rem, 6vw, 3.5rem); font-weight: 900; line-height: 1.15; margin-bottom: 0.75rem; }
-    .hero h1 em { font-style: normal; color: var(--yellow); }
-    .hero-sub { font-size: 1.1rem; color: rgba(255,255,255,0.72); max-width: 520px; margin: 0 auto 2rem; }
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 7px;
+      border: 1px solid rgba(255, 255, 255, 0.22);
+      border-radius: 999px;
+      padding: 7px 12px;
+      background: rgba(255, 255, 255, 0.1);
+      color: rgba(255, 255, 255, 0.86);
+      font-size: 13px;
+      font-weight: 800;
+    }
+    .badge::before {
+      content: "";
+      width: 7px;
+      height: 7px;
+      border-radius: 999px;
+      background: #34d399;
+    }
+    h1 {
+      margin: 0 0 18px;
+      max-width: 740px;
+      font-size: clamp(42px, 7vw, 76px);
+      line-height: 1.05;
+      letter-spacing: 0;
+      font-weight: 900;
+    }
+    .hero-copy {
+      margin: 0 0 30px;
+      max-width: 650px;
+      color: rgba(255, 255, 255, 0.78);
+      font-size: clamp(17px, 2vw, 21px);
+      font-weight: 500;
+    }
+    .hero-actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 12px;
+      align-items: center;
+    }
+    .primary-btn,
+    .secondary-btn,
+    .copy-btn {
+      border: 0;
+      border-radius: 10px;
+      padding: 12px 18px;
+      cursor: pointer;
+      text-decoration: none;
+      font-weight: 900;
+      transition: transform 0.15s ease, box-shadow 0.15s ease, background 0.15s ease;
+    }
+    .primary-btn {
+      background: #fbbf24;
+      color: #1e1702;
+      box-shadow: 0 12px 24px rgba(251, 191, 36, 0.24);
+    }
+    .secondary-btn {
+      background: rgba(255, 255, 255, 0.12);
+      color: var(--white);
+      border: 1px solid rgba(255, 255, 255, 0.24);
+    }
+    .primary-btn:hover,
+    .secondary-btn:hover,
+    .copy-btn:hover {
+      transform: translateY(-1px);
+    }
 
-    /* BIG PROMPT BOX IN HERO */
-    .hero-prompt {
-      max-width: 660px; margin: 0 auto 1.5rem;
-      background: rgba(0,0,0,0.35); border: 2px solid rgba(251,191,36,0.55);
-      border-radius: 14px; padding: 1rem 1.4rem;
-      display: flex; align-items: center; gap: 1rem; flex-wrap: wrap;
-      text-align: left;
+    .prompt-panel {
+      background: rgba(255, 255, 255, 0.96);
+      color: var(--ink);
+      border-radius: 8px;
+      overflow: hidden;
+      box-shadow: var(--shadow);
+      border: 1px solid rgba(255, 255, 255, 0.7);
     }
-    .hero-prompt-text {
-      flex: 1; font-family: 'Fira Code', monospace;
-      font-size: 0.88rem; color: var(--yellow); min-width: 200px;
-      line-height: 1.6;
+    .prompt-head {
+      padding: 15px 18px;
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+      align-items: center;
+      border-bottom: 1px solid var(--line);
+      background: var(--paper);
+    }
+    .prompt-head strong {
+      display: block;
+      font-size: 15px;
+      line-height: 1.35;
+    }
+    .prompt-head span {
+      display: block;
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 700;
     }
     .copy-btn {
-      background: var(--yellow); color: #1c1400;
-      border: none; padding: 0.45rem 1.1rem; border-radius: 8px;
-      font-weight: 700; font-size: 0.82rem; cursor: pointer; white-space: nowrap;
+      flex: 0 0 auto;
+      padding: 10px 14px;
+      color: var(--white);
+      background: var(--blue);
+      font-size: 13px;
     }
-    .copy-btn:hover { background: #fcd34d; }
-    .hero-note { font-size: 0.78rem; color: rgba(255,255,255,0.38); }
-
-    /* NO-INSTALL PILL */
-    .no-install-strip {
-      display: flex; justify-content: center; gap: 1.5rem; flex-wrap: wrap;
-      margin-bottom: 2rem;
+    .prompt-preview {
+      padding: 18px;
+      display: grid;
+      gap: 14px;
     }
-    .no-install-item { display: flex; align-items: center; gap: 0.4rem; font-size: 0.85rem; color: #86efac; }
-
-    /* SECTION */
-    section { padding: 3.5rem 1.5rem; }
-    .container { max-width: 1080px; margin: 0 auto; }
-    .eyebrow {
-      font-size: 0.72rem; font-weight: 700; letter-spacing: 0.12em;
-      text-transform: uppercase; color: var(--blue); margin-bottom: 0.4rem;
+    .quick-prompt {
+      margin: 0;
+      padding: 14px;
+      border-radius: 8px;
+      background: #eff6ff;
+      border: 1px solid #bfdbfe;
+      color: #17356f;
+      font-weight: 800;
     }
-    h2 { font-size: clamp(1.6rem, 4vw, 2.3rem); font-weight: 800; color: var(--gray-900); margin-bottom: 0.5rem; line-height: 1.25; }
-    .sub { font-size: 1rem; color: var(--gray-600); max-width: 560px; margin-bottom: 2.5rem; }
-
-    /* BEFORE / AFTER DEMO */
-    .demo-section { background: var(--gray-50); border-top: 1px solid var(--gray-200); }
-    .before-after {
-      display: grid; grid-template-columns: 1fr auto 1fr; gap: 1rem;
-      align-items: center; margin-bottom: 1.5rem;
+    .prompt-note {
+      margin: 0;
+      color: var(--muted);
+      font-size: 14px;
     }
-    @media(max-width:700px){ .before-after{grid-template-columns:1fr;} .arrow-col{text-align:center;font-size:2rem;} }
-    .doc-card {
-      background: #fff; border: 1px solid var(--gray-200);
-      border-radius: 12px; overflow: hidden;
-      box-shadow: 0 2px 16px rgba(0,0,0,0.06);
+    .rule-list {
+      display: grid;
+      gap: 8px;
+      margin: 0;
+      padding: 0;
+      list-style: none;
+      font-size: 14px;
+      color: var(--muted);
     }
-    .doc-card-header {
-      padding: 0.55rem 1rem; font-size: 0.72rem; font-weight: 700;
-      display: flex; align-items: center; gap: 0.5rem;
-      border-bottom: 1px solid var(--gray-100);
-    }
-    .doc-card-header.before { background: var(--gray-100); color: var(--gray-600); }
-    .doc-card-header.after { background: #dcfce7; color: var(--green-dark); }
-    .doc-card-body { padding: 1rem; }
-
-    /* Fake document styles */
-    .fake-doc { font-size: 0.72rem; line-height: 1.65; }
-    .fake-doc-title { text-align: center; font-size: 0.9rem; font-weight: 800; margin-bottom: 0.75rem; letter-spacing: 0.05em; }
-    .fake-doc-section { font-size: 0.7rem; font-weight: 700; margin-bottom: 0.4rem; }
-    .fake-table { width: 100%; border-collapse: collapse; font-size: 0.68rem; }
-    .fake-table td { border: 1px solid var(--gray-300); padding: 0.3rem 0.5rem; vertical-align: top; }
-    .fake-table .th { background: var(--gray-100); font-weight: 700; width: 22%; }
-    .fake-table .sub-th { background: var(--gray-50); font-weight: 600; width: 12%; }
-    .placeholder { color: var(--gray-400); font-style: italic; }
-    .filled { color: #1d4ed8; font-weight: 500; }
-    .filled-body { color: var(--gray-700); line-height: 1.55; font-size: 0.67rem; }
-    .check-badge {
-      display: inline-flex; align-items: center; gap: 0.3rem;
-      background: #dcfce7; border-radius: 99px;
-      padding: 0.2rem 0.6rem; font-size: 0.68rem;
-      font-weight: 700; color: var(--green-dark); margin-top: 0.5rem;
-    }
-
-    .arrow-col { text-align: center; font-size: 2.5rem; color: var(--gray-300); }
-
-    /* SCREENSHOT ZONE */
-    .screenshot-zone {
-      background: #fff; border: 2px dashed var(--gray-300); border-radius: 14px;
-      overflow: hidden; position: relative;
-    }
-    .screenshot-zone img { width: 100%; height: auto; display: block; }
-    .screenshot-placeholder {
-      height: 220px; display: flex; flex-direction: column;
-      align-items: center; justify-content: center; gap: 0.5rem;
-      color: var(--gray-400); font-size: 0.85rem;
-    }
-
-    /* STEP FLOW */
-    .steps-section { background: #fff; }
-    .steps-flow {
-      display: grid; grid-template-columns: repeat(4, 1fr);
-      gap: 0.5rem; align-items: stretch;
-    }
-    @media(max-width:700px){ .steps-flow{grid-template-columns:1fr 1fr;} }
-    .step-card {
-      border: 1.5px solid var(--gray-200); border-radius: 14px;
-      padding: 1.2rem 1rem; text-align: center; background: var(--gray-50);
+    .rule-list li {
+      padding-left: 22px;
       position: relative;
     }
-    .step-card.highlight { background: var(--yellow-bg); border-color: var(--yellow); }
-    .step-card.done { background: var(--green-bg); border-color: #86efac; }
-    .step-num { font-size: 0.72rem; font-weight: 700; color: var(--blue); margin-bottom: 0.4rem; text-transform: uppercase; letter-spacing: 0.06em; }
-    .step-icon { font-size: 1.8rem; margin-bottom: 0.5rem; }
-    .step-title { font-size: 0.88rem; font-weight: 700; margin-bottom: 0.3rem; }
-    .step-desc { font-size: 0.78rem; color: var(--gray-600); line-height: 1.5; }
-    .step-prompt { font-family: 'Fira Code', monospace; font-size: 0.68rem; background: #fef3c7; border-radius: 6px; padding: 0.3rem 0.5rem; margin-top: 0.5rem; color: #92400e; text-align: left; }
-
-    /* CHATGPT DEMO IMAGE */
-    .chatgpt-demo-section { background: var(--gray-50); border-top: 1px solid var(--gray-200); }
-    .chatgpt-demo-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 2rem; align-items: start; }
-    @media(max-width:780px){ .chatgpt-demo-grid{grid-template-columns:1fr;} }
-
-    /* FEATURES — icon-only grid */
-    .features-section { background: #fff; }
-    .feat-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 1rem; }
-    .feat-item {
-      border: 1.5px solid var(--gray-200); border-radius: 12px;
-      padding: 1.1rem 0.9rem; text-align: center;
-      transition: box-shadow 0.2s, transform 0.2s;
-    }
-    .feat-item:hover { box-shadow: 0 6px 20px rgba(59,130,246,0.1); transform: translateY(-2px); }
-    .feat-icon { font-size: 1.6rem; margin-bottom: 0.4rem; }
-    .feat-title { font-size: 0.85rem; font-weight: 700; }
-
-    /* DEVELOPER SECTION — collapsible */
-    .dev-section { background: var(--gray-900); color: #e5e7eb; }
-    .dev-section .eyebrow { color: #60a5fa; }
-    .dev-section h2 { color: #fff; }
-    .dev-section .sub { color: #9ca3af; }
-    details { margin-top: 1rem; }
-    summary {
-      cursor: pointer; font-size: 0.88rem; font-weight: 700;
-      color: #93c5fd; padding: 0.6rem 0; list-style: none;
-      display: flex; align-items: center; gap: 0.5rem;
-    }
-    summary::before { content: '▶'; font-size: 0.7rem; transition: transform 0.2s; }
-    details[open] summary::before { transform: rotate(90deg); }
-    .code-box { background: #0f172a; border-radius: 10px; overflow: hidden; margin-top: 0.8rem; }
-    .code-bar {
-      background: var(--gray-800); padding: 0.45rem 1rem;
-      font-size: 0.72rem; color: var(--gray-500); font-family: 'Fira Code', monospace;
-      display: flex; gap: 0.4rem; align-items: center;
-    }
-    .dot { width: 9px; height: 9px; border-radius: 50%; }
-    .dot.r{background:#ef4444;} .dot.y{background:#f59e0b;} .dot.g{background:#22c55e;}
-    pre {
-      padding: 1rem 1.2rem; font-family: 'Fira Code', monospace;
-      font-size: 0.82rem; line-height: 1.75; overflow-x: auto; color: #e5e7eb;
-    }
-    .kw{color:#c084fc;} .fn{color:#60a5fa;} .str{color:#86efac;} .cm{color:#4b5563;}
-
-    .dev-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 1.5rem; }
-    @media(max-width:700px){ .dev-grid{grid-template-columns:1fr;} }
-
-    /* SAFETY */
-    .safety-prompt-box { background: #0f172a; border-radius: 12px; overflow: hidden; }
-    .safety-prompt-header {
-      background: var(--gray-800); padding: 0.5rem 1rem;
-      font-size: 0.72rem; color: var(--gray-500); font-family: 'Fira Code', monospace;
-      display: flex; justify-content: space-between; align-items: center;
-    }
-    .safety-text {
-      padding: 1rem 1.2rem; font-size: 0.75rem; color: #9ca3af;
-      line-height: 1.8; max-height: 180px; overflow-y: auto;
-      font-family: 'Fira Code', monospace;
+    .rule-list li::before {
+      content: "";
+      position: absolute;
+      left: 0;
+      top: 10px;
+      width: 8px;
+      height: 8px;
+      border-radius: 99px;
+      background: var(--mint);
     }
 
-    /* CTA */
-    .cta-section {
-      background: linear-gradient(135deg, #0f172a, #1e3a8a);
-      color: #fff; text-align: center; padding: 3.5rem 1.5rem;
+    section { padding: 72px 24px; }
+    .container {
+      width: min(1120px, 100%);
+      margin: 0 auto;
     }
-    .cta-section h2 { color: #fff; margin-bottom: 0.5rem; }
-    .cta-section p { color: rgba(255,255,255,0.65); margin-bottom: 2rem; }
-    .cta-prompt {
-      max-width: 640px; margin: 0 auto 1.5rem;
-      background: rgba(0,0,0,0.3); border: 2px solid rgba(251,191,36,0.5);
-      border-radius: 14px; padding: 1rem 1.4rem;
-      display: flex; align-items: center; gap: 1rem; flex-wrap: wrap;
+    .section-kicker {
+      margin: 0 0 8px;
+      color: var(--blue);
+      font-size: 13px;
+      font-weight: 900;
+      letter-spacing: 0;
     }
-    .cta-btns { display: flex; gap: 1rem; justify-content: center; flex-wrap: wrap; }
-    .btn-p { background: var(--blue); color: #fff; text-decoration: none; padding: 0.75rem 1.8rem; border-radius: 10px; font-weight: 700; font-size: 0.95rem; }
-    .btn-s { background: rgba(255,255,255,0.1); border: 1px solid rgba(255,255,255,0.25); color: #fff; text-decoration: none; padding: 0.75rem 1.8rem; border-radius: 10px; font-weight: 600; font-size: 0.95rem; }
+    h2 {
+      margin: 0 0 14px;
+      font-size: clamp(28px, 4vw, 42px);
+      line-height: 1.18;
+      letter-spacing: 0;
+      font-weight: 900;
+    }
+    .section-lead {
+      margin: 0 0 32px;
+      max-width: 680px;
+      color: var(--muted);
+      font-size: 17px;
+    }
 
-    footer { background: var(--gray-900); color: var(--gray-500); text-align: center; padding: 2rem; font-size: 0.8rem; }
-    footer a { color: var(--gray-400); text-decoration: none; }
+    .how {
+      background: var(--paper);
+      border-top: 1px solid var(--line);
+      border-bottom: 1px solid var(--line);
+    }
+    .steps {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 16px;
+    }
+    .step {
+      min-height: 220px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 22px;
+      background: var(--white);
+      box-shadow: 0 8px 26px rgba(24, 33, 47, 0.06);
+    }
+    .step strong {
+      display: block;
+      margin-bottom: 8px;
+      color: var(--blue);
+      font-size: 13px;
+      font-weight: 900;
+    }
+    .step h3 {
+      margin: 0 0 10px;
+      font-size: 20px;
+      line-height: 1.3;
+    }
+    .step p {
+      margin: 0;
+      color: var(--muted);
+      font-size: 15px;
+    }
+    .step.highlight {
+      border-color: #f7c948;
+      background: var(--amber-soft);
+    }
+    .mini-code {
+      margin-top: 14px;
+      padding: 12px;
+      border-radius: 8px;
+      background: #111827;
+      color: #fde68a;
+      font-family: "Fira Code", monospace;
+      font-size: 12px;
+      line-height: 1.55;
+    }
+
+    .case-grid {
+      display: grid;
+      grid-template-columns: 0.9fr 1.1fr;
+      gap: 28px;
+      align-items: stretch;
+    }
+    .stat-card {
+      border-radius: 8px;
+      padding: 28px;
+      background: var(--mint-soft);
+      border: 1px solid #b9e7df;
+    }
+    .stat-number {
+      display: block;
+      margin-bottom: 4px;
+      color: var(--mint);
+      font-size: clamp(54px, 8vw, 86px);
+      line-height: 1;
+      font-weight: 900;
+    }
+    .stat-card p,
+    .example-card p {
+      margin: 0;
+      color: var(--muted);
+      font-size: 16px;
+    }
+    .example-card {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--white);
+      overflow: hidden;
+      box-shadow: var(--shadow);
+    }
+    .example-card img {
+      width: 100%;
+      display: block;
+      background: var(--paper);
+      border-bottom: 1px solid var(--line);
+    }
+    .example-body { padding: 22px; }
+    .example-body h3 {
+      margin: 0 0 8px;
+      font-size: 22px;
+    }
+
+    .guide-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 16px;
+    }
+    .guide-card {
+      border-radius: 8px;
+      border: 1px solid var(--line);
+      padding: 22px;
+      background: var(--white);
+    }
+    .guide-card.warning { background: var(--red-soft); border-color: #ffcaca; }
+    .guide-card h3 {
+      margin: 0 0 10px;
+      font-size: 19px;
+    }
+    .guide-card p {
+      margin: 0;
+      color: var(--muted);
+      font-size: 15px;
+    }
+
+    .cta {
+      color: var(--white);
+      background: linear-gradient(135deg, #111827, #1d4ed8 68%, #0f766e);
+    }
+    .cta h2 { color: var(--white); }
+    .cta .section-lead { color: rgba(255, 255, 255, 0.76); }
+    .cta-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 12px;
+      align-items: center;
+    }
+
+    footer {
+      padding: 30px 24px;
+      color: #93a0b1;
+      background: #0f172a;
+      text-align: center;
+      font-size: 14px;
+    }
+    footer a {
+      color: #dbeafe;
+      text-decoration: none;
+      font-weight: 800;
+    }
+
+    #fullPrompt {
+      position: absolute;
+      left: -9999px;
+      top: auto;
+      width: 1px;
+      height: 1px;
+      overflow: hidden;
+      white-space: pre-wrap;
+    }
+
+    @media (max-width: 900px) {
+      .hero {
+        min-height: auto;
+        background:
+          linear-gradient(180deg, rgba(10, 17, 30, 0.95), rgba(10, 17, 30, 0.75)),
+          url("images/result-doc.png") bottom right / 94% auto no-repeat,
+          linear-gradient(135deg, #0f172a, #1d4ed8 70%, #0f766e);
+      }
+      .hero-inner,
+      .case-grid {
+        grid-template-columns: 1fr;
+      }
+      .steps,
+      .guide-grid {
+        grid-template-columns: 1fr;
+      }
+      .prompt-panel {
+        margin-top: 10px;
+      }
+    }
+
+    @media (max-width: 640px) {
+      .nav-links { display: none; }
+      .nav { padding: 0 16px; }
+      .contact { padding: 7px 10px; }
+      .hero,
+      section { padding-left: 18px; padding-right: 18px; }
+      .hero { padding-top: 42px; }
+      .hero-actions,
+      .cta-row { align-items: stretch; flex-direction: column; }
+      .primary-btn,
+      .secondary-btn,
+      .copy-btn { width: 100%; text-align: center; }
+      .prompt-head {
+        align-items: stretch;
+        flex-direction: column;
+      }
+    }
   </style>
 </head>
 <body>
+  <div id="fullPrompt">[기본 프롬프트]: 반드시 아래 지침을 따라 HWPX 문서를 작성해줘.
 
-<!-- NAV -->
-<nav>
-  <div class="nav-logo">jakal-hwpx</div>
-  <div class="nav-links">
-    <a href="#how">사용법</a>
-    <a href="#demo">예시</a>
-    <a href="#features">기능</a>
-    <a href="#dev">개발자</a>
-  </div>
-  <a class="nav-cta" href="https://pypi.org/project/jakal-hwpx/" target="_blank">PyPI ↗</a>
-</nav>
+1. python으로 jakal-hwpx을 반드시 설치 및 활용하고, xml 편집은 이용하지 말 것.
+2. save(validate=True) 등 검증을 충실하게 할 것.
+3. 사용자가 양식을 주었을 경우, 반드시 그 양식 위에 내용을 첨부하고 작성할 것.
+4. 양식을 깨트리지 말 것.
+5. 사용자가 hwp 파일을 올릴 경우, "한컴 앱 -> 파일 -> 다른 이름 저장 -> HWPX로 저장해서 올려주세요. hwp로도 가능하지만 성능이 떨어질 수 있습니다."라고 안내할 것.
+6. 한글 파일을 작성할 때는 인간의 어투로 자연스럽게 작성하고, AI 티가 나지 않게 할 것. GPT가 작성했다는 표현을 HWP/HWPX 문서 안에 절대로 언급하지 말 것.
 
-<!-- HERO -->
-<section class="hero">
-  <div class="hero-eyebrow">
-    <span class="live-dot"></span>
-    설치 불필요 &middot; ChatGPT 프롬프트 한 줄
-  </div>
-  <h1>
-    프롬프트 <em>한 줄</em> 추가
-  </h1>
-  <p class="hero-sub">
-    ChatGPT가 jakal-hwpx를 직접 설치하고, 문서를 채우고, 검증까지 완료합니다.
-  </p>
+사용자가 오류를 말할 때의 대처:
+1. 수식이 깨질 경우, 한컴 앱에서 사용자가 파일을 .hwp로 바꾸어 저장하고 닫았다가 다시 열면 정상적인 파일이 될 수 있다고 안내할 것.
+2. 이미지가 잘릴 경우, 한컴 앱에서 개체 속성 -> 이미지 -> 그림 자르기를 모두 0mm로 조정한 뒤 크기를 변경하라고 안내할 것.
+3. 파일이 안 열릴 경우, 오류 내용을 확인한 뒤 HWPX AI 프롬프트와 함께 다시 요청하도록 간략하게 안내할 것.
 
-  <div class="no-install-strip">
-    <span class="no-install-item">✅ Python 설치 불필요</span>
-    <span class="no-install-item">✅ 코드 작성 불필요</span>
-    <span class="no-install-item">✅ 검증 자동 완료</span>
-  </div>
+[사용자 추가 프롬프트] :</div>
 
-  <div class="hero-prompt">
-    <div class="hero-prompt-text">python으로 jakal-hwpx을 반드시 설치 및 활용하고, xml 편집은 이용하지 말것. save(validate=True)로 해줘</div>
-    <button class="copy-btn" onclick="cp(this,'python으로 jakal-hwpx을 반드시 설치 및 활용하고, xml 편집은 이용하지 말것. save(validate=True)로 해줘')">복사</button>
-  </div>
-  <div class="hero-note">이 한 줄 + 원하는 내용 + hwpx 양식 파일 첨부 → 완료</div>
-</section>
-
-<!-- HOW IT WORKS -->
-<section class="steps-section" id="how">
-  <div class="container">
-    <div class="eyebrow">사용법</div>
-    <h2>ChatGPT에 프롬프트 한줄, 그게 전부</h2>
-    <p class="sub">코딩 지식 없어도 됩니다. ChatGPT가 알아서 합니다.</p>
-    <div class="steps-flow" style="grid-template-columns:repeat(3,1fr);">
-      <div class="step-card">
-        <div class="step-num">Step 1</div>
-        <div class="step-icon">📎</div>
-        <div class="step-title">파일 첨부</div>
-        <div class="step-desc">hwpx 양식 파일 + PDF·텍스트 등 참고 자료를 ChatGPT에 올립니다</div>
-      </div>
-      <div class="step-card highlight">
-        <div class="step-num">Step 2 — 핵심</div>
-        <div class="step-icon">💬</div>
-        <div class="step-title">프롬프트 한 줄 추가</div>
-        <div class="step-desc">원하는 내용을 입력하고 아래 한 줄을 붙여넣으세요</div>
-        <div class="step-prompt">python으로 jakal-hwpx을 반드시 설치 및 활용하고, xml 편집은 이용하지 말것. save(validate=True)로 해줘</div>
-      </div>
-      <div class="step-card done">
-        <div class="step-num">완료</div>
-        <div class="step-icon">📥</div>
-        <div class="step-title">검증된 파일 다운로드</div>
-        <div class="step-desc">ChatGPT가 검증까지 마친 hwpx 파일을 바로 줍니다</div>
-      </div>
+  <nav class="nav">
+    <div class="logo">jakal-hwpx</div>
+    <div class="nav-links" aria-label="주요 메뉴">
+      <a href="#how">사용법</a>
+      <a href="#case">실제 사례</a>
+      <a href="#guide">안내</a>
     </div>
+    <a class="contact" href="mailto:jakalflow@gmail.com">문의</a>
+  </nav>
 
-    <!-- FAQ strip -->
-    <div style="margin-top:2rem;display:flex;gap:1rem;flex-wrap:wrap;">
-      <div style="background:var(--green-bg);border:1.5px solid #86efac;border-radius:12px;padding:0.75rem 1.1rem;flex:1;min-width:200px;">
-        <span style="font-size:0.82rem;font-weight:700;color:var(--green-dark);">Q. Python·코드 직접 필요? </span>
-        <span style="font-size:0.82rem;color:#166534;">아니요. 프롬프트 한 줄이 전부입니다.</span>
-      </div>
-      <div style="background:var(--green-bg);border:1.5px solid #86efac;border-radius:12px;padding:0.75rem 1.1rem;flex:1;min-width:200px;">
-        <span style="font-size:0.82rem;font-weight:700;color:var(--green-dark);">Q. 어떤 ChatGPT 플랜? </span>
-        <span style="font-size:0.82rem;color:#166534;">코드 실행(Code Interpreter)이 지원되는 플랜.</span>
-      </div>
-    </div>
-  </div>
-</section>
-
-<!-- DEMO — BEFORE/AFTER -->
-<section class="demo-section" id="demo">
-  <div class="container">
-    <div class="eyebrow">실제 예시</div>
-    <h2>연구계획서 자동 완성</h2>
-    <p class="sub">PDF 보고서를 참고해서 빈 양식을 자동으로 채운 결과입니다.</p>
-
-    <!-- ChatGPT screenshot -->
-    <div style="margin-bottom:2.5rem;">
-      <div style="font-size:0.8rem;font-weight:700;color:var(--gray-600);margin-bottom:0.6rem;">① ChatGPT 화면 — 파일 2개 첨부 + 프롬프트 한 줄</div>
-      <div class="screenshot-zone">
-        <!-- 실제 스크린샷이 있으면 아래 주석을 해제하고 src를 수정하세요 -->
-        <!-- <img src="images/chatgpt-demo.png" alt="ChatGPT 사용 화면" /> -->
-
-        <!-- 스크린샷 대체 — ChatGPT 화면 모킹 -->
-        <div style="background:#212121;border-radius:0;padding:1.2rem;">
-          <div style="max-width:600px;margin:0 auto;display:flex;flex-direction:column;gap:0.8rem;">
-            <!-- attached files -->
-            <div style="display:flex;gap:0.6rem;justify-content:flex-end;flex-wrap:wrap;">
-              <div style="background:#2f2f2f;border-radius:8px;padding:0.5rem 0.8rem;display:flex;align-items:center;gap:0.5rem;font-size:0.78rem;color:#d1d5db;">
-                <span style="background:#3b82f6;border-radius:4px;padding:0.1rem 0.35rem;font-size:0.65rem;color:#fff;">hwpx</span>
-                연구계획서(팀장이름).hwpx
-              </div>
-              <div style="background:#2f2f2f;border-radius:8px;padding:0.5rem 0.8rem;display:flex;align-items:center;gap:0.5rem;font-size:0.78rem;color:#d1d5db;">
-                <span style="background:#ef4444;border-radius:4px;padding:0.1rem 0.35rem;font-size:0.65rem;color:#fff;">pdf</span>
-                사키 보고서.pdf
-              </div>
-            </div>
-            <!-- user message -->
-            <div style="align-self:flex-end;background:#2563eb;color:#fff;border-radius:14px 14px 4px 14px;padding:0.75rem 1rem;max-width:85%;font-size:0.83rem;line-height:1.6;">
-              사키 보고서를 바탕으로 연구계획서를 작성해줘.<br /><br />
-              <span style="background:rgba(255,255,255,0.15);border-radius:6px;padding:0.2rem 0.5rem;font-family:'Fira Code',monospace;font-size:0.72rem;display:block;">python으로 jakal-hwpx을 반드시 설치 및 활용하고, xml 편집은 이용하지 말것. save(validate=True)로 해줘</span>
-            </div>
-            <!-- assistant response -->
-            <div style="display:flex;gap:0.6rem;align-items:flex-start;">
-              <div style="width:28px;height:28px;background:linear-gradient(135deg,#10a37f,#1a6b50);border-radius:7px;display:flex;align-items:center;justify-content:center;color:#fff;font-weight:800;font-size:0.82rem;flex-shrink:0;">G</div>
-              <div style="background:#2f2f2f;border-radius:4px 14px 14px 14px;padding:0.75rem 1rem;font-size:0.8rem;color:#e5e7eb;line-height:1.7;">
-                <span style="display:block;font-family:'Fira Code',monospace;font-size:0.72rem;color:#6b7280;">▶ pip install jakal-hwpx ... ✓</span>
-                <span style="display:block;font-family:'Fira Code',monospace;font-size:0.72rem;color:#6b7280;">▶ 사키 보고서.pdf 분석 중... ✓</span>
-                <span style="display:block;font-family:'Fira Code',monospace;font-size:0.72rem;color:#6b7280;">▶ 표 항목 자동 채움... ✓</span>
-                <span style="display:block;font-family:'Fira Code',monospace;font-size:0.72rem;color:#6b7280;">▶ validation_errors() → [] ✓</span>
-                <span style="display:block;margin-top:0.5rem;"><strong>연구계획서_완성.hwpx</strong> 생성 완료 ✅</span>
-              </div>
-            </div>
+  <main>
+    <section class="hero">
+      <div class="hero-inner">
+        <div>
+          <div class="badge-row">
+            <span class="badge">HWPX 양식 유지</span>
+            <span class="badge">검증 저장</span>
+            <span class="badge">ChatGPT에서 사용</span>
+          </div>
+          <h1>HWP에게 고통 받으셨죠?</h1>
+          <p class="hero-copy">
+            이제 ChatGPT, Claude 등에서 HWPX 문서 딸깍 작업이 가능합니다.
+            숙제든, 보고서든, 문제집 제작이든, 공문서든 각종 귀찮은 문서 작업을 훨씬 가볍게 처리하세요.
+          </p>
+          <div class="hero-actions">
+            <button class="primary-btn" onclick="copyFullPrompt(this)">프롬프트 복사</button>
+            <a class="secondary-btn" href="#how">사용법 보기</a>
           </div>
         </div>
-      </div>
-    </div>
 
-    <!-- BEFORE / AFTER document -->
-    <div style="font-size:0.8rem;font-weight:700;color:var(--gray-600);margin-bottom:0.8rem;">② 결과물 비교 — 빈 양식 → 자동 완성</div>
-    <div class="before-after">
-      <!-- BEFORE -->
-      <div class="doc-card">
-        <div class="doc-card-header before">
-          <span>⬜</span> Before — 빈 양식
-        </div>
-        <div class="doc-card-body">
-          <div class="fake-doc">
-            <div class="fake-doc-title">연 구 계 획 서</div>
-            <div class="fake-doc-section">□ 연구계획 요약</div>
-            <table class="fake-table">
-              <tr>
-                <td class="th" rowspan="2">연구과제명</td>
-                <td class="sub-th">국문</td>
-                <td><span class="placeholder">( 작성 필요 )</span></td>
-              </tr>
-              <tr>
-                <td class="sub-th">영문</td>
-                <td><span class="placeholder">( 작성 필요 )</span></td>
-              </tr>
-              <tr>
-                <td class="th">연구 분야</td>
-                <td colspan="2"><span class="placeholder">수학( ), 물리학( ), 화학( ), 생명과학( ), ...</span></td>
-              </tr>
-              <tr>
-                <td class="th">연구 요약</td>
-                <td colspan="2" style="height:60px;"><span class="placeholder">( 내용 작성 )</span></td>
-              </tr>
-            </table>
+        <aside class="prompt-panel" aria-label="HWPX AI 프롬프트">
+          <div class="prompt-head">
+            <div>
+              <strong>HWPX AI 프롬프트</strong>
+              <span>복사해서 AI 채팅에 붙여넣기</span>
+            </div>
+            <button class="copy-btn" onclick="copyFullPrompt(this)">복사</button>
           </div>
-        </div>
-      </div>
-
-      <!-- ARROW -->
-      <div class="arrow-col">→</div>
-
-      <!-- AFTER -->
-      <div class="doc-card">
-        <div class="doc-card-header after">
-          <span>✅</span> After — 자동 완성 + 검증 통과
-        </div>
-        <div class="doc-card-body">
-          <div class="fake-doc">
-            <div class="fake-doc-title">연 구 계 획 서</div>
-            <div class="fake-doc-section">□ 연구계획 요약</div>
-            <table class="fake-table">
-              <tr>
-                <td class="th" rowspan="2">연구과제명</td>
-                <td class="sub-th">국문</td>
-                <td class="filled">유산균의 장내 유해세균 억제 효과 및 항균물질 특성 분석</td>
-              </tr>
-              <tr>
-                <td class="sub-th">영문</td>
-                <td class="filled" style="font-size:0.63rem;">Analysis of the Inhibitory Effects of Probiotic Lactic Acid Bacteria on Harmful Intestinal Bacteria and the Characteristics of Their Antimicrobial Substances</td>
-              </tr>
-              <tr>
-                <td class="th">연구 분야</td>
-                <td colspan="2">수학( ), 물리학( ), 화학( ), <span class="filled">생명과학(O)</span>, 지구과학( )</td>
-              </tr>
-              <tr>
-                <td class="th">연구 요약</td>
-                <td colspan="2">
-                  <p class="filled-body">본 연구는 시중 프로바이오틱스에 포함되는 Lactococcus lactis와 Lactobacillus acidophilus가 장내 유해세균의 생장을 억제할 수 있는지를 실험적으로 검증하고, 그 항균 작용의 원인 물질을 분석하는 것을 목적으로 한다. 표적 균주로는 Staphylococcus pasteuri와 Shigella flexneri를 선정하여, agar plug/disk diffusion method로 억제 효과를 정량 비교한다...</p>
-                </td>
-              </tr>
-            </table>
-            <div class="check-badge">✅ validation_errors() → []</div>
-            <div class="check-badge" style="margin-left:0.3rem;">✅ save_reopen 통과</div>
+          <div class="prompt-preview">
+            <p class="quick-prompt">
+              파일 올리고, 프롬프트 붙이고, 원하는 문서를 말하면 끝.
+            </p>
+            <p class="prompt-note">
+              양식 보존, 검증 저장, 오류 대응 규칙은 복사되는 프롬프트 안에 들어 있습니다.
+            </p>
           </div>
+        </aside>
+      </div>
+    </section>
+
+    <section class="how" id="how">
+      <div class="container">
+        <p class="section-kicker">사용법</p>
+        <h2>복잡한 설명 없이, 파일과 프롬프트만 준비하세요</h2>
+        <p class="section-lead">
+          코드를 직접 작성할 필요는 없습니다. HWPX 양식과 참고 자료를 올리고,
+          복사한 프롬프트를 함께 전달하면 됩니다.
+        </p>
+        <div class="steps">
+          <article class="step">
+            <strong>Step 1</strong>
+            <h3>양식을 HWPX로 준비</h3>
+            <p>HWP 파일은 한컴 앱에서 “파일 -> 다른 이름 저장 -> HWPX”로 저장해 올리는 것을 권장합니다.</p>
+          </article>
+          <article class="step highlight">
+            <strong>Step 2</strong>
+            <h3>HWPX AI 프롬프트 붙여넣기</h3>
+            <p>원하는 문서 내용과 함께 복사한 프롬프트를 붙여넣으면 됩니다.</p>
+            <div class="mini-code">python으로 jakal-hwpx을 반드시 설치 및 활용하고, xml 편집은 이용하지 말 것...</div>
+          </article>
+          <article class="step">
+            <strong>Step 3</strong>
+            <h3>검증된 결과 파일 받기</h3>
+            <p>AI가 save(validate=True) 등 검증 절차를 거쳐 결과 HWPX 파일을 만들도록 안내합니다.</p>
+          </article>
         </div>
       </div>
-    </div>
+    </section>
 
-    <!-- Actual result screenshot slot -->
-    <div style="margin-top:1rem;">
-      <div style="font-size:0.8rem;font-weight:700;color:var(--gray-600);margin-bottom:0.6rem;">③ 실제 결과 화면 (한글에서 열기)</div>
-      <div class="screenshot-zone">
-        <img src="images/result-doc.png" alt="한글에서 연 결과" />
-      </div>
-    </div>
-
-    <!-- more examples -->
-    <div style="margin-top:2rem;display:flex;gap:0.75rem;flex-wrap:wrap;">
-      <div style="font-size:0.82rem;font-weight:600;color:var(--gray-600);margin-right:0.25rem;align-self:center;">사용 사례:</div>
-      <span style="background:var(--gray-100);border-radius:99px;padding:0.3rem 0.9rem;font-size:0.82rem;">📋 사회보장 신청서</span>
-      <span style="background:var(--gray-100);border-radius:99px;padding:0.3rem 0.9rem;font-size:0.82rem;">🎓 졸업논문 양식</span>
-      <span style="background:var(--gray-100);border-radius:99px;padding:0.3rem 0.9rem;font-size:0.82rem;">🔢 수식 문서</span>
-      <span style="background:var(--gray-100);border-radius:99px;padding:0.3rem 0.9rem;font-size:0.82rem;">📝 각종 보고서</span>
-    </div>
-  </div>
-</section>
-
-<!-- FEATURES -->
-<section class="features-section" id="features">
-  <div class="container">
-    <div class="eyebrow">지원 기능</div>
-    <h2>표·이미지·수식 전부 지원</h2>
-    <p class="sub">단순 텍스트 치환부터 복잡한 문서 구조 편집까지.</p>
-    <div class="feat-grid">
-      <div class="feat-item"><div class="feat-icon">📋</div><div class="feat-title">표(Table) 편집</div></div>
-      <div class="feat-item"><div class="feat-icon">🖼️</div><div class="feat-title">이미지 삽입</div></div>
-      <div class="feat-item"><div class="feat-icon">🔢</div><div class="feat-title">수식(Equation)</div></div>
-      <div class="feat-item"><div class="feat-icon">🔤</div><div class="feat-title">텍스트 치환</div></div>
-      <div class="feat-item"><div class="feat-icon">🔖</div><div class="feat-title">북마크·필드</div></div>
-      <div class="feat-item"><div class="feat-icon">📄</div><div class="feat-title">머리글·바닥글</div></div>
-      <div class="feat-item"><div class="feat-icon">✅</div><div class="feat-title">4단계 검증</div></div>
-      <div class="feat-item"><div class="feat-icon">📝</div><div class="feat-title">각주·미주</div></div>
-      <div class="feat-item"><div class="feat-icon">🎨</div><div class="feat-title">도형·스타일</div></div>
-    </div>
-  </div>
-</section>
-
-<!-- DEVELOPER SECTION (collapsible) -->
-<section class="dev-section" id="dev">
-  <div class="container">
-    <div class="eyebrow">개발자용</div>
-    <h2>API 레퍼런스 · 안전 규칙</h2>
-    <p class="sub">직접 코드로 사용하는 개발자를 위한 섹션입니다.</p>
-
-    <details>
-      <summary>설치 &amp; 빠른 시작</summary>
-      <div class="dev-grid" style="margin-top:0.8rem;">
-        <div class="code-box">
-          <div class="code-bar"><span class="dot r"></span><span class="dot y"></span><span class="dot g"></span><span style="margin-left:auto;">설치</span></div>
-          <pre>pip install jakal-hwpx</pre>
-        </div>
-        <div class="code-box">
-          <div class="code-bar"><span class="dot r"></span><span class="dot y"></span><span class="dot g"></span><span style="margin-left:auto;">빠른 시작</span></div>
-          <pre><span class="kw">from</span> jakal_hwpx <span class="kw">import</span> HwpxDocument
-
-doc = HwpxDocument.<span class="fn">open</span>(<span class="str">"양식.hwpx"</span>)
-doc.<span class="fn">replace_text</span>(<span class="str">"{{제목}}"</span>, <span class="str">"연구 제목"</span>)
-t = doc.<span class="fn">tables</span>()[<span class="num">0</span>]
-t.<span class="fn">set_cell_text</span>(<span class="num">0</span>, <span class="num">2</span>, <span class="str">"유산균 항균 연구"</span>)
-doc.<span class="fn">save</span>(<span class="str">"완성.hwpx"</span>, validate=<span class="kw">True</span>)</pre>
+    <section id="case">
+      <div class="container">
+        <p class="section-kicker">실제 사례</p>
+        <h2>대구과학고등학교에서 실제로 활용되었습니다</h2>
+        <p class="section-lead">
+          20명 이상의 학생이 jakal-hwpx 기반 HWPX 작성 흐름을 실제로 이용했고,
+          반복적인 한글 문서 작성과 양식 채우기에서 상당한 시간 절감 효과를 보였습니다.
+        </p>
+        <div class="case-grid">
+          <div class="stat-card">
+            <span class="stat-number">20+</span>
+            <p>대구과학고등학교 학생들이 연구 계획서, 보고서 등 양식 문서 작성에 실제로 사용했습니다.</p>
+          </div>
+          <article class="example-card">
+            <img src="images/result-doc.png" alt="jakal-hwpx로 작성된 HWPX 결과 예시" />
+            <div class="example-body">
+              <h3>양식은 유지하고, 빈칸은 자연스럽게 채우기</h3>
+              <p>표, 문단, 제목 구조를 유지한 채 참고 자료를 바탕으로 내용을 작성하는 데 초점을 둡니다.</p>
+            </div>
+          </article>
         </div>
       </div>
-    </details>
+    </section>
 
-    <details>
-      <summary>주요 API 목록</summary>
-      <div style="margin-top:0.8rem;display:grid;grid-template-columns:1fr 1fr;gap:0.5rem;">
-        <div style="background:#0f172a;border-radius:8px;padding:0.7rem 1rem;font-family:'Fira Code',monospace;font-size:0.78rem;color:#93c5fd;">HwpxDocument.open(path)</div>
-        <div style="background:#0f172a;border-radius:8px;padding:0.7rem 1rem;font-family:'Fira Code',monospace;font-size:0.78rem;color:#93c5fd;">replace_text(old, new)</div>
-        <div style="background:#0f172a;border-radius:8px;padding:0.7rem 1rem;font-family:'Fira Code',monospace;font-size:0.78rem;color:#93c5fd;">set_paragraph_text(si, pi, text)</div>
-        <div style="background:#0f172a;border-radius:8px;padding:0.7rem 1rem;font-family:'Fira Code',monospace;font-size:0.78rem;color:#93c5fd;">tables() / set_cell_text(r, c, v)</div>
-        <div style="background:#0f172a;border-radius:8px;padding:0.7rem 1rem;font-family:'Fira Code',monospace;font-size:0.78rem;color:#93c5fd;">pictures() / equations()</div>
-        <div style="background:#0f172a;border-radius:8px;padding:0.7rem 1rem;font-family:'Fira Code',monospace;font-size:0.78rem;color:#93c5fd;">validation_errors()</div>
-        <div style="background:#0f172a;border-radius:8px;padding:0.7rem 1rem;font-family:'Fira Code',monospace;font-size:0.78rem;color:#93c5fd;">save_reopen_validation_errors()</div>
-        <div style="background:#0f172a;border-radius:8px;padding:0.7rem 1rem;font-family:'Fira Code',monospace;font-size:0.78rem;color:#93c5fd;">save(path, validate=True)</div>
-      </div>
-    </details>
-
-    <details>
-      <summary>AI 안전 규칙 19개 — ChatGPT 프롬프트에 추가 권장</summary>
-      <div style="margin-top:0.8rem;" class="safety-prompt-box">
-        <div class="safety-prompt-header">
-          <span>AI 안전 규칙 (복사해서 프롬프트에 추가)</span>
-          <button class="copy-btn" style="font-size:0.72rem;padding:0.2rem 0.7rem;" onclick="cp(this,document.getElementById('safetyText').textContent)">복사</button>
+    <section class="how" id="guide">
+      <div class="container">
+        <p class="section-kicker">사용자 안내</p>
+        <h2>문제가 생겼을 때는 이렇게 안내하세요</h2>
+        <p class="section-lead">
+          사용자에게는 긴 내부 규칙 대신 필요한 해결 방법만 짧게 알려주는 편이 좋습니다.
+        </p>
+        <div class="guide-grid">
+          <article class="guide-card">
+            <h3>HWP 파일을 올린 경우</h3>
+            <p>한컴 앱에서 파일 -> 다른 이름 저장 -> HWPX로 저장해서 다시 올려달라고 안내하세요. HWP도 가능하지만 성능이 떨어질 수 있습니다.</p>
+          </article>
+          <article class="guide-card">
+            <h3>수식이 깨진 경우</h3>
+            <p>한컴 앱에서 파일을 .hwp로 바꾸어 저장하고 닫았다가 다시 열면 정상적으로 보일 수 있다고 안내하세요.</p>
+          </article>
+          <article class="guide-card">
+            <h3>이미지가 잘린 경우</h3>
+            <p>개체 속성 -> 이미지 -> 그림 자르기를 모두 0mm로 조정한 뒤 크기를 변경하라고 안내하세요.</p>
+          </article>
+          <article class="guide-card warning">
+            <h3>파일이 안 열리는 경우</h3>
+            <p>오류 내용을 확인하고, HWPX AI 프롬프트와 함께 다시 요청하도록 간략하게 안내하세요.</p>
+          </article>
         </div>
-        <div class="safety-text" id="safetyText">1. jakal_hwpx.HwpxDocument를 범용 편집기처럼 직접 쓰지 말 것.
-2. save(validate=False)를 절대 호출하지 말 것.
-3. 저장 후 검증 없이 파일을 반환하지 말 것.
-4. validation_errors(), xml_validation_errors(), reference_validation_errors(), save_reopen_validation_errors() 중 하나라도 실패하면 결과 파일을 폐기할 것.
-5. save_reopen_validation_errors() 호출 실패나 예외를 무시하지 말 것.
-6. add_part(), remove_part(), 내부 XML/XPath 직접 수정, ZIP 후처리를 금지할 것.
-7. replace_text()는 짧고 고유한 플레이스홀더 치환에만 사용할 것.
-8. 사람용 지시문 문장 전체를 replace_text()로 바꾸려 하지 말 것.
-9. 문단 교체는 승인된 문단 슬롯에 대해서만 set_paragraph_text()를 사용할 것.
-10. set_paragraph_text()는 헤더/도형/복합 컨트롤 문단에는 사용하지 말 것.
-11. 표 수정은 승인된 셀 좌표에 대해서만 set_cell_text()를 사용할 것.
-12. 병합 셀 구조를 추측해서 수정하지 말 것.
-13. 새 문단/새 섹션 추가는 템플릿이 허용한 위치에서만 수행할 것.
-14. 배포보호 문서(is_distribution_protected)는 수정하지 말 것.
-15. 플레이스홀더 치환 후 잔여 지시문, 플레이스홀더, 작성 안내 문구가 남아 있으면 실패로 처리할 것.
-16. 치환/수정 성공 개수를 확인하고, 예상 개수와 다르면 실패로 처리할 것.
-17. 검증 실패 시 우회 저장, 강제 저장, 재시도 저장을 하지 말 것.
-18. 출력은 항상 새 파일로 저장하고 원본 템플릿을 덮어쓰지 말 것.
-19. 가능하면 set_preview_text()를 채울 것.</div>
       </div>
-    </details>
-  </div>
-</section>
+    </section>
 
-<!-- CTA -->
-<section class="cta-section">
-  <div class="container">
-    <h2>지금 바로 딸깍 하세요</h2>
-    <p>설치도 코딩도 필요 없습니다. 이 한 줄만 기억하세요.</p>
-    <div class="cta-prompt">
-      <div style="flex:1;font-family:'Fira Code',monospace;font-size:0.85rem;color:var(--yellow);">python으로 jakal-hwpx을 반드시 설치 및 활용하고, xml 편집은 이용하지 말것. save(validate=True)로 해줘</div>
-      <button class="copy-btn" onclick="cp(this,'python으로 jakal-hwpx을 반드시 설치 및 활용하고, xml 편집은 이용하지 말것. save(validate=True)로 해줘')">복사</button>
-    </div>
-    <div class="cta-btns">
-      <a class="btn-p" href="https://pypi.org/project/jakal-hwpx/" target="_blank">PyPI 보기 →</a>
-      <a class="btn-s" href="https://github.com/jakal/jakal-hwpx" target="_blank">GitHub</a>
-    </div>
-  </div>
-</section>
+    <section class="cta">
+      <div class="container">
+        <p class="section-kicker" style="color:#fbbf24;">시작하기</p>
+        <h2>지금 바로 HWPX AI 프롬프트를 복사하세요</h2>
+        <p class="section-lead">
+          문의는 jakalflow@gmail.com으로 보내주세요.
+        </p>
+        <div class="cta-row">
+          <button class="primary-btn" onclick="copyFullPrompt(this)">프롬프트 복사</button>
+          <a class="secondary-btn" href="mailto:jakalflow@gmail.com">문의하기</a>
+          <a class="secondary-btn" href="https://pypi.org/project/jakal-hwpx/" target="_blank" rel="noreferrer">PyPI 보기</a>
+        </div>
+      </div>
+    </section>
+  </main>
 
-<footer>
-  <strong style="color:#e5e7eb;">jakal-hwpx</strong> · MIT License ·
-  <a href="https://pypi.org/project/jakal-hwpx/" target="_blank">PyPI</a> ·
-  <a href="https://github.com/jakal/jakal-hwpx" target="_blank">GitHub</a>
-</footer>
+  <footer>
+    <strong style="color:#ffffff;">jakal-hwpx</strong> · 문의
+    <a href="mailto:jakalflow@gmail.com">jakalflow@gmail.com</a>
+  </footer>
 
-<script>
-  function cp(btn, text) {
-    if (navigator.clipboard && window.isSecureContext) {
-      navigator.clipboard.writeText(text).then(() => flash(btn)).catch(() => fallback(btn, text));
-    } else {
-      fallback(btn, text);
+  <script>
+    function copyFullPrompt(btn) {
+      const text = document.getElementById("fullPrompt").textContent.trim();
+      copyText(btn, text);
     }
-  }
-  function fallback(btn, text) {
-    const ta = document.createElement('textarea');
-    ta.value = text;
-    ta.style.cssText = 'position:fixed;opacity:0;top:0;left:0;';
-    document.body.appendChild(ta);
-    ta.focus(); ta.select();
-    try { document.execCommand('copy'); flash(btn); } catch(e) {}
-    document.body.removeChild(ta);
-  }
-  function flash(btn) {
-    const orig = btn.textContent;
-    btn.textContent = '✓ 복사됨';
-    setTimeout(() => btn.textContent = orig, 2000);
-  }
-</script>
+
+    function copyText(btn, text) {
+      if (navigator.clipboard && window.isSecureContext) {
+        navigator.clipboard.writeText(text).then(function () {
+          flash(btn);
+        }).catch(function () {
+          fallbackCopy(btn, text);
+        });
+      } else {
+        fallbackCopy(btn, text);
+      }
+    }
+
+    function fallbackCopy(btn, text) {
+      const textarea = document.createElement("textarea");
+      textarea.value = text;
+      textarea.setAttribute("readonly", "");
+      textarea.style.position = "fixed";
+      textarea.style.left = "-9999px";
+      document.body.appendChild(textarea);
+      textarea.select();
+      try {
+        document.execCommand("copy");
+        flash(btn);
+      } finally {
+        document.body.removeChild(textarea);
+      }
+    }
+
+    function flash(btn) {
+      const original = btn.textContent;
+      btn.textContent = "복사 완료";
+      btn.disabled = true;
+      setTimeout(function () {
+        btn.textContent = original;
+        btn.disabled = false;
+      }, 1600);
+    }
+  </script>
 </body>
 </html>
