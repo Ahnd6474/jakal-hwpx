@@ -21,6 +21,7 @@ from jakal_hwpx import HancomDocument
 | API | 설명 |
 |---|---|
 | `HancomDocument.blank(*, converter=None)` | 빈 공통 문서 모델을 만듭니다. |
+| `HancomDocument.open(path, *, converter=None)` | `.hwp`/`.hwpx`를 자동 감지해 엽니다. |
 | `HancomDocument.read_hwpx(path, *, converter=None)` | HWPX를 읽어 공통 모델로 변환합니다. |
 | `HancomDocument.read_hwp(path, *, converter=None)` | HWP를 읽어 공통 모델로 변환합니다. |
 | `HancomDocument.from_hwpx_document(document, *, converter=None)` | 이미 열린 `HwpxDocument`를 공통 모델로 올립니다. |
@@ -32,6 +33,7 @@ from jakal_hwpx import HancomDocument
 |---|---|
 | `to_hwpx_document()` | 현재 모델을 `HwpxDocument`로 materialize합니다. |
 | `to_hwp_document(*, converter=None)` | 현재 모델을 `HwpDocument`로 materialize합니다. |
+| `save(path, *, validate=True, converter=None)` | 확장자에 따라 HWP/HWPX로 저장합니다. |
 | `write_to_hwpx(path, *, validate=True)` | HWPX 파일로 저장합니다. |
 | `write_to_hwp(path, *, converter=None)` | HWP 파일로 저장합니다. |
 | `bridge(*, converter=None)` | `HwpHwpxBridge`로 감싸 materialization 경로를 명시합니다. |

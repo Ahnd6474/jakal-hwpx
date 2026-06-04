@@ -60,7 +60,16 @@ from jakal_hwpx import HwpxDocument
 
 Two generic dispatchers are now available on top of the existing explicit `append_*` APIs.
 
-### `append_block(type, content=None, **kwargs)`
+### `append(kind, content=None, **kwargs)`
+
+Pythonic block-dispatch alias for `append_block()`.
+
+```python
+doc.append("equ", "x+y")
+doc.append("table", [["A", "B"], ["1", "2"]])
+```
+
+### `append_block(kind, content=None, **kwargs)`
 
 Insert a block-level control or paragraph.
 
@@ -70,7 +79,7 @@ doc.append_block("table", [["A", "B"], ["1", "2"]])
 doc.append_block("bookmark", "anchor_1")
 ```
 
-### `append_inline(type, content=None, **kwargs)`
+### `append_inline(kind, content=None, **kwargs)`
 
 Reuse the target paragraph instead of creating a new one.
 
@@ -106,6 +115,7 @@ Notes:
 - `append_inline("header", ...)` and `append_inline("footer", ...)` are rejected.
 - `append_block("picture", ...)` and `append_block("ole", ...)` require `data=...`.
 - `append_block("table", content=[[...]])` will infer `rows`, `columns`, and `cell_texts`.
+- Legacy `type=...` is still accepted for compatibility, but `kind=...` is the preferred keyword.
 
 ## Explicit append APIs
 

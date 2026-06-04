@@ -42,7 +42,20 @@ from jakal_hwpx.namespaces import NS
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 HWP_SAMPLE_DIR = REPO_ROOT / "examples" / "samples" / "hwp"
-MATH_DEBUG_SAMPLE_DIR = REPO_ROOT / "math debug sample"
+MATH_DEBUG_SAMPLE_DIR_CANDIDATES = (
+    REPO_ROOT / "math debug sample",
+    REPO_ROOT / "hwpx_collection",
+    REPO_ROOT / "examples" / "samples" / "hwpx",
+)
+
+
+def _resolve_math_debug_sample_path(sample_name: str) -> Path:
+    for directory in MATH_DEBUG_SAMPLE_DIR_CANDIDATES:
+        candidate = directory / sample_name
+        if candidate.exists():
+            return candidate
+    searched = ", ".join(str(path) for path in MATH_DEBUG_SAMPLE_DIR_CANDIDATES)
+    raise FileNotFoundError(f"Could not find math debug sample {sample_name!r}. Searched: {searched}")
 
 
 @pytest.fixture(scope="session")
@@ -135,6 +148,29 @@ def test_hancom_document_can_read_hwpx_and_roundtrip_hwpx(sample_hwpx_path: Path
     assert reopened.get_document_text()
 
 
+def test_hancom_document_open_and_save_dispatch_by_suffix(sample_hwpx_path: Path, sample_hwp_path: Path, tmp_path: Path) -> None:
+    from_hwpx = HancomDocument.open(sample_hwpx_path)
+    from_hwp = HancomDocument.open(sample_hwp_path)
+
+    assert from_hwpx.source_format == "hwpx"
+    assert from_hwp.source_format == "hwp"
+
+    document = HancomDocument.blank()
+    document.append_paragraph("DISPATCHED-SAVE")
+
+    hwpx_path = tmp_path / "dispatch_save.hwpx"
+    hwp_path = tmp_path / "dispatch_save.hwp"
+
+    assert document.save(hwpx_path) == hwpx_path
+    assert document.save(hwp_path) == hwp_path
+
+    reopened_hwpx = HancomDocument.open(hwpx_path)
+    reopened_hwp = HancomDocument.open(hwp_path)
+
+    assert "DISPATCHED-SAVE" in reopened_hwpx.sections[0].blocks[0].text
+    assert "DISPATCHED-SAVE" in reopened_hwp.sections[0].blocks[0].text
+
+
 def test_hancom_document_does_not_materialize_default_hwpx_memo_shape_in_hwp_bridge(tmp_path: Path) -> None:
     source = HwpxDocument.blank()
 
@@ -156,7 +192,7 @@ def test_hancom_document_does_not_materialize_default_hwpx_memo_shape_in_hwp_bri
 
 @pytest.mark.parametrize("sample_name", ["mock_exam_before.hwpx", "mock_exam_1_10 after.hwpx"])
 def test_math_debug_sample_preserves_equation_sizes_through_hwpx_bridge(tmp_path: Path, sample_name: str) -> None:
-    sample_path = MATH_DEBUG_SAMPLE_DIR / sample_name
+    sample_path = _resolve_math_debug_sample_path(sample_name)
     source = HancomDocument.from_hwpx_document(HwpxDocument.open(sample_path))
     before = [
         (block.script, block.width, block.height)
@@ -180,7 +216,7 @@ def test_math_debug_sample_preserves_equation_sizes_through_hwpx_bridge(tmp_path
 
 @pytest.mark.parametrize("sample_name", ["mock_exam_before.hwpx", "mock_exam_1_10 after.hwpx"])
 def test_math_debug_sample_preserves_equation_sizes_through_hwp_bridge(tmp_path: Path, sample_name: str) -> None:
-    sample_path = MATH_DEBUG_SAMPLE_DIR / sample_name
+    sample_path = _resolve_math_debug_sample_path(sample_name)
     source = HancomDocument.from_hwpx_document(HwpxDocument.open(sample_path))
     before = [
         (block.script, block.width, block.height)

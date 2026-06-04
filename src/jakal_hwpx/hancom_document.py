@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import struct
 import tempfile
+import zipfile
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable
@@ -872,6 +873,16 @@ class HancomDocument:
     def blank(cls, *, converter: HancomConverter | None = None) -> "HancomDocument":
         return cls(converter=converter)
 
+    @classmethod
+    def open(cls, path: str | Path, *, converter: HancomConverter | None = None) -> "HancomDocument":
+        candidate = Path(path)
+        suffix = candidate.suffix.lower()
+        if zipfile.is_zipfile(candidate):
+            return cls.read_hwpx(candidate, converter=converter)
+        if suffix == ".hwp":
+            return cls.read_hwp(candidate, converter=converter)
+        raise ValueError(f"Unsupported Hancom document path: {candidate}. Expected .hwp or .hwpx.")
+
     def bridge(self, *, converter: HancomConverter | None = None):
         from .bridge import HwpHwpxBridge
 
@@ -1610,6 +1621,21 @@ class HancomDocument:
 
     def write_to_hwpx(self, path: str | Path, *, validate: bool = True) -> Path:
         return self.to_hwpx_document().save(path, validate=validate)
+
+    def save(
+        self,
+        path: str | Path,
+        *,
+        validate: bool = True,
+        converter: HancomConverter | None = None,
+    ) -> Path:
+        target = Path(path)
+        suffix = target.suffix.lower()
+        if suffix == ".hwpx":
+            return self.write_to_hwpx(target, validate=validate)
+        if suffix == ".hwp":
+            return self.write_to_hwp(target, converter=converter)
+        raise ValueError(f"Unsupported Hancom document path: {target}. Expected .hwp or .hwpx.")
 
     def to_hwp_document(self, *, converter: HancomConverter | None = None) -> HwpDocument:
         effective_converter = converter or self._converter

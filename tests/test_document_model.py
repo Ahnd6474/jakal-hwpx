@@ -1055,6 +1055,27 @@ def test_append_block_and_append_inline_dispatchers_roundtrip(tmp_path: Path) ->
     assert {equation.script for equation in reopened.equations()} == {"x+y", "z+w"}
 
 
+def test_append_dispatchers_accept_pythonic_kind_keyword_and_legacy_type_keyword() -> None:
+    document = HwpxDocument.blank()
+    document.append_paragraph("INLINE")
+
+    block_equation = document.append(kind="equ", content="x+y", width=3200, height=1800)
+    inline_text = document.append_inline(kind="text", content="-TAIL")
+    legacy_equation = document.append_block(type="equ", content="z+w", width=2800, height=1700)
+
+    assert block_equation.script == "x+y"
+    assert legacy_equation.script == "z+w"
+    assert inline_text is not None
+    assert "-TAIL" in document.get_document_text()
+
+
+def test_append_dispatchers_reject_kind_and_type_together() -> None:
+    document = HwpxDocument.blank()
+
+    with pytest.raises(TypeError):
+        document.append_block(kind="equ", type="equ", content="x+y")
+
+
 def test_validation_errors_return_structured_issues() -> None:
     document = HwpxDocument()
     document.remove_part("Contents/header.xml")

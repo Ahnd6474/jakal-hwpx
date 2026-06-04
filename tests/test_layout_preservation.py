@@ -587,3 +587,24 @@ def test_save_auto_repairs_caption_lineseg_textpos_overflow(tmp_path: Path) -> N
 
     reopened = HwpxDocument.open(output_path)
     assert reopened.validation_errors() == []
+
+
+@pytest.mark.parametrize(
+    "sample_name",
+    [
+        "2026_오르비_보고서_타치바나미카리_완성.hwpx",
+        "[양식] 2026_오르비_보고서.hwpx",
+    ],
+)
+def test_save_auto_repairs_known_corpus_linesegarray_samples(sample_name: str, tmp_path: Path) -> None:
+    sample_path = Path(__file__).resolve().parents[1] / "examples" / "samples" / "hwpx" / sample_name
+    document = HwpxDocument.open(sample_path, validate=False)
+
+    issues = [error for error in document.validation_errors() if error.kind == "paragraph_layout_cache"]
+    assert issues
+
+    output_path = tmp_path / f"{sample_path.stem}_repaired.hwpx"
+    document.save(output_path)
+
+    reopened = HwpxDocument.open(output_path)
+    assert not any(error.kind == "paragraph_layout_cache" for error in reopened.validation_errors())

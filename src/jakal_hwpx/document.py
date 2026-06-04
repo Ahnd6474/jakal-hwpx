@@ -294,6 +294,19 @@ def _canonical_append_block_type(value: str) -> str:
     return resolved
 
 
+def _resolve_append_kind_argument(
+    kind: str | None,
+    extra_kwargs: dict[str, object],
+) -> str:
+    legacy_type = extra_kwargs.pop("type", None)
+    if kind is not None and legacy_type is not None:
+        raise TypeError("Pass either kind=... or type=..., not both.")
+    resolved = kind if kind is not None else legacy_type
+    if not isinstance(resolved, str) or not resolved.strip():
+        raise TypeError("kind must be a non-empty string.")
+    return resolved
+
+
 def _graphic_attribute_xpath(attribute: str) -> str:
     return " | ".join(f".//hp:{tag}/@{attribute}" for tag in _GRAPHIC_CONTROL_TAGS)
 
@@ -1196,9 +1209,28 @@ class HwpxDocument:
             char_pr_id=char_pr_id,
         )
 
+    def append(
+        self,
+        kind: str | None = None,
+        content: object | None = None,
+        *,
+        section_index: int = 0,
+        paragraph_index: int | None = None,
+        char_pr_id: str | None = None,
+        **kwargs,
+    ):
+        return self.append_block(
+            kind=kind,
+            content=content,
+            section_index=section_index,
+            paragraph_index=paragraph_index,
+            char_pr_id=char_pr_id,
+            **kwargs,
+        )
+
     def append_block(
         self,
-        type: str,
+        kind: str | None = None,
         content: object | None = None,
         *,
         section_index: int = 0,
@@ -1207,8 +1239,9 @@ class HwpxDocument:
         **kwargs,
     ):
         self._ensure_editable_sections()
+        resolved_kind = _resolve_append_kind_argument(kind, kwargs)
         return self._dispatch_append_block(
-            type,
+            resolved_kind,
             content,
             section_index=section_index,
             paragraph_index=paragraph_index,
@@ -1219,7 +1252,7 @@ class HwpxDocument:
 
     def append_inline(
         self,
-        type: str,
+        kind: str | None = None,
         content: object | None = None,
         *,
         section_index: int = 0,
@@ -1228,8 +1261,9 @@ class HwpxDocument:
         **kwargs,
     ):
         self._ensure_editable_sections()
+        resolved_kind = _resolve_append_kind_argument(kind, kwargs)
         return self._dispatch_append_block(
-            type,
+            resolved_kind,
             content,
             section_index=section_index,
             paragraph_index=paragraph_index,

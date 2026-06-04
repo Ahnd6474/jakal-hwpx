@@ -52,9 +52,9 @@ Reading an existing document uses the same model:
 ```python
 from jakal_hwpx import HancomDocument
 
-doc = HancomDocument.read_hwp("input.hwp")
+doc = HancomDocument.open("input.hwp")
 doc.append_paragraph("Review complete")
-doc.write_to_hwpx("build/output.hwpx")
+doc.save("build/output.hwpx")
 ```
 
 ## Direct HWPX authoring
@@ -76,13 +76,13 @@ doc.save("build/direct.hwpx")
 
 There are now two authoring styles for controls:
 
-- `append_block(type=..., content=..., **kwargs)`: insert a block-level control
-- `append_inline(type=..., content=..., **kwargs)`: reuse the target paragraph instead of creating a new one
+- `append_block(kind=..., content=..., **kwargs)`: insert a block-level control
+- `append_inline(kind=..., content=..., **kwargs)`: reuse the target paragraph instead of creating a new one
 
 Examples:
 
 ```python
-doc.append_block("equ", "x+y")
+doc.append("equ", "x+y")
 doc.append_inline("equ", "x+y")
 doc.append_inline("text", " + z")
 doc.append_block("table", [["A", "B"], ["1", "2"]])

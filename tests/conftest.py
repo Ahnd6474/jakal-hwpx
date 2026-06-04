@@ -20,6 +20,8 @@ SAMPLE_CORPUS_DIR = REPO_ROOT / "examples" / "samples" / "hwpx"
 if str(SRC_ROOT) not in sys.path:
     sys.path.insert(0, str(SRC_ROOT))
 
+from jakal_hwpx import HwpxDocument
+
 _TMP_PATH_COUNTER = itertools.count()
 collect_ignore_glob = ["pytest-cache-files-*", "_pytest_cache*", "_pytest_basetemp*", "_tmp_pytest*", "_release_tmp*"]
 
@@ -27,7 +29,16 @@ collect_ignore_glob = ["pytest-cache-files-*", "_pytest_cache*", "_pytest_basete
 def _valid_hwpx_files(root: Path) -> list[Path]:
     if not root.exists():
         return []
-    return [path for path in sorted(root.glob("*.hwpx")) if zipfile.is_zipfile(path)]
+    files: list[Path] = []
+    for path in sorted(root.glob("*.hwpx")):
+        if not zipfile.is_zipfile(path):
+            continue
+        try:
+            HwpxDocument.open(path)
+        except Exception:
+            continue
+        files.append(path)
+    return files
 
 
 def find_sample_with_section_xpath(files: list[Path], expression: str) -> Path:
@@ -69,7 +80,7 @@ def _tmp_dir_name(nodeid: str) -> str:
 
 @pytest.fixture(scope="session")
 def _workspace_tmp_root() -> Path:
-    root = REPO_ROOT / "tests" / "_tmp_pytest"
+    root = REPO_ROOT / "tests" / "_tmp_pytest" / f"pid-{os.getpid()}"
     shutil.rmtree(root, ignore_errors=True)
     root.mkdir(parents=True, exist_ok=True)
     return root
