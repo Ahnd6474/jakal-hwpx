@@ -55,11 +55,11 @@ def _validate_with_hancom(case_dir: Path, edited_path: Path) -> tuple[str, bool 
     artifacts: list[str] = []
     errors: list[str] = []
     try:
-        hwpx_path = case_dir / f"{edited_path.stem}_hancom.hwpx"
+        hwpx_path = case_dir / "hancom.hwpx"
         convert_document(edited_path, hwpx_path, "HWPX")
         artifacts.append(str(hwpx_path))
 
-        roundtrip_hwp_path = case_dir / f"{edited_path.stem}_hancom_roundtrip.hwp"
+        roundtrip_hwp_path = case_dir / "hancom_roundtrip.hwp"
         convert_document(hwpx_path, roundtrip_hwp_path, "HWP")
         artifacts.append(str(roundtrip_hwp_path))
     except HancomInteropError as error:

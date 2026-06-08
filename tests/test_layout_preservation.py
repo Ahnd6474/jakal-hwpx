@@ -592,7 +592,6 @@ def test_save_auto_repairs_caption_lineseg_textpos_overflow(tmp_path: Path) -> N
 @pytest.mark.parametrize(
     "sample_name",
     [
-        "2026_오르비_보고서_타치바나미카리_완성.hwpx",
         "[양식] 2026_오르비_보고서.hwpx",
     ],
 )

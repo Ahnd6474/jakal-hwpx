@@ -55,7 +55,7 @@ def _resolve_math_debug_sample_path(sample_name: str) -> Path:
         if candidate.exists():
             return candidate
     searched = ", ".join(str(path) for path in MATH_DEBUG_SAMPLE_DIR_CANDIDATES)
-    raise FileNotFoundError(f"Could not find math debug sample {sample_name!r}. Searched: {searched}")
+    pytest.skip(f"Math debug sample {sample_name!r} is not available. Searched: {searched}")
 
 
 @pytest.fixture(scope="session")

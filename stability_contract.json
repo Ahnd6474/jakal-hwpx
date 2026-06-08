@@ -191,7 +191,7 @@
     },
     {
       "category": "hard_case",
-      "path": "hard_case/hard example.hwpx",
+      "path": "hwpx_collection/hard example.hwpx",
       "format": "hwpx",
       "difficulty": "near_corruption_real_world",
       "expected_texts": [
