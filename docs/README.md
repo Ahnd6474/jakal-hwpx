@@ -6,6 +6,7 @@
 
 | 문서 | 설명 |
 |---|---|
+| [web-workspace.md](./web-workspace.md) | HWPX 웹 편집기의 실행 방법, API 구성, 지원 범위와 데이터 보관 정책입니다. |
 | [hancom-document.md](./hancom-document.md) | `HancomDocument` 기준의 공통 문서 모델을 설명합니다. 새 문서를 만들거나 HWP/HWPX를 같은 코드로 다룰 때 먼저 볼 문서입니다. |
 | [hwpx-document.md](./hwpx-document.md) | `HwpxDocument`의 HWPX package, XML part, selector, append API, validation API를 설명합니다. HWPX 내부 구조를 직접 다룰 때 봅니다. |
 | [hwp-document.md](./hwp-document.md) | `HwpDocument`의 HWP 전용 객체 API를 설명합니다. 기존 `.hwp`를 직접 편집하거나 HWP native wrapper를 써야 할 때 봅니다. |

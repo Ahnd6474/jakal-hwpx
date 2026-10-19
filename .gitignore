@@ -47,3 +47,10 @@ __pycache__/
 *.pyc.*
 .coverage
 math debug sample/
+
+# Web application dependencies, output and private uploaded documents
+web/node_modules/
+web/dist/
+web/*.tsbuildinfo
+.web-data/
+.web-test-data/

@@ -16,6 +16,11 @@ Unless a file explicitly says otherwise, treat those documents as test or refere
 
 ## Redistribution Guidance
 
+The optional web workspace uses `@rhwp/core` (MIT) for read-only HWP/HWPX
+rendering and DOMPurify (Apache-2.0 OR MPL-2.0) to sanitize SVG. Their notices
+are distributed under `web/public/licenses/`. The UI fonts use Spoqa Han Sans
+Neo under SIL OFL 1.1; see `web/public/fonts/LICENSE.txt`.
+
 If you redistribute this repository or a derivative:
 
 - keep the top-level `LICENSE` with project-authored code
