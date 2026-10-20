@@ -32,6 +32,10 @@ class RevisionRequest(BaseModel):
     revision: int = Field(ge=0)
 
 
+class RestoreRequest(RevisionRequest):
+    source_revision: int = Field(ge=0)
+
+
 class AdvancedSettings(BaseModel):
     model_config = ConfigDict(extra="forbid")
     instructions: str = Field(default="", max_length=8_000)

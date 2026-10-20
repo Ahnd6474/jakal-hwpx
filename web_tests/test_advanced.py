@@ -11,7 +11,7 @@ from server.hwp_engine import process_hwp
 from web_tests.test_api import client, raw_document, upload, wait
 
 
-def test_native_hwp_lifecycle(client, tmp_path):
+def test_hwp_converts_to_hwpx_before_editing(client, tmp_path):
     source = tmp_path / "원본.HWP"
     document = HwpDocument.blank()
     document.append_paragraph("편집할 본문")
@@ -22,13 +22,18 @@ def test_native_hwp_lifecycle(client, tmp_path):
     assert wait(client, uploaded["job_id"])["status"] == "completed"
     base = f"/api/documents/{uploaded['document_id']}"
     doc = client.get(base).json()
-    assert doc["format"] == "hwp"
-    assert "HWP 5" in doc["format_note"]
+    assert doc["format"] == "hwpx"
+    assert doc["conversion"]["source_format"] == "hwp"
+    assert doc["conversion"]["count"] == 0
+    assert "HWPX" in doc["format_note"]
     p = next(p for p in doc["sections"][0]["paragraphs"] if p["text"] == "편집할 본문")
     assert p["editable"]
-    # A no-op native export must preserve the entire CFB container exactly.
+    # The uploaded HWP remains byte-for-byte separate from the working HWPX.
+    assert client.get(base + "/original").content == original
+    converted = client.get(base + "/source?revision=0").content
+    assert converted.startswith(b"PK") and converted != original
     assert wait(client, client.post(base + "/validations", json={"revision": 0}).json()["job_id"])["status"] == "completed"
-    assert client.get(base + "/download?revision=0").content == original
+    assert client.get(base + "/download?revision=0").content == converted
     operations = [{"type": "paragraph", "section": 0, "index": p["index"], "text": "길이가 달라진 본문 😀 & <안내>"}, {"type": "cell", "section": 0, "table": 0, "row": 1, "column": 1, "text": "홍길동\n두 번째 줄 😀"}]
     job = client.post(base + "/operations", json={"revision": 0, "operations": operations})
     result = wait(client, job.json()["job_id"])
@@ -36,17 +41,63 @@ def test_native_hwp_lifecycle(client, tmp_path):
     assert client.get(base + "/download?revision=1").status_code == 409
     assert wait(client, client.post(base + "/validations", json={"revision": 1}).json()["job_id"])["status"] == "completed"
     response = client.get(client.post(base + "/exports", json={"revision": 1}).json()["url"])
-    assert response.headers["content-type"] == "application/x-hwp"
-    assert ".hwp" in response.headers["content-disposition"]
-    destination = tmp_path / "수정.hwp"
+    assert response.headers["content-type"] == "application/hwp+zip"
+    assert ".hwpx" in response.headers["content-disposition"]
+    destination = tmp_path / "수정.hwpx"
     destination.write_bytes(response.content)
-    reopened = HwpDocument.open(destination)
-    assert reopened.strict_lint_errors() == []
+    reopened = HwpxDocument.open(destination)
+    assert reopened.validation_errors() == []
     fresh = client.get(base).json()
     assert next(p for p in fresh["sections"][0]["paragraphs"] if p["index"] == operations[0]["index"])["text"] == operations[0]["text"]
     assert fresh["sections"][0]["tables"][0]["cells"][3]["text"] == operations[1]["text"]
     store = client.app.state.store
     assert (store.directory(doc["id"]) / "revision-0.hwp").read_bytes() == original
+    assert client.get(base + "/original").content == original
+    assert client.get(base + "/source?revision=0").content == converted
+
+
+@pytest.mark.parametrize("relative", ["examples/samples/hwp/기출킬러양식.hwp", "web/public/sample.hwp"])
+def test_math_hwp_conversion_preserves_tables_equations_and_pictures(tmp_path, relative):
+    from server.engine import process
+    from zipfile import ZipFile
+    from collections import Counter
+    from lxml import etree
+    source = Path(__file__).resolve().parents[1] / relative
+    raw = source.read_bytes()
+    (tmp_path / "revision-0.hwp").write_bytes(raw)
+    (tmp_path / "convert-hwp").touch()
+    result = process(tmp_path, "analyze", {}, source.name)
+    assert result["report"]["issues"] == []
+    native = HwpDocument.open(source)
+    converted = HwpxDocument.open(tmp_path / "revision-0.hwpx")
+    # HWP master pages are separate HWPX XML parts; include their objects too.
+    counts = Counter()
+    with ZipFile(tmp_path / "revision-0.hwpx") as archive:
+        for name in archive.namelist():
+            if name.endswith(".xml"):
+                counts.update(etree.QName(n).localname for n in etree.fromstring(archive.read(name)).iter() if isinstance(n.tag, str))
+    assert counts["tbl"] == len(native.tables()) > 0
+    assert counts["equation"] == len(native.equations())
+    assert counts["pic"] == len(native.pictures())
+    assert (tmp_path / "revision-0.hwp").read_bytes() == raw
+
+
+def test_conversion_failure_never_publishes_partial_hwpx(tmp_path, monkeypatch):
+    import subprocess
+    from server.conversion import convert_hwp
+    source = Path(__file__).resolve().parents[1] / "web/public/sample.hwp"
+    raw = source.read_bytes()
+    (tmp_path / "revision-0.hwp").write_bytes(raw)
+    monkeypatch.setenv("JAKAL_NODE", "node")
+    def fail(*args, **kwargs):
+        (tmp_path / "conversion-pending.hwpx").write_bytes(b"partial")
+        raise subprocess.TimeoutExpired("node", 60)
+    monkeypatch.setattr(subprocess, "run", fail)
+    with pytest.raises(ValueError, match="HWPX"):
+        convert_hwp(tmp_path)
+    assert not (tmp_path / "revision-0.hwpx").exists()
+    assert not (tmp_path / "conversion-pending.hwpx").exists()
+    assert (tmp_path / "revision-0.hwp").read_bytes() == raw
 
 
 @pytest.mark.parametrize("name", ["기출킬러양식.hwp", "generated_native_control_authoring.hwp"])

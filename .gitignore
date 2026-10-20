@@ -51,6 +51,7 @@ math debug sample/
 # Web application dependencies, output and private uploaded documents
 web/node_modules/
 web/dist/
+web/public/studio/
 web/*.tsbuildinfo
 .web-data/
 .web-test-data/

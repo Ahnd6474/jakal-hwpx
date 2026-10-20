@@ -14,6 +14,7 @@ from jakal_hwpx import HwpxDocument
 from jakal_hwpx.namespaces import NS
 from jakal_hwpx.parts import XmlPart
 from jakal_hwpx.elements import _replace_paragraph_text_preserving_controls
+from .files import atomic_json, atomic_write
 
 MAX_UPLOAD = 20 * 1024 * 1024
 MAX_EXPANDED = 128 * 1024 * 1024
@@ -78,7 +79,15 @@ def new_issues(current: list[dict], baseline: list[dict]) -> list[dict]:
 
 def paragraph_text(node) -> str:
     # Exclude text in table cells, headers, notes and other nested paragraphs.
-    return "".join(t.text or "" for t in node.xpath(".//hp:t", namespaces=NS) if t.xpath("ancestor::hp:p[1]", namespaces=NS) == [node])
+    inline = {f"{{{NS['hp']}}}lineBreak": "\n", f"{{{NS['hp']}}}tab": "\t", f"{{{NS['hp']}}}nbSpace": "\u00a0", f"{{{NS['hp']}}}fwSpace": "\u3000", f"{{{NS['hp']}}}hyphen": "\u00ad"}
+
+    def text_content(element) -> str:
+        parts = [element.text or ""]
+        for child in element:
+            parts.extend((inline[child.tag] if child.tag in inline else text_content(child), child.tail or ""))
+        return "".join(parts)
+
+    return "".join(text_content(t) for t in node.xpath(".//hp:t", namespaces=NS) if t.xpath("ancestor::hp:p[1]", namespaces=NS) == [node])
 
 
 def cell_text(cell) -> str:
@@ -167,7 +176,17 @@ def structure_signature(document: HwpxDocument) -> dict:
 
 
 def process(directory: Path, kind: str, payload: dict, name: str) -> dict:
-    if Path(name).suffix.lower() == ".hwp":
+    if kind == "restore":
+        from .revisions import process_restore
+        return process_restore(directory, payload, name)
+    if kind == "studio":
+        from .studio import process_studio
+        return process_studio(directory, payload, name)
+    conversion = None
+    if Path(name).suffix.lower() == ".hwp" and (directory / "convert-hwp").exists():
+        from .conversion import convert_hwp
+        conversion = convert_hwp(directory)
+    elif Path(name).suffix.lower() == ".hwp":
         from .hwp_engine import process_hwp
         return process_hwp(directory, kind, payload, name)
     revision = payload.get("revision", 0)
@@ -238,11 +257,10 @@ def process(directory: Path, kind: str, payload: dict, name: str) -> dict:
                 raise ValueError("요청한 텍스트와 저장 결과가 일치하지 않습니다. 변경을 저장하지 않았습니다.")
     report = {"status": "warning" if reopened_issues else "passed", "issues": reopened_issues, "new_issues": [], "baseline_count": len(baseline), "resolved_count": len(new_issues(baseline, reopened_issues)), "repairs": repairs, "checks": ["XML 구조", "문서 참조", "개체·첨부 보존", "저장 후 다시 열기"], "checked_revision": revision}
     view = snapshot(reopened, revision, report, name)
+    if conversion:
+        view.update(format="hwpx", conversion=conversion, format_note="HWP를 HWPX로 변환했습니다. 표·수식·그림과 페이지 배치를 원문 보기에서 확인해 주세요. 다운로드 파일은 HWPX이며 업로드한 HWP 원본도 별도로 받을 수 있습니다.")
     if kind == "edit":
-        (directory / f"revision-{revision}.hwpx").write_bytes(compiled)
+        atomic_write(directory / f"revision-{revision}.hwpx", compiled)
     # A job only becomes visible after both files exist and the DB commits.
-    target = directory / f"snapshot-{revision}.json"
-    temp = target.with_suffix(".tmp")
-    temp.write_text(json.dumps(view, ensure_ascii=False), encoding="utf-8")
-    temp.replace(target)
+    atomic_json(directory / f"snapshot-{revision}.json", view)
     return {"revision": revision, "report": report}

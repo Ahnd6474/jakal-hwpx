@@ -8,11 +8,13 @@ def test_reader_source_is_owned_immutable_and_revision_scoped(client, raw_docume
     base = f"/api/documents/{identifier}"
     original = client.get(base + "/source?revision=0")
     assert original.status_code == 200 and original.content == raw_document
+    assert client.get(base + "/original").content == raw_document
     assert original.headers["cache-control"] == "no-store"
     assert "wasm-unsafe-eval" in original.headers["content-security-policy"]
     stranger = TestClient(client.app)
     try:
         assert stranger.get(base + "/source?revision=0").status_code == 404
+        assert stranger.get(base + "/original").status_code == 404
     finally:
         stranger.close()
     assert client.get(base + "/source?revision=999").status_code == 409

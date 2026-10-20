@@ -16,6 +16,7 @@ from jakal_hwpx.hwp_binary import (
 )
 
 from .policies import check_operations
+from .files import atomic_json
 
 MAX_PART = 24 * 1024 * 1024
 
@@ -218,10 +219,7 @@ def process_hwp(directory, kind, payload, name):
                 if actual[operation_key(op)]["text"] != op["text"]:
                     raise ValueError("HWP 수정 요청과 저장한 텍스트가 일치하지 않습니다.")
             temp.replace(directory / f"revision-{revision}.hwp")
-        target = directory / f"snapshot-{revision}.json"
-        staged = target.with_suffix(".tmp")
-        staged.write_text(json.dumps(view, ensure_ascii=False), encoding="utf-8")
-        staged.replace(target)
+        atomic_json(directory / f"snapshot-{revision}.json", view)
         return {"revision": revision, "report": report}
     finally:
         temp.unlink(missing_ok=True)

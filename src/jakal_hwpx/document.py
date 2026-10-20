@@ -183,6 +183,21 @@ def _paragraph_text_node_count(paragraph: etree._Element) -> int:
     return len(paragraph.xpath("./hp:run/hp:t", namespaces=NS))
 
 
+def _paragraph_layout_text_length(paragraph: etree._Element) -> int | None:
+    """Count LineSeg positions, including explicit breaks and UTF-16 pairs.
+
+    Unknown inline controls can occupy multiple HWP character positions. Leave
+    their cache alone rather than guessing a length and deleting valid layout.
+    """
+    breaks = 0
+    for text_node in paragraph.xpath(".//hp:t", namespaces=NS):
+        for child in text_node:
+            if child.tag != qname("hp", "lineBreak") or len(child) or child.text:
+                return None
+            breaks += 1
+    return len(_paragraph_plain_text(paragraph).encode("utf-16-le")) // 2 + breaks
+
+
 def _containing_top_level_paragraph_index(
     section_root: etree._Element,
     paragraph: etree._Element,
@@ -1047,8 +1062,10 @@ class HwpxDocument:
             top_level_paragraphs = section.root_element.xpath("./hp:p", namespaces=NS)
             top_level_indexes = {id(paragraph): index for index, paragraph in enumerate(top_level_paragraphs)}
             for paragraph in section.root_element.xpath(".//hp:p[hp:linesegarray]", namespaces=NS):
-                text = _paragraph_plain_text(paragraph)
                 has_nontext_content = _paragraph_has_nontext_run_content(paragraph)
+                text_length = _paragraph_layout_text_length(paragraph)
+                if text_length is None:
+                    continue
                 numeric_positions: list[int] = []
                 raw_positions: list[str] = []
                 for line_seg in paragraph.xpath("./hp:linesegarray/hp:lineseg[@textpos]", namespaces=NS):
@@ -1064,7 +1081,7 @@ class HwpxDocument:
                     continue
 
                 paragraph_index = _containing_top_level_paragraph_index(section.root_element, paragraph, top_level_indexes)
-                if not text.strip() and not has_nontext_content:
+                if text_length == 0 and not has_nontext_content:
                     stale_positions = [str(value) for value in numeric_positions if value > 0]
                     if stale_positions:
                         targets.append(
@@ -1083,7 +1100,7 @@ class HwpxDocument:
                     continue
 
                 max_textpos = max(numeric_positions)
-                if max_textpos > len(text):
+                if max_textpos > text_length:
                     targets.append(
                         (
                             section,
@@ -1091,12 +1108,15 @@ class HwpxDocument:
                             paragraph_index,
                             paragraph,
                             "plain_text_textpos_overflow",
-                            f"max_textpos={max_textpos};text_len={len(text)};textpos={','.join(raw_positions)}",
+                            f"max_textpos={max_textpos};text_len={text_length};textpos={','.join(raw_positions)}",
                         )
                     )
 
             for paragraph in section.root_element.xpath(".//hp:caption/hp:subList/hp:p[hp:linesegarray]", namespaces=NS):
                 text = _paragraph_plain_text(paragraph)
+                text_length = _paragraph_layout_text_length(paragraph)
+                if text_length is None:
+                    continue
                 if not text.strip():
                     continue
                 raw_positions = [
@@ -1108,7 +1128,7 @@ class HwpxDocument:
                     continue
                 numeric_positions = [int(value) for value in raw_positions]
                 max_textpos = max(numeric_positions)
-                if max_textpos <= len(text):
+                if max_textpos <= text_length:
                     continue
                 paragraph_index = _containing_top_level_paragraph_index(section.root_element, paragraph, top_level_indexes)
                 targets.append(
@@ -1118,7 +1138,7 @@ class HwpxDocument:
                         paragraph_index,
                         paragraph,
                         "caption_textpos_overflow",
-                        f"max_textpos={max_textpos};text_len={len(text)};textpos={','.join(raw_positions)}",
+                        f"max_textpos={max_textpos};text_len={text_length};textpos={','.join(raw_positions)}",
                     )
                 )
         return targets

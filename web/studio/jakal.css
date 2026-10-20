@@ -1,0 +1,23 @@
+.jakal-embed { color-scheme: light; }
+.jakal-embed #menu-bar { min-height: 29px; font-family: '맑은 고딕', sans-serif; }
+.jakal-embed #studio-root { background: #e8e9eb; }
+.jakal-embed #menu-bar .menu-title { font-size: 12px; }
+.jakal-embed #style-bar, .jakal-embed #icon-toolbar { border-color: #e2e4e7; }
+.jakal-embed #status-bar { font-size: 11px; }
+.jakal-embed:not(.jakal-full-tools) #icon-toolbar { display: none; }
+.jakal-embed #toolbox-basic-toggle { display: none; }
+.jakal-embed:not(.jakal-full-tools) #style-name,
+.jakal-embed:not(.jakal-full-tools) #font-lang,
+.jakal-embed:not(.jakal-full-tools) #btn-charfx,
+.jakal-embed:not(.jakal-full-tools) #btn-strike { display: none; }
+.jakal-embed:not(.jakal-full-tools) .sb-field:has(> #style-name),
+.jakal-embed:not(.jakal-full-tools) .sb-field:has(> #font-lang) { display: none; }
+.jakal-embed:not(.jakal-full-tools) .sb-field-grid { display: flex; align-items: center; gap: 6px; }
+.jakal-embed #style-bar { min-height: 33px; padding: 3px 12px; background: #fbfbfc; }
+.jakal-embed #menu-bar { min-height: 28px; background: #fff; }
+.jakal-embed #menu-bar .menu-title { padding-block: 6px; }
+.jakal-embed #status-bar { min-height: 22px; height: 22px; background: #fafbfc; }
+@media (max-width: 760px) {
+  .jakal-embed #menu-bar { overflow-x: auto; scrollbar-width: none; }
+  .jakal-embed.jakal-full-tools #icon-toolbar { display: flex; }
+}

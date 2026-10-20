@@ -34,12 +34,30 @@ class Store:
                     error TEXT, result TEXT
                 );
                 CREATE INDEX IF NOT EXISTS jobs_status ON jobs(status, created);
+                CREATE INDEX IF NOT EXISTS jobs_document_status ON jobs(document, status);
+                CREATE INDEX IF NOT EXISTS documents_owner_created ON documents(owner, created);
+                CREATE TABLE IF NOT EXISTS revisions (
+                    document TEXT NOT NULL, revision INTEGER NOT NULL,
+                    created REAL NOT NULL, kind TEXT NOT NULL,
+                    source_revision INTEGER,
+                    PRIMARY KEY(document, revision)
+                );
             """)
             columns = {row["name"] for row in db.execute("PRAGMA table_info(documents)")}
             if "settings" not in columns:
                 db.execute("ALTER TABLE documents ADD COLUMN settings TEXT NOT NULL DEFAULT '{}'")
             if "settings_version" not in columns:
                 db.execute("ALTER TABLE documents ADD COLUMN settings_version INTEGER NOT NULL DEFAULT 0")
+            # Existing files and completed jobs already contain the history.
+            # Backfill idempotently so an interrupted migration is safe to retry.
+            db.execute("INSERT OR IGNORE INTO revisions(document,revision,created,kind) SELECT id,0,created,'analyze' FROM documents WHERE status='ready'")
+            db.execute("""INSERT OR IGNORE INTO revisions(document,revision,created,kind,source_revision)
+                SELECT jobs.document,json_extract(jobs.result,'$.revision'),jobs.created,jobs.kind,
+                    CASE WHEN jobs.kind='restore' THEN json_extract(jobs.payload,'$.source_revision') END
+                FROM jobs JOIN documents ON documents.id=jobs.document
+                WHERE jobs.status='completed' AND jobs.kind IN ('edit','studio','restore')
+                    AND json_valid(jobs.result) AND json_type(jobs.result,'$.revision')='integer'
+                    AND json_extract(jobs.result,'$.revision')<=documents.revision""")
 
     @contextmanager
     def connect(self):
@@ -68,24 +86,33 @@ class Store:
         with self.connect() as db:
             return [dict(row) for row in db.execute("SELECT * FROM documents WHERE owner=? AND created>? ORDER BY created DESC", (owner, time.time() - self.ttl))]
 
-    def create_document(self, owner: str, name: str, identifier: str):
+    def create_document(self, owner: str, name: str, identifier: str, *, enqueue_analysis: bool = False):
         with self.connect() as db:
+            db.execute("BEGIN IMMEDIATE")
             if db.execute("SELECT count(*) FROM documents WHERE owner=? AND created>?", (owner, time.time() - self.ttl)).fetchone()[0] >= 20:
                 raise ValueError("한 세션에는 최대 20개 문서를 보관할 수 있습니다.")
             db.execute("INSERT INTO documents(id,owner,name,created) VALUES(?,?,?,?)", (identifier, owner, name, time.time()))
+            if enqueue_analysis:
+                # Publish the upload and its first job in one transaction. An
+                # insertion failure must not leave an unprocessable document.
+                job = secrets.token_hex(16)
+                db.execute("INSERT INTO jobs(id,document,owner,kind,created,payload) VALUES(?,?,?,'analyze',?,?)", (job, identifier, owner, time.time(), '{"settings": {}}'))
+                return job
 
     def enqueue(self, document: str, owner: str, kind: str, payload: dict, revision: int | None = None):
         job = secrets.token_hex(16)
         with self.connect() as db:
             db.execute("BEGIN IMMEDIATE")
-            row = db.execute("SELECT * FROM documents WHERE id=? AND owner=?", (document, owner)).fetchone()
+            row = db.execute("SELECT * FROM documents WHERE id=? AND owner=? AND created>?", (document, owner, time.time() - self.ttl)).fetchone()
             if not row:
                 raise ValueError("문서를 찾을 수 없습니다.")
             if revision is not None and (row["revision"] != revision or row["status"] != "ready"):
                 raise ValueError("문서 버전이 변경되었습니다. 문서를 다시 열어 주세요.")
             if db.execute("SELECT 1 FROM jobs WHERE document=? AND status IN ('queued','running')", (document,)).fetchone():
                 raise ValueError("이 문서의 이전 작업이 끝날 때까지 기다려 주세요.")
-            payload = {**payload, "settings": json.loads(row["settings"])}
+            # The database revision is authoritative, including for internal
+            # callers which omit the HTTP request's revision field.
+            payload = {**payload, "revision": row["revision"], "settings": json.loads(row["settings"])}
             db.execute("INSERT INTO jobs(id,document,owner,kind,created,payload) VALUES(?,?,?,?,?,?)", (job, document, owner, kind, time.time(), json.dumps(payload, ensure_ascii=False)))
         return job
 
@@ -105,16 +132,65 @@ class Store:
             row = db.execute("SELECT jobs.* FROM jobs JOIN documents ON documents.id=jobs.document WHERE jobs.id=? AND jobs.owner=? AND documents.created>?", (identifier, owner, time.time() - self.ttl)).fetchone()
         return dict(row) if row else None
 
+    def revision_history(self, document: str, owner: str, before: int | None = None, limit: int = 20):
+        with self.connect() as db:
+            return [dict(row) for row in db.execute("""SELECT revisions.* FROM revisions
+                JOIN documents ON documents.id=revisions.document
+                WHERE documents.id=? AND documents.owner=? AND documents.created>?
+                    AND revisions.revision<=documents.revision AND (? IS NULL OR revisions.revision<?)
+                ORDER BY revisions.revision DESC LIMIT ?""", (document, owner, time.time() - self.ttl, before, before, limit))]
+
+    def revision(self, document: str, owner: str, revision: int):
+        with self.connect() as db:
+            row = db.execute("""SELECT revisions.* FROM revisions JOIN documents ON documents.id=revisions.document
+                WHERE documents.id=? AND documents.owner=? AND documents.created>?
+                    AND revisions.revision=? AND revisions.revision<=documents.revision""", (document, owner, time.time() - self.ttl, revision)).fetchone()
+        return dict(row) if row else None
+
     def claim(self):
         with self.connect() as db:
             db.execute("BEGIN IMMEDIATE")
             row = db.execute("SELECT * FROM jobs WHERE status='queued' ORDER BY created LIMIT 1").fetchone()
             if row:
                 db.execute("UPDATE jobs SET status='running' WHERE id=?", (row["id"],))
-        return dict(row) if row else None
+        return {**dict(row), "status": "running"} if row else None
+
+    def _completion_error(self, job, document, result):
+        if not document or document["created"] <= time.time() - self.ttl:
+            return "문서 보관 기간이 만료되었습니다."
+        try:
+            base = json.loads(job["payload"]).get("revision", 0)
+            expected = base + (job["kind"] in {"edit", "studio", "restore"})
+            if document["revision"] != base or (job["kind"] != "analyze" and document["status"] != "ready"):
+                return "문서 버전이 변경되어 작업 결과를 반영하지 않았습니다."
+            if not isinstance(result, dict) or type(result.get("revision")) is not int or result["revision"] != expected:
+                return "문서 처리 결과의 버전이 올바르지 않습니다. 다시 시도해 주세요."
+            directory = self.directory(document["id"])
+            snapshot = json.loads((directory / f"snapshot-{expected}.json").read_text(encoding="utf-8"))
+            report = result.get("report")
+            extension = snapshot.get("format", Path(document["name"]).suffix.lower().lstrip("."))
+            if (snapshot.get("revision") != expected or not isinstance(snapshot.get("sections"), list)
+                    or not isinstance(report, dict) or report.get("checked_revision") != expected
+                    or snapshot.get("report") != report or extension not in {"hwp", "hwpx"}
+                    or (directory / f"revision-{expected}.{extension}").stat().st_size == 0):
+                return "문서 처리 결과 파일이 완전하지 않습니다. 다시 시도해 주세요."
+        except (OSError, ValueError, TypeError, AttributeError):
+            return "문서 처리 결과 파일을 확인하지 못했습니다. 다시 시도해 주세요."
+        return None
 
     def finish(self, job: dict, result: dict | None, error: str | None):
         with self.connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            # Ignore duplicate/late completion after shutdown recovery, deletion
+            # or another terminal transition. Use persisted job data throughout.
+            current = db.execute("SELECT * FROM jobs WHERE id=? AND document=? AND owner=? AND status='running'", (job["id"], job["document"], job["owner"])).fetchone()
+            if not current:
+                return False
+            job = dict(current)
+            document = db.execute("SELECT * FROM documents WHERE id=? AND owner=?", (job["document"], job["owner"])).fetchone()
+            error = error or self._completion_error(job, document, result)
+            if error:
+                result = None
             db.execute("UPDATE jobs SET status=?,result=?,error=? WHERE id=?", ("failed" if error else "completed", json.dumps(result, ensure_ascii=False) if result else None, error, job["id"]))
             if error and job["kind"] == "analyze":
                 db.execute("UPDATE documents SET status='failed',error=? WHERE id=?", (error, job["document"]))
@@ -122,15 +198,22 @@ class Store:
                 db.execute("UPDATE documents SET status='ready', revision=?,error=NULL WHERE id=?", (result["revision"], job["document"]))
                 if job["kind"] == "validate":
                     db.execute("UPDATE documents SET validated=? WHERE id=?", (result["revision"], job["document"]))
-                elif job["kind"] == "edit":
+                elif job["kind"] in {"edit", "studio", "restore"}:
                     db.execute("UPDATE documents SET validated=NULL WHERE id=?", (job["document"],))
+                if job["kind"] in {"analyze", "edit", "studio", "restore"}:
+                    source = json.loads(job["payload"]).get("source_revision") if job["kind"] == "restore" else None
+                    db.execute("INSERT INTO revisions(document,revision,created,kind,source_revision) VALUES(?,?,?,?,?)", (job["document"], result["revision"], time.time(), job["kind"], source))
+        return True
 
     def recover(self):
         # A stopped process never publishes a partial revision. Interrupted jobs
         # fail visibly; queued work remains durable and can run after restart.
         with self.connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            interrupted = [dict(row) for row in db.execute("SELECT * FROM jobs WHERE status='running'")]
             db.execute("UPDATE documents SET status='failed',error='서버 재시작으로 분석이 중단되었습니다.' WHERE id IN (SELECT document FROM jobs WHERE status='running' AND kind='analyze')")
             db.execute("UPDATE jobs SET status='failed',error='서버 재시작으로 작업이 중단되었습니다. 다시 실행해 주세요.' WHERE status='running'")
+        return interrupted
 
     def delete(self, identifier: str, owner: str) -> bool:
         tombstone = (self.root / f"trash-{identifier}").resolve()
@@ -151,6 +234,7 @@ class Store:
                 except OSError:
                     return False
             db.execute("DELETE FROM jobs WHERE document=? AND owner=?", (identifier, owner))
+            db.execute("DELETE FROM revisions WHERE document=?", (identifier,))
             db.execute("DELETE FROM documents WHERE id=? AND owner=?", (identifier, owner))
         # A locked file can survive deletion on Windows; retain the tombstone
         # name so the periodic cleanup can retry without a document DB row.
@@ -165,4 +249,17 @@ class Store:
         for path in self.root.glob("trash-*"):
             target = path.resolve()
             if target.is_relative_to(self.root) and target != self.root and re.fullmatch(r"trash-[a-f0-9]{32}", target.name):
+                with self.connect() as db:
+                    db.execute("BEGIN IMMEDIATE")
+                    document = db.execute("SELECT id FROM documents WHERE id=?", (target.name[6:],)).fetchone()
+                    if document:
+                        # A crash between directory rename and SQLite commit
+                        # rolls back deletion. Restore its files, never purge them.
+                        source = self.directory(document["id"])
+                        if not source.exists():
+                            try:
+                                target.rename(source)
+                            except OSError:
+                                pass
+                        continue
                 shutil.rmtree(target, ignore_errors=True)

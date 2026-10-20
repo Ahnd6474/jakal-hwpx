@@ -31,8 +31,8 @@ def raw_document():
     return document.compile()
 
 
-def wait(client, identifier):
-    deadline = time.monotonic() + 20
+def wait(client, identifier, timeout=20):
+    deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         response = client.get(f"/api/jobs/{identifier}")
         assert response.status_code == 200, response.text
@@ -40,7 +40,7 @@ def wait(client, identifier):
         if job["status"] in {"completed", "failed"}:
             return job
         time.sleep(.04)
-    pytest.fail("Worker did not finish within 20 seconds")
+    pytest.fail(f"Worker did not finish within {timeout} seconds")
 
 
 def upload(client, raw):
@@ -219,3 +219,28 @@ def test_delete_retries_locked_files_without_orphaning_document(tmp_path, monkey
     monkeypatch.setattr(shutil, "rmtree", original)
     store.cleanup()
     assert not (tmp_path / f"trash-{identifier}").exists()
+
+
+def test_long_upload_name_keeps_extension(client, raw_document):
+    response = client.post("/api/documents", files={"file": ("긴문서" * 70 + ".hwpx", raw_document)})
+    assert response.status_code == 202
+    value = response.json()
+    assert wait(client, value["job_id"])["status"] == "completed"
+    document = client.get(f"/api/documents/{value['document_id']}").json()
+    assert len(document["name"]) == 180
+    assert document["name"].endswith(".hwpx")
+    assert client.get(f"/api/documents/{value['document_id']}/original").content == raw_document
+
+
+@pytest.mark.parametrize("corruption", [None, "{broken json", '{"revision": 99}'])
+def test_unreadable_snapshot_does_not_block_original_recovery(client, raw_document, corruption):
+    identifier = upload(client, raw_document)
+    path = client.app.state.store.directory(identifier) / "snapshot-0.json"
+    if corruption is None:
+        path.unlink()
+    else:
+        path.write_text(corruption, encoding="utf-8")
+    response = client.get(f"/api/documents/{identifier}")
+    assert response.status_code == 503
+    assert "원본" in response.json()["detail"]
+    assert client.get(f"/api/documents/{identifier}/original").content == raw_document

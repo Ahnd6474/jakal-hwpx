@@ -2,6 +2,7 @@
 import json
 import sys
 from pathlib import Path
+from .files import atomic_json
 
 
 def main():
@@ -9,7 +10,9 @@ def main():
     try:
         if sys.platform != "win32":
             import resource
-            resource.setrlimit(resource.RLIMIT_AS, (768 * 1024 * 1024, 768 * 1024 * 1024))
+            # The worker monitors aggregate RSS, including the Node converter.
+            # V8 reserves a large virtual address range before allocating RAM;
+            # an inherited RLIMIT_AS prevents it from starting on Linux.
             resource.setrlimit(resource.RLIMIT_CPU, (100, 100))
         from .engine import process
         request = json.loads(request_path.read_text(encoding="utf-8"))
@@ -20,9 +23,9 @@ def main():
         if isinstance(exc, (ValueError, IndexError, KeyError)):
             message = str(exc) if isinstance(exc, ValueError) else "수정 대상을 찾을 수 없습니다. 문서를 다시 열어 주세요."
         else:
-            message = "문서를 처리하지 못했습니다. 올바른 HWPX 파일인지 확인해 주세요."
+            message = "문서를 처리하지 못했습니다. 올바른 HWP·HWPX 파일인지 확인해 주세요."
         output = {"error": message[:1500]}
-    result_path.write_text(json.dumps(output, ensure_ascii=False), encoding="utf-8")
+    atomic_json(result_path, output)
 
 
 if __name__ == "__main__":
