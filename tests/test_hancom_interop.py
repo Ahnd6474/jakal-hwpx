@@ -55,8 +55,9 @@ def test_convert_document_always_passes_security_module_install_root(monkeypatch
         output_path.write_text("<hwpx />", encoding="utf-8")
         return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
 
-    monkeypatch.setenv("LOCALAPPDATA", r"C:\Users\TestUser\AppData\Local")
+    install_root = tmp_path / "hancom-security"
     monkeypatch.setattr(hancom, "_smoke_script_path", lambda: script_path)
+    monkeypatch.setattr(hancom, "_default_security_module_install_root", lambda: install_root)
     monkeypatch.setattr(hancom.subprocess, "run", fake_run)
 
     result = hancom.convert_document(input_path, output_path, "HWPX", allow_existing_hwp_processes=False)
@@ -64,7 +65,7 @@ def test_convert_document_always_passes_security_module_install_root(monkeypatch
     assert result == output_path.resolve()
     assert len(commands) == 1
     assert "-SecurityModuleInstallRoot" in commands[0]
-    assert str(Path(r"C:\Users\TestUser\AppData\Local") / "jakal-hwpx" / "hancom-security") in commands[0]
+    assert str(install_root.resolve()) in commands[0]
     assert "-SkipSecurityModuleRegistration" not in commands[0]
 
 
