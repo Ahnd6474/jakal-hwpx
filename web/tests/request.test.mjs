@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { requestJson, requestBytes } from '../src/request.ts';
+import { ApiError, requestJson, requestBytes } from '../src/request.ts';
 
 function fetchMock(t, implementation) {
   const previous = globalThis.fetch;
@@ -65,4 +65,10 @@ test('successful JSON and byte requests preserve their payloads', async t => {
   assert.deepEqual(await requestJson('/api/doc'), { revision: 3 });
   globalThis.fetch = async () => new Response(new Uint8Array([80, 75, 3, 4]));
   assert.deepEqual(new Uint8Array(await requestBytes('/api/source')), new Uint8Array([80, 75, 3, 4]));
+});
+
+test('structured errors expose stable status and code while retaining the Korean message', async t => {
+  fetchMock(t, async () => new Response(JSON.stringify({ detail: '고급 설정이 변경되었습니다.', code: 'settings_conflict' }), { status: 409 }));
+  await assert.rejects(requestJson('/api/doc'), error => error instanceof ApiError
+    && error.message === '고급 설정이 변경되었습니다.' && error.status === 409 && error.code === 'settings_conflict');
 });

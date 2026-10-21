@@ -11,7 +11,7 @@ export type SavedRevision = { revision: number; created: number; kind: 'analyze'
 export type RevisionPage = { items: SavedRevision[]; next_before: number | null; current_revision: number };
 export type RevisionSnapshot = Pick<Document, 'revision' | 'sections' | 'report' | 'name'>;
 export type Operation = { type: 'paragraph'; section: number; index: number; text: string } | { type: 'cell'; section: number; table: number; row: number; column: number; text: string };
-export type Job = { id: string; document_id: string; kind: string; status: 'queued' | 'running' | 'completed' | 'failed'; error: string | null };
+export type Job = { id: string; document_id: string; kind: string; status: 'queued' | 'running' | 'completed' | 'failed'; error: string | null; result?: { revision: number; report?: Report } | null };
 
 export { type RequestOptions } from './request';
 import { requestJson, type RequestOptions } from './request';

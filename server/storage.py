@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import re
 import secrets
 import shutil
@@ -8,6 +9,8 @@ import sqlite3
 import time
 from contextlib import contextmanager
 from pathlib import Path
+
+from .errors import WorkspaceError
 
 
 class Store:
@@ -48,6 +51,11 @@ class Store:
                 db.execute("ALTER TABLE documents ADD COLUMN settings TEXT NOT NULL DEFAULT '{}'")
             if "settings_version" not in columns:
                 db.execute("ALTER TABLE documents ADD COLUMN settings_version INTEGER NOT NULL DEFAULT 0")
+            job_columns = {row["name"] for row in db.execute("PRAGMA table_info(jobs)")}
+            for column in ("request_key", "request_hash"):
+                if column not in job_columns:
+                    db.execute(f"ALTER TABLE jobs ADD COLUMN {column} TEXT")
+            db.execute("CREATE UNIQUE INDEX IF NOT EXISTS jobs_request_key ON jobs(document,owner,request_key) WHERE request_key IS NOT NULL")
             # Existing files and completed jobs already contain the history.
             # Backfill idempotently so an interrupted migration is safe to retry.
             db.execute("INSERT OR IGNORE INTO revisions(document,revision,created,kind) SELECT id,0,created,'analyze' FROM documents WHERE status='ready'")
@@ -99,21 +107,38 @@ class Store:
                 db.execute("INSERT INTO jobs(id,document,owner,kind,created,payload) VALUES(?,?,?,'analyze',?,?)", (job, identifier, owner, time.time(), '{"settings": {}}'))
                 return job
 
-    def enqueue(self, document: str, owner: str, kind: str, payload: dict, revision: int | None = None):
+    def enqueue(self, document: str, owner: str, kind: str, payload: dict, revision: int | None = None,
+                *, request_key: str | None = None, fingerprint: dict | None = None,
+                settings_version: int | None = None):
+        if request_key is not None and not re.fullmatch(r"[A-Za-z0-9_-]{16,128}", request_key):
+            raise WorkspaceError("invalid_request_key", "작업 식별자가 올바르지 않습니다.", 422)
+        # Hash the submitted intent, not mutable database settings or temporary
+        # candidate filenames. Replays must also work after the revision advances.
+        request_hash = hashlib.sha256(json.dumps({"kind": kind, "revision": revision,
+            "settings_version": settings_version, "payload": fingerprint if fingerprint is not None else payload},
+            sort_keys=True, ensure_ascii=True, separators=(",", ":")).encode()).hexdigest() if request_key else None
         job = secrets.token_hex(16)
         with self.connect() as db:
             db.execute("BEGIN IMMEDIATE")
             row = db.execute("SELECT * FROM documents WHERE id=? AND owner=? AND created>?", (document, owner, time.time() - self.ttl)).fetchone()
             if not row:
-                raise ValueError("문서를 찾을 수 없습니다.")
+                raise WorkspaceError("document_not_found", "문서를 찾을 수 없습니다.", 404)
+            if request_key:
+                previous = db.execute("SELECT id,request_hash FROM jobs WHERE document=? AND owner=? AND request_key=?", (document, owner, request_key)).fetchone()
+                if previous:
+                    if previous["request_hash"] != request_hash:
+                        raise WorkspaceError("request_key_conflict", "이미 사용한 작업 식별자로 다른 내용을 요청할 수 없습니다.")
+                    return previous["id"]
             if revision is not None and (row["revision"] != revision or row["status"] != "ready"):
-                raise ValueError("문서 버전이 변경되었습니다. 문서를 다시 열어 주세요.")
+                raise WorkspaceError("revision_conflict", "문서 버전이 변경되었습니다. 편집 내용을 보관한 뒤 최신 문서를 다시 열어 주세요.")
+            if settings_version is not None and row["settings_version"] != settings_version:
+                raise WorkspaceError("settings_conflict", "고급 설정이 변경되었습니다. 편집 내용을 보관한 뒤 최신 설정을 확인해 주세요.")
             if db.execute("SELECT 1 FROM jobs WHERE document=? AND status IN ('queued','running')", (document,)).fetchone():
-                raise ValueError("이 문서의 이전 작업이 끝날 때까지 기다려 주세요.")
+                raise WorkspaceError("document_busy", "이 문서의 이전 작업이 끝날 때까지 기다려 주세요.")
             # The database revision is authoritative, including for internal
             # callers which omit the HTTP request's revision field.
             payload = {**payload, "revision": row["revision"], "settings": json.loads(row["settings"])}
-            db.execute("INSERT INTO jobs(id,document,owner,kind,created,payload) VALUES(?,?,?,?,?,?)", (job, document, owner, kind, time.time(), json.dumps(payload, ensure_ascii=False)))
+            db.execute("INSERT INTO jobs(id,document,owner,kind,created,payload,request_key,request_hash) VALUES(?,?,?,?,?,?,?,?)", (job, document, owner, kind, time.time(), json.dumps(payload, ensure_ascii=False), request_key, request_hash))
         return job
 
     def save_settings(self, document: str, owner: str, version: int, settings: dict):

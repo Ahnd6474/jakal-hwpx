@@ -20,7 +20,7 @@ function fixture() {
   const parent = { postMessage: (message, origin) => messages.push({ message, origin }) };
   const env = {
     window: { parent, addEventListener() {} },
-    document: { addEventListener: (event, run) => handlers.set(event, run), documentElement: { classList: { contains: () => false, toggle() {}, add() {} } } },
+    document: { getElementById: () => null, addEventListener: (event, run) => handlers.set(event, run), documentElement: { classList: { contains: () => false, toggle() {}, add() {} } } },
     location: { origin: 'https://unit.test', search: '' }, registry: { get: id => definitions.get(id), register: value => definitions.set(value.id, value) },
     inputHandler: { cursor, focus: () => focused++, getPosition: () => ({ sectionIndex: 2, paragraphIndex: 7, charOffset: 4 }), executeOperation: descriptor => { edits.push(descriptor); descriptor.operation(engine); } },
     wasm: {}, canvasView: null, eventBus: { on() {} }, documentState: { isDirty: () => true }, setChromeVisibility() {}, setThemeMode() {}, initPromise: Promise.resolve(),
@@ -47,4 +47,21 @@ test('workbench shortcut is handled before the embedded editor and posts no text
   assert.equal(f.messages[0].message.type, 'workbench');
   assert.equal(f.messages[0].origin, 'https://unit.test');
   assert.equal('text' in f.messages[0].message, false);
+});
+
+test('copy shortcut and document drops reach the host; image drops stay native', () => {
+  const f = fixture(); let stopped = 0;
+  f.handlers.get('keydown')({ ctrlKey: true, shiftKey: true, code: 'KeyS', preventDefault() {}, stopImmediatePropagation() {} });
+  assert.equal(f.messages[0].message.type, 'file-action');
+  assert.equal(f.messages[0].message.action, 'copy');
+  const drop = f.handlers.get('drop');
+  const file = { name: '문서.hwpx' };
+  drop({ dataTransfer: { files: [file] }, preventDefault() { stopped++; }, stopImmediatePropagation() { stopped++; } });
+  assert.equal(stopped, 2);
+  assert.equal(f.messages[1].message.file, file);
+  drop({ dataTransfer: { files: [file, file] }, preventDefault() {}, stopImmediatePropagation() {} });
+  assert.equal(f.messages[2].message.count, 2);
+  assert.equal(Object.hasOwn(f.messages[2].message, 'file'), false);
+  drop({ dataTransfer: { files: [{ name: 'image.png' }] }, preventDefault() {}, stopImmediatePropagation() {} });
+  assert.equal(f.messages.length, 3);
 });

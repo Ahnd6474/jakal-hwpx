@@ -10,7 +10,7 @@ export function DocumentActions({ doc, initialMode, dirty, onClose, onSubmit }: 
   const root = useRef<HTMLElement>(null);
   const [mode, setMode] = useState(initialMode);
   const stem = doc.name.replace(/\.(hwp|hwpx)$/i, '');
-  const [name, setName] = useState(initialMode === 'copy' ? `${stem}_복사본`.slice(0, 150) : stem);
+  const [name, setName] = useState(initialMode === 'copy' ? `${stem}_복사본`.slice(0, 150) : stem.slice(0, 160));
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   useModalFocus(root, () => { if (!busy) onClose(); });
@@ -26,7 +26,7 @@ export function DocumentActions({ doc, initialMode, dirty, onClose, onSubmit }: 
   return <div className="modal-backdrop" onMouseDown={e => { if (e.target === e.currentTarget && !busy) onClose(); }}><section ref={root} className="modal document-actions-modal" role="dialog" aria-modal="true" aria-labelledby="document-actions-title" aria-busy={busy}>
     <header className="modal-heading"><h2 id="document-actions-title">문서 파일 관리</h2><button className="icon-button" aria-label="문서 파일 관리 닫기" disabled={busy} onClick={onClose}><X size={20} /></button></header>
     <div className="document-action-options" role="group" aria-label="파일 작업">
-      <button className="outline-button" aria-pressed={mode === 'rename'} disabled={busy} onClick={() => { setMode('rename'); setName(stem); setError(''); }}><Pencil size={15} />이름 변경</button>
+      <button className="outline-button" aria-pressed={mode === 'rename'} disabled={busy} onClick={() => { setMode('rename'); setName(stem.slice(0, 160)); setError(''); }}><Pencil size={15} />이름 변경</button>
       <button className="outline-button" aria-pressed={mode === 'copy'} disabled={busy} onClick={() => { setMode('copy'); setName(`${stem}_복사본`.slice(0, 150)); setError(''); }}><Copy size={15} />복사본 만들기</button>
     </div>
     <form onSubmit={e => { e.preventDefault(); void submit(); }}>

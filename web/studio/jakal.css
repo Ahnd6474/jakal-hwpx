@@ -1,4 +1,5 @@
 .jakal-embed { color-scheme: light; }
+:root.jakal-embed { --ui-icon-sprite-url: url('/studio/images/icon_small_ko.svg'); }
 .jakal-embed #menu-bar { min-height: 29px; font-family: '맑은 고딕', sans-serif; }
 .jakal-embed #studio-root { background: #e8e9eb; }
 .jakal-embed #menu-bar .menu-title { font-size: 12px; }

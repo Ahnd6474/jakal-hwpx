@@ -28,15 +28,17 @@ class CellEdit(BaseModel):
     text: str = Field(max_length=100_000)
 
 
-class EditRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-    revision: int = Field(ge=0)
-    operations: list[Annotated[ParagraphEdit | CellEdit, Field(discriminator="type")]] = Field(min_length=1, max_length=500)
-
-
 class RevisionRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     revision: int = Field(ge=0)
+
+
+class CommandRevisionRequest(RevisionRequest):
+    settings_version: int | None = Field(default=None, ge=0)
+
+
+class EditRequest(CommandRevisionRequest):
+    operations: list[Annotated[ParagraphEdit | CellEdit, Field(discriminator="type")]] = Field(min_length=1, max_length=500)
 
 
 class RenameRequest(RevisionRequest):
@@ -48,7 +50,7 @@ class CopyRequest(RevisionRequest):
     name: str = Field(min_length=1, max_length=160)
 
 
-class RestoreRequest(RevisionRequest):
+class RestoreRequest(CommandRevisionRequest):
     source_revision: int = Field(ge=0)
 
 

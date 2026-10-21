@@ -69,3 +69,13 @@ def test_bounded_job_wait_returns_completion_and_checks_ownership(client, raw_do
     assert stranger.get(f'/api/jobs/{job}?wait_ms=1500').status_code == 404
     stranger.close()
     assert client.get(f'/api/jobs/{job}?wait_ms=1501').status_code == 422
+
+
+def test_editor_toolbar_icons_and_page_icons_use_available_local_assets(client):
+    html = client.get('/studio/').text
+    assert 'href="/studio/favicon.ico"' in html
+    assert 'href="/studio/icons/icon-256.png"' in html
+    css = client.get('/studio/jakal.css').text
+    assert "--ui-icon-sprite-url: url('/studio/images/icon_small_ko.svg')" in css
+    for path in ['/studio/favicon.ico', '/studio/icons/icon-256.png', '/studio/images/icon_small_ko.svg', '/studio/print.html']:
+        assert client.get(path).status_code == 200

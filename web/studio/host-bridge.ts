@@ -22,6 +22,13 @@ if (jakalHost) registry.register({
 if (jakalHost) {
   document.addEventListener('compositionstart', () => jakalPost('composition', { composing: true }), true);
   document.addEventListener('compositionend', () => jakalPost('composition', { composing: false }), true);
+  document.addEventListener('drop', (event: DragEvent) => {
+    const files = Array.from(event.dataTransfer?.files || []);
+    if (!files.some(file => /\.(hwp|hwpx)$/i.test(file.name))) return;
+    event.preventDefault(); event.stopImmediatePropagation();
+    document.getElementById('scroll-container')?.classList.remove('drag-over');
+    jakalPost('file-drop', { count: files.length, ...(files.length === 1 ? { file: files[0] } : {}) });
+  }, true);
 }
 let jakalSequence = 0;
 let jakalChangeFrame = 0;

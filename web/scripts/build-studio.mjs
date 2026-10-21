@@ -6,6 +6,7 @@ import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { integrationHash } from './studio-version.mjs';
 import { compressAssets } from './compress-assets.mjs';
+import { restoreHostFileCommands } from '../studio/file-command-policy.mjs';
 
 const web = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const repo = resolve(web, '..');
@@ -38,6 +39,7 @@ await build({
   plugins: [{
     name: 'jakal-studio-host', enforce: 'pre',
     transform(code, id) {
+      if (id.replaceAll('\\', '/').endsWith('/ui/chrome-mode.ts')) return restoreHostFileCommands(code.replaceAll('\r\n', '\n'));
       if (id.replaceAll('\\', '/').endsWith('/command/commands/format.ts')) {
         code = code.replaceAll('\r\n', '\n');
         const selection = 'const savedSel = ih.getSelection();\n      if (!savedSel) return;';
@@ -100,7 +102,7 @@ await build({
       }
     },
     transformIndexHtml(html) {
-      return html.replace('<title>rhwp-studio</title>', '<title>Jakal 문서 편집기</title>').replace('src="/theme-init.js"', 'src="/studio/theme-init.js"').replace('src="/locale-init.js"', 'src="/studio/locale-init.js"').replace('</head>', '<link rel="stylesheet" href="/studio/jakal.css"></head>');
+      return html.replace('<title>rhwp-studio</title>', '<title>Jakal 문서 편집기</title>').replace('src="/theme-init.js"', 'src="/studio/theme-init.js"').replace('src="/locale-init.js"', 'src="/studio/locale-init.js"').replace('href="/favicon.ico"', 'href="/studio/favicon.ico"').replaceAll('href="/icons/', 'href="/studio/icons/').replace('</head>', '<link rel="stylesheet" href="/studio/jakal.css"></head>');
     },
   }],
   build: { outDir: out, emptyOutDir: true, chunkSizeWarningLimit: 2500 },

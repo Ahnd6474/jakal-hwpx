@@ -20,6 +20,9 @@ import { ApplicationBoundary } from './ApplicationBoundary';
 import { ConnectionStatus } from './ConnectionStatus';
 import { trapModalFocus } from './modal-focus';
 import { requestBytes } from './request';
+import { documentCommands } from './document-commands';
+import { DocumentSyncNotice } from './DocumentSyncNotice';
+import { studioBackup } from './studio-backup';
 const NewDocument = React.lazy(() => import('./NewDocument').then(module => ({ default: module.NewDocument })));
 const AdvancedSettings = React.lazy(() => import('./AdvancedSettings').then(module => ({ default: module.AdvancedSettings })));
 const DocumentReader = React.lazy(() => import('./DocumentReader').then(module => ({ default: module.DocumentReader })));
@@ -102,10 +105,10 @@ function App() {
   const saved = doc?.validated === doc?.revision;
 
   async function refreshList() { setDocuments(await api<DocumentSummary[]>('/documents')); }
-  async function load(id: string) {
+  async function load(id: string, keepDrafts = false) {
     const value = await api<Document>(`/documents/${id}`);
     if (value.status !== 'ready') throw new Error(value.error || '문서 분석이 진행 중입니다. 잠시 후 다시 열어 주세요.');
-    if (doc && dirty && !staleBackup) clearDraftBackup(doc.id);
+    if (doc && dirty && !staleBackup && !keepDrafts) clearDraftBackup(doc.id);
     const recovery = readDraftBackup(value);
     setDoc(value); setStudioDirty(false); setReaderOpened(false); setTab('studio'); setTableId(''); setSelected(null); setSection(-1); setSearch(''); dispatch({ type: 'reset' });
     setEditorEpoch(n => n + 1);
@@ -201,18 +204,20 @@ function App() {
   }
   async function saveRevision(current: Document, operations: Operation[]) {
       setBusy('수정 내용을 저장하고 있습니다');
-      const result = await post<{ job_id: string }>(`/documents/${current.id}/operations`, { revision: current.revision, operations });
-      await waitForJob(result.job_id, () => setBusy('수정 내용을 적용하고 파일을 검사하고 있습니다'));
-      const fresh = await api<Document>(`/documents/${current.id}`);
+      const fresh = await documentCommands.execute(current, { kind: 'edit', operations }, {
+        onStage: () => setBusy('수정 내용을 적용하고 파일을 검사하고 있습니다'),
+        onReconnect: () => setBusy('연결을 다시 확인하고 기존 저장 작업을 찾고 있습니다'),
+      });
       if (!staleBackup) clearDraftBackup(current.id);
       setDoc(fresh); setEditorEpoch(n => n + 1); dispatch({ type: 'reset' }); await refreshList();
       return fresh;
   }
   async function checkRevision(current: Document) {
       setBusy('문서 검증을 시작하고 있습니다');
-      const result = await post<{ job_id: string }>(`/documents/${current.id}/validations`, { revision: current.revision });
-      await waitForJob(result.job_id, () => setBusy('문서 구조·참조·저장 후 다시 열기를 검사하고 있습니다'));
-      const fresh = await api<Document>(`/documents/${current.id}`);
+      const fresh = await documentCommands.execute(current, { kind: 'validate' }, {
+        onStage: () => setBusy('문서 구조·참조·저장 후 다시 열기를 검사하고 있습니다'),
+        onReconnect: () => setBusy('연결을 다시 확인하고 기존 검증 작업을 찾고 있습니다'),
+      });
       setDoc(fresh);
       return fresh;
   }
@@ -220,15 +225,13 @@ function App() {
     if (!pageEditor.current) throw new Error('편집기를 준비하고 있습니다. 잠시 후 다시 시도하세요.');
     const handle = pageEditor.current;
     const bytes = await handle.export();
-    const form = new FormData();
-    form.append('file', new Blob([new Uint8Array(bytes)], { type: 'application/hwp+zip' }), 'edited.hwpx');
     setBusy('원문 편집을 저장하고 문서 구조를 검사하고 있습니다');
-    const result = await api<{ job_id: string }>(`/documents/${current.id}/studio?revision=${current.revision}`, { method: 'POST', body: form });
-    await waitForJob(result.job_id, () => setBusy('편집 파일의 구조·참조·보호 문구를 검사하고 있습니다'));
-    const fresh = await api<Document>(`/documents/${current.id}`);
-    if (fresh.revision !== current.revision + 1) throw new Error('문서 버전이 변경되었습니다. 편집 내용을 확인해 주세요.');
-    setDoc(fresh);
+    const fresh = await documentCommands.execute(current, { kind: 'studio', bytes }, {
+      onStage: () => setBusy('편집 파일의 구조·참조·보호 문구를 검사하고 있습니다'),
+      onReconnect: () => setBusy('연결을 다시 확인하고 기존 편집 저장 작업을 찾고 있습니다'),
+    });
     await handle.saved(fresh.revision);
+    setDoc(fresh);
     await refreshList();
     return fresh;
   }
@@ -291,8 +294,8 @@ function App() {
       setFileAction(null);
     } finally { taskRunning.current = false; setBusy(''); }
   }
-  const hostAction = useRef((action: string) => {});
-  hostAction.current = action => {
+  const hostAction = useRef((action: string, file?: File) => {});
+  hostAction.current = (action, file) => {
     if (taskRunning.current) return;
     if (action === 'new') setNewDocumentOpen(true);
     else if (action === 'open') inputRef.current?.click();
@@ -301,8 +304,10 @@ function App() {
     else if (action === 'copy') setFileAction('copy');
     else if (action === 'download') void download();
     else if (action === 'history') setVersionsOpen(true);
+    else if (action === 'drop-many') setError('한 번에 한 파일씩 열어 주세요.');
+    else if (action === 'drop' && file) void upload(file);
   };
-  const onHostFileAction = useCallback((action: string) => hostAction.current(action), []);
+  const onHostFileAction = useCallback((action: string, file?: File) => hostAction.current(action, file), []);
   async function deleteDocument(item: DocumentSummary) {
     if (!window.confirm(`“${item.name}”의 원본과 모든 수정본을 삭제할까요?`)) return;
     await task('문서를 삭제하고 있습니다', async () => {
@@ -317,8 +322,10 @@ function App() {
     taskRunning.current = true;
     setBusy('이전 버전을 복원하고 문서 구조를 검사하고 있습니다'); setError(''); setNotice('');
     try {
-      const result = await post<{ job_id: string }>(`/documents/${doc.id}/restorations`, { revision: doc.revision, source_revision: source });
-      await waitForJob(result.job_id, () => setBusy('이전 버전의 구조·참조·현재 고급 설정을 검사하고 있습니다'));
+      await documentCommands.execute(doc, { kind: 'restore', source_revision: source }, {
+        onStage: () => setBusy('이전 버전의 구조·참조·현재 고급 설정을 검사하고 있습니다'),
+        onReconnect: () => setBusy('연결을 다시 확인하고 기존 복원 작업을 찾고 있습니다'),
+      });
       await load(doc.id);
       setNotice(`버전 ${source + 1}을 새 버전 ${doc.revision + 2}로 복원했습니다. 이전 기록은 그대로 유지됩니다.`);
     } finally { taskRunning.current = false; setBusy(''); }
@@ -367,6 +374,13 @@ function App() {
   }, [focusTarget, reviewOpen, tab, tableId, section, search]);
   useEffect(() => {
     function keyboard(event: KeyboardEvent) {
+      if (doc && (event.ctrlKey || event.metaKey) && !event.altKey && !event.shiftKey && event.key.toLowerCase() === 'p') {
+        event.preventDefault();
+        if (disabled || document.querySelector('[role="dialog"]')) return;
+        if (tab !== 'studio') { setError('현재 수정 내용을 저장하고 문서 편집 보기에서 인쇄해 주세요.'); return; }
+        void pageEditor.current?.print().catch(e => setError(e instanceof Error ? e.message : '인쇄를 준비하지 못했습니다.'));
+        return;
+      }
       if (!(event.ctrlKey || event.metaKey) || event.key.toLowerCase() !== 's' || !doc) return;
       event.preventDefault();
       if (disabled || document.querySelector('[role="dialog"]')) return;
@@ -375,7 +389,7 @@ function App() {
     }
     window.addEventListener('keydown', keyboard);
     return () => window.removeEventListener('keydown', keyboard);
-  }, [doc, dirty, disabled, staleBackup]);
+  }, [doc, dirty, disabled, staleBackup, tab]);
   function downloadOldBackup() {
     if (!staleBackup) return;
     const url = URL.createObjectURL(new Blob([backupText(staleBackup)], { type: 'text/plain;charset=utf-8' }));
@@ -387,6 +401,44 @@ function App() {
     if (!writeDraftBackup(doc, history.present)) { setError('임시보관을 완료하지 못해 문서를 다시 열지 않았습니다. 수정 저장을 먼저 해 주세요.'); return; }
     reloadWithBackup.current = true;
     window.location.reload();
+  }
+  async function reopenLatest() {
+    if (!doc) return;
+    await task('편집을 임시보관하고 최신 문서를 열고 있습니다', async () => {
+      if (studioDirty) {
+        if (!pageEditor.current) throw new Error('편집기를 준비한 뒤 다시 시도해 주세요.');
+        const bytes = await pageEditor.current.export();
+        if (!bytes.byteLength || bytes.byteLength > 20 * 1024 * 1024) throw new Error('임시보관할 편집 파일은 0바이트보다 크고 20MB 이하여야 합니다. 현재 편집을 확인해 주세요.');
+        await studioBackup.write({ id: doc.id, revision: doc.revision, name: doc.name, bytes, saved: Date.now() });
+      }
+      if (Object.keys(history.present).length) {
+        if (staleBackup) throw new Error('이전 임시본문을 먼저 내려받고 정리해 주세요. 현재 편집도 임시본으로 내려받아 보관할 수 있습니다.');
+        if (!writeDraftBackup(doc, history.present)) throw new Error('임시보관을 완료하지 못해 최신 문서를 열지 않았습니다. 현재 편집 임시본을 내려받아 주세요.');
+      }
+      await load(doc.id, true);
+      setNotice(dirty ? '최신 문서를 열었습니다. 이전 편집은 임시본으로 보관했습니다. 내용을 비교해 반영하세요.' : '최신 문서를 열었습니다.');
+    });
+  }
+  async function downloadCurrentDraft() {
+    if (!doc || !dirty) return;
+    await task('현재 편집 임시본을 준비하고 있습니다', async () => {
+      let blob: Blob;
+      let extension: string;
+      if (studioDirty) {
+        if (!pageEditor.current) throw new Error('편집기를 준비한 뒤 다시 시도해 주세요.');
+        blob = new Blob([new Uint8Array(await pageEditor.current.export())], { type: 'application/hwp+zip' });
+        extension = 'hwpx';
+      } else {
+        const changes = textTargets(doc, history.present).filter(target => !!history.present[target.id])
+          .map(target => ({ id: target.id, original: target.original, operation: history.present[target.id] }));
+        blob = new Blob([backupText({ version: 1, documentId: doc.id, revision: doc.revision, expires: doc.expires, updatedAt: Date.now(), changes })], { type: 'text/plain;charset=utf-8' });
+        extension = 'txt';
+      }
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a'); link.href = url; link.download = `${doc.name.replace(/\.[^.]+$/, '')}_미저장편집.${extension}`; link.click();
+      setTimeout(() => URL.revokeObjectURL(url), 30_000);
+      setNotice('미저장 편집의 임시본을 내려받았습니다. 서버에 저장·검증한 파일과 구분해 보관하세요.');
+    });
   }
   function applyProposals(proposals: Proposal[]) {
     if (!doc) return;
@@ -433,6 +485,7 @@ function App() {
       <ConnectionStatus />
       <header className="topbar"><div className="breadcrumb"><button className="menu-toggle icon-button" aria-label="메뉴 열기" onClick={() => setSidebarOpen(true)}><PanelLeftClose size={19} /></button><button disabled={disabled} onClick={openHome}>내 문서</button>{doc && <><ChevronRight size={13} /><span title={doc.name}>{doc.name}</span></>}</div><button className="help-button" aria-label="사용 안내" onClick={() => setHelpOpen(true)}><BookOpen size={16} /><span>사용 안내</span></button></header>
       {error && <div className="message error" role="alert"><TriangleAlert size={17} /><span>{error}</span>{!doc && <button className="text-button" disabled={disabled || booting} onClick={() => void task('문서 목록을 확인하고 있습니다', refreshList)}>목록 다시 확인</button>}<button aria-label="오류 닫기" onClick={() => setError('')}><X size={17} /></button></div>}
+      {doc && <DocumentSyncNotice doc={doc} disabled={disabled} dirty={!!dirty} onReload={() => void reopenLatest()} onBackup={() => void downloadCurrentDraft()} />}
       {notice && <div className="message success" role="status"><CircleCheck size={17} /><span>{notice}</span><button aria-label="알림 닫기" onClick={() => setNotice('')}><X size={17} /></button></div>}
       {busy && <div className="busy-bar" role="status"><LoaderCircle size={16} className="spin" />{busy}</div>}
       {staleBackup && doc && <div className="draft-conflict" role="status"><div><strong>다른 버전의 임시 편집이 있습니다.</strong><span>덮어쓰지 않고 보관했습니다. 이전 임시본을 정리하면 현재 편집의 임시보관을 다시 시작합니다.</span></div><div><button className="text-button" onClick={downloadOldBackup}>임시본문 받기</button>{confirmDropBackup ? <><span>이전 임시 편집을 버릴까요?</span><button className="text-button" onClick={() => { if (clearDraftBackup(doc.id)) { setStaleBackup(null); setConfirmDropBackup(false); } else setError('브라우저 임시보관함에 접근할 수 없습니다.'); }}>버리기 확인</button><button className="text-button" onClick={() => setConfirmDropBackup(false)}>취소</button></> : <button className="text-button" onClick={() => setConfirmDropBackup(true)}>이전 임시본 버리기</button>}</div></div>}

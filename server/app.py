@@ -11,15 +11,16 @@ import time
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI, File, HTTPException, Query, Request, UploadFile
+from fastapi import FastAPI, File, Header, HTTPException, Query, Request, UploadFile
 from fastapi.responses import FileResponse, JSONResponse
 from starlette.concurrency import run_in_threadpool
 from .static import WebStaticFiles
 from .http_policy import response_headers
 
-from .schemas import CopyRequest, RenameRequest, EditRequest, RevisionRequest, RestoreRequest, SettingsRequest, TemplateRequest
+from .schemas import CommandRevisionRequest, CopyRequest, RenameRequest, EditRequest, RevisionRequest, RestoreRequest, SettingsRequest, TemplateRequest
 from .document_names import document_name
-from .policies import DEFAULT_SETTINGS
+from .document_service import DocumentService
+from .errors import WorkspaceError
 from .storage import Store
 from .worker import Worker
 
@@ -68,6 +69,7 @@ class BodyLimit:
 def create_app(data_dir: Path | None = None, *, run_worker: bool = True) -> FastAPI:
     store = Store(data_dir or Path(os.environ.get("JAKAL_DATA_DIR", REPO / ".web-data")))
     worker = Worker(store)
+    service = DocumentService(store)
 
     @asynccontextmanager
     async def lifespan(app):
@@ -82,7 +84,13 @@ def create_app(data_dir: Path | None = None, *, run_worker: bool = True) -> Fast
     app = FastAPI(title="Jakal Document Workspace", lifespan=lifespan, docs_url="/api/docs", redoc_url=None, openapi_url="/api/openapi.json")
     app.state.store = store
     app.state.worker = worker
+    app.state.documents = service
     app.add_middleware(BodyLimit)
+
+    @app.exception_handler(WorkspaceError)
+    async def workspace_error(request: Request, exc: WorkspaceError):
+        return JSONResponse({"detail": str(exc), "code": exc.code}, status_code=exc.status,
+            headers=response_headers(request.url.path))
 
     @app.exception_handler(Exception)
     async def unexpected_error(request: Request, exc: Exception):
@@ -110,36 +118,9 @@ def create_app(data_dir: Path | None = None, *, run_worker: bool = True) -> Fast
         return response
 
     def owned(identifier: str, request: Request):
-        document = store.document(identifier, request.state.owner)
-        if document is None:
-            raise HTTPException(404, "문서를 찾을 수 없거나 보관 기간이 만료되었습니다.")
-        return document
+        return service.owned(identifier, request.state.owner)
 
-    def view(document: dict):
-        result = {key: document[key] for key in ("id", "name", "revision", "status", "validated", "created", "error")}
-        result["expires"] = document["created"] + store.ttl
-        if document["status"] == "ready":
-            try:
-                snapshot = json.loads((store.directory(document["id"]) / f"snapshot-{document['revision']}.json").read_text(encoding="utf-8"))
-                if not isinstance(snapshot, dict) or snapshot.get("revision") != document["revision"]:
-                    raise ValueError("Invalid snapshot revision")
-                result.update(snapshot)
-                # A display-name change does not rewrite historical snapshots.
-                result['name'] = document['name']
-            except (OSError, ValueError):
-                raise HTTPException(503, "저장된 문서 정보를 읽지 못했습니다. 다시 시도하거나 업로드 원본을 다운로드해 주세요.") from None
-        result.setdefault("format", Path(document["name"]).suffix.lower().lstrip("."))
-        result["settings"] = {**DEFAULT_SETTINGS, **json.loads(document["settings"])}
-        result["settings_version"] = document["settings_version"]
-        return result
-
-    def enqueue(identifier, request, kind, payload, revision):
-        owned(identifier, request)
-        try:
-            job = store.enqueue(identifier, request.state.owner, kind, payload, revision)
-        except ValueError as exc:
-            raise HTTPException(409, str(exc)) from exc
-        return {"job_id": job, "document_id": identifier}
+    view = service.view
 
     @app.get("/api/health")
     def health():
@@ -217,6 +198,10 @@ def create_app(data_dir: Path | None = None, *, run_worker: bool = True) -> Fast
         document = view(owned(identifier, request))
         return {"revision": document["revision"], "sections": document.get("sections", [])}
 
+    @app.get("/api/documents/{identifier}/state")
+    def document_state(identifier: str, request: Request):
+        return service.state(identifier, request.state.owner)
+
     @app.patch('/api/documents/{identifier}/name')
     def rename_document(identifier: str, body: RenameRequest, request: Request):
         document = owned(identifier, request)
@@ -266,11 +251,9 @@ def create_app(data_dir: Path | None = None, *, run_worker: bool = True) -> Fast
             raise HTTPException(503, str(exc)) from None
 
     @app.post("/api/documents/{identifier}/restorations", status_code=202)
-    def restore(identifier: str, body: RestoreRequest, request: Request):
-        document = owned(identifier, request)
-        if body.source_revision >= document["revision"] or store.revision(identifier, request.state.owner, body.source_revision) is None:
-            raise HTTPException(409, "복원할 이전 버전을 다시 선택해 주세요.")
-        return enqueue(identifier, request, "restore", body.model_dump(), body.revision)
+    def restore(identifier: str, body: RestoreRequest, request: Request,
+                request_key: str | None = Header(default=None, alias="Idempotency-Key")):
+        return service.restore(identifier, request.state.owner, body, request_key)
 
     @app.get("/api/documents/{identifier}/source")
     def source(identifier: str, revision: int, request: Request):
@@ -288,34 +271,42 @@ def create_app(data_dir: Path | None = None, *, run_worker: bool = True) -> Fast
         return FileResponse(store.directory(identifier) / f"revision-0{extension}", media_type="application/octet-stream", filename=document["name"])
 
     @app.post("/api/documents/{identifier}/operations", status_code=202)
-    def edit(identifier: str, body: EditRequest, request: Request):
-        targets = [json.dumps({k: v for k, v in op.model_dump().items() if k != "text"}, sort_keys=True) for op in body.operations]
-        if len(targets) != len(set(targets)):
-            raise HTTPException(422, "같은 요소를 한 작업에서 두 번 수정할 수 없습니다.")
-        return enqueue(identifier, request, "edit", body.model_dump(), body.revision)
+    def edit(identifier: str, body: EditRequest, request: Request,
+             request_key: str | None = Header(default=None, alias="Idempotency-Key")):
+        return service.edit(identifier, request.state.owner, body, request_key)
 
     @app.post("/api/documents/{identifier}/validations", status_code=202)
-    def validate(identifier: str, body: RevisionRequest, request: Request):
-        return enqueue(identifier, request, "validate", body.model_dump(), body.revision)
+    def validate(identifier: str, body: CommandRevisionRequest, request: Request,
+                 request_key: str | None = Header(default=None, alias="Idempotency-Key")):
+        return service.validate(identifier, request.state.owner, body, request_key)
 
     @app.post("/api/documents/{identifier}/studio", status_code=202)
-    def studio_save(identifier: str, request: Request, revision: int = Query(ge=0), file: UploadFile = File(...)):
-        document = owned(identifier, request)
-        if view(document).get("format") != "hwpx":
-            raise HTTPException(409, "HWPX로 변환한 문서를 다시 열어 주세요.")
+    def studio_save(identifier: str, request: Request, revision: int = Query(ge=0), file: UploadFile = File(...),
+                    settings_version: int | None = Query(default=None, ge=0),
+                    request_key: str | None = Header(default=None, alias="Idempotency-Key")):
+        owned(identifier, request)
         candidate = f"studio-{secrets.token_hex(16)}.hwpx"
         path = store.directory(identifier) / candidate
         try:
             size = 0
+            digest = hashlib.sha256()
             with path.open("xb") as output:
                 while chunk := file.file.read(64 * 1024):
                     size += len(chunk)
                     if size > MAX_UPLOAD:
                         raise BodyTooLarge()
                     output.write(chunk)
+                    digest.update(chunk)
             if not size:
                 raise HTTPException(422, "빈 편집 파일은 저장할 수 없습니다.")
-            return enqueue(identifier, request, "studio", {"revision": revision, "candidate": candidate}, revision)
+            result = service.save_studio(identifier, request.state.owner, revision, settings_version,
+                candidate, digest.hexdigest(), request_key)
+            accepted = store.job(result["job_id"], request.state.owner)
+            if accepted and json.loads(accepted["payload"]).get("candidate") != candidate:
+                # A repeated upload got the first job. Keep its input intact and
+                # remove only this retry's unused file, even if it already ran.
+                path.unlink(missing_ok=True)
+            return result
         except Exception:
             path.unlink(missing_ok=True)
             raise

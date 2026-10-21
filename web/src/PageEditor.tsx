@@ -11,8 +11,9 @@ import { requestBytes } from './request';
 export type PageEditorHandle = {
   export: () => Promise<Uint8Array>;
   saved: (revision: number) => Promise<void>;
+  print: () => Promise<void>;
 };
-type Props = { doc: Document; active: boolean; disabled: boolean; onDirty: (dirty: boolean) => void; onSave: () => void; onFileAction: (action: string) => void };
+type Props = { doc: Document; active: boolean; disabled: boolean; onDirty: (dirty: boolean) => void; onSave: () => void; onFileAction: (action: string, file?: File) => void };
 
 export const PageEditor = memo(forwardRef<PageEditorHandle, Props>(function PageEditor({ doc, active, disabled, onDirty, onSave, onFileAction }, ref) {
   const container = useRef<HTMLDivElement>(null);
@@ -93,6 +94,7 @@ export const PageEditor = memo(forwardRef<PageEditorHandle, Props>(function Page
     } catch { if (epoch === generation.current) setBackupStatus('임시보관 실패 · 수정 저장 필요'); }
   }
   useImperativeHandle(ref, () => ({
+    print: () => runTool('file:print-to-pdf'),
     async export() {
       if (!editor.current || loading.current || backup) throw new Error('문서 편집기 준비를 마친 뒤 다시 시도하세요.');
       autosave.current?.cancel();
@@ -154,6 +156,12 @@ export const PageEditor = memo(forwardRef<PageEditorHandle, Props>(function Page
     };
     function message(event: MessageEvent) {
       if (event.origin !== location.origin || event.source !== instance?.element.contentWindow || event.data?.channel !== 'jakal-studio-v1') return;
+      if (event.data.type === 'file-drop') {
+        if (!availability.current.active || availability.current.disabled || document.querySelector('[role="dialog"]')) return;
+        if (event.data.count > 1) current.current.onFileAction('drop-many');
+        else if (event.data.file instanceof File) current.current.onFileAction('drop', event.data.file);
+        return;
+      }
       if (event.data.type === 'file-action') {
         if (availability.current.active && !availability.current.disabled && !document.querySelector('[role="dialog"]') && typeof event.data.action === 'string') current.current.onFileAction(event.data.action);
         return;
@@ -187,7 +195,7 @@ export const PageEditor = memo(forwardRef<PageEditorHandle, Props>(function Page
     if (ready) editor.current?.element.contentWindow?.postMessage({ channel: 'jakal-studio-v1', type: 'tools', mode: tools }, location.origin);
   }, [tools, ready]);
   useEffect(() => {
-    if (ready) editor.current?.element.contentWindow?.postMessage({ channel: 'jakal-studio-v1', type: 'filename', name: doc.name }, location.origin);
+    if (ready) editor.current?.element.contentWindow?.postMessage({ channel: 'jakal-studio-v1', type: 'filename', name: doc.name.replace(/\.hwp$/i, '.hwpx') }, location.origin);
   }, [doc.name, ready]);
   useEffect(() => {
     const narrow = window.matchMedia('(max-width: 760px)');
