@@ -79,3 +79,11 @@ def test_extracted_factories_still_build_public_document_models() -> None:
     assert set(part_order) == set(parts)
     assert zip_infos == {}
     assert duplicates == []
+
+
+def test_hwpx_compatibility_aliases_are_public() -> None:
+    import jakal_hwpx
+
+    assert jakal_hwpx.HeaderFooterBlock is elements.HeaderFooterXml
+    assert jakal_hwpx.ShapeObject is elements.ShapeXml
+    assert jakal_hwpx.TableCell is elements.TableCellXml
