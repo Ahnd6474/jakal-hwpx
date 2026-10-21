@@ -21,7 +21,7 @@ from jakal_hwpx import HwpxDocument
 | `HwpxDocument.open(path, validate=True)` | open an existing HWPX package |
 | `HwpxDocument.from_bytes(raw_bytes)` | open from bytes |
 | `compile(validate=True, auto_repair=True)` | compile the current package to bytes |
-| `save(path, validate=True, auto_repair=True)` | save to `.hwpx` |
+| `save(path, validate=True, auto_repair=True)` | atomically save to `.hwpx` |
 | `to_hancom_document()` | convert to `HancomDocument` |
 | `to_hwp_document()` | materialize native `HwpDocument` |
 | `save_as_hwp(path, *, converter=None, force_refresh=True)` | write native HWP |
@@ -40,6 +40,10 @@ from jakal_hwpx import HwpxDocument
 | `header_xml()` | return the header XML wrapper |
 | `content_hpf_xml()` | return content metadata XML |
 | `settings_xml()` | return settings XML |
+
+Read-only document queries and validation preserve the original XML bytes. Direct access through an XML part's
+`root_element` remains a mutable escape hatch and marks that part as modified; internal inspection uses
+`readonly_root_element` instead.
 
 ## Paragraph editing
 
@@ -199,6 +203,8 @@ Selectors return wrapper lists.
 | `HwpxDocument.repair(path, output_path=None)` | repair a file on disk |
 
 `save()` and `compile()` run with `auto_repair=True` by default.
+`save()` writes a temporary archive beside the destination and replaces the destination only after the archive closes
+successfully, so a failed write does not truncate an existing document.
 
 ## Example
 

@@ -11,7 +11,7 @@ license-files = ["LICENSE", "THIRD_PARTY_NOTICES.md"]
 readme = { file = "README.md", content-type = "text/markdown" }
 requires-python = ">=3.11"
 authors = [{ name = "Ahnd6474" }]
-dependencies = ["lxml>=5.0.0,<6", "olefile>=0.47,<1"]
+dependencies = ["lxml>=5.0.0,<7", "olefile>=0.47,<1"]
 keywords = ["hwpx", "hancom", "document", "xml", "library"]
 classifiers = [
   "Development Status :: 4 - Beta",
@@ -21,6 +21,7 @@ classifiers = [
   "Programming Language :: Python :: 3.11",
   "Programming Language :: Python :: 3.12",
   "Programming Language :: Python :: 3.13",
+  "Programming Language :: Python :: 3.14",
   "Programming Language :: Python :: Implementation :: CPython",
   "Topic :: Software Development :: Libraries :: Python Modules",
   "Topic :: Text Editors :: Word Processors",
@@ -38,7 +39,16 @@ hwp2py = "jakal_hwpx.hwp2py:main"
 hwpx2py = "jakal_hwpx.hwpx2py:main"
 
 [project.optional-dependencies]
-dev = ["build>=1.2", "pytest>=8.0", "setuptools>=77", "tox>=4.0", "twine>=5.0"]
+dev = [
+  "build>=1.2",
+  "mypy>=1.18,<2",
+  "pytest>=8.0",
+  "ruff>=0.14,<0.15",
+  "setuptools>=77",
+  "tox>=4.0",
+  "twine>=5.0",
+]
+lint = ["mypy>=1.18,<2", "ruff>=0.14,<0.15"]
 release = ["build>=1.2", "pytest>=8.0", "setuptools>=77", "twine>=5.0"]
 test = ["pytest>=8.0"]
 
@@ -55,3 +65,11 @@ jakal_hwpx = ["py.typed", "bundled_hwp_profile/*.hwp", "bundled_hwp_profile/prof
 [tool.pytest.ini_options]
 addopts = "-ra"
 testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py311"
+extend-exclude = ["tests/_tmp_pytest"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/conftest.py" = ["E402"]

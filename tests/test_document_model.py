@@ -13,6 +13,7 @@ from jakal_hwpx import (
     HeaderPart,
     HwpxDocument,
     HwpxValidationError,
+    InvalidHwpxFileError,
     OleXml,
     PreviewTextPart,
     SectionPart,
@@ -40,6 +41,66 @@ def test_open_exposes_expected_parts(sample_hwpx_path: Path) -> None:
     assert all(isinstance(section, SectionPart) for section in document.sections)
     assert document.mimetype.mime == "application/hwp+zip"
     assert document.validation_errors() == []
+
+
+def test_open_and_validation_do_not_mark_xml_parts_modified(sample_hwpx_path: Path) -> None:
+    document = HwpxDocument.open(sample_hwpx_path)
+
+    assert document.validation_errors() == []
+    assert not [part.path for part in document._parts.values() if part.modified]
+
+
+def test_repeated_append_uses_cached_paragraph_template(monkeypatch: pytest.MonkeyPatch) -> None:
+    document = HwpxDocument.blank()
+    section = document.sections[0]
+    section.append_paragraph("prime template cache")
+    original = section._paragraph_elements
+    scans = 0
+
+    def counted_paragraph_elements():
+        nonlocal scans
+        scans += 1
+        return original()
+
+    monkeypatch.setattr(section, "_paragraph_elements", counted_paragraph_elements)
+    for index in range(20):
+        section.append_paragraph(f"paragraph {index}")
+
+    assert scans == 0
+
+
+def test_unedited_save_preserves_xml_entry_bytes(valid_hwpx_files: list[Path], tmp_path: Path) -> None:
+    for index, sample_hwpx_path in enumerate(valid_hwpx_files):
+        document = HwpxDocument.open(sample_hwpx_path)
+        output_path = tmp_path / f"unedited-{index}.hwpx"
+
+        document.save(output_path, auto_repair=False)
+
+        with zipfile.ZipFile(sample_hwpx_path) as source, zipfile.ZipFile(output_path) as saved:
+            xml_paths = [name for name in source.namelist() if name.endswith((".xml", ".hpf"))]
+            assert xml_paths
+            assert all(source.read(name) == saved.read(name) for name in xml_paths), sample_hwpx_path.name
+
+
+def test_from_bytes_wraps_invalid_zip_error() -> None:
+    with pytest.raises(InvalidHwpxFileError, match="not a valid zip-based HWPX"):
+        HwpxDocument.from_bytes(b"not a zip package")
+
+
+def test_atomic_save_preserves_existing_target_on_write_failure(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    document = HwpxDocument.blank()
+    output_path = tmp_path / "existing.hwpx"
+    output_path.write_bytes(b"existing-content")
+
+    def fail_write(_archive: zipfile.ZipFile) -> None:
+        raise RuntimeError("simulated archive write failure")
+
+    monkeypatch.setattr(document, "_write_archive", fail_write)
+    with pytest.raises(RuntimeError, match="simulated archive write failure"):
+        document.save(output_path, validate=False, auto_repair=False)
+
+    assert output_path.read_bytes() == b"existing-content"
+    assert not list(tmp_path.glob(".existing.hwpx.*.tmp"))
 
 
 def test_default_constructor_builds_blank_document_in_memory() -> None:

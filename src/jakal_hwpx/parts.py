@@ -139,6 +139,11 @@ class XmlPart(HwpxPart):
         self.mark_modified()
         return self._root
 
+    @property
+    def readonly_root_element(self) -> etree._Element:
+        """Return the parsed root without marking the part as modified."""
+        return self._root
+
     @classmethod
     def from_root(
         cls,
@@ -506,8 +511,8 @@ class SectionPart(XmlPart):
         self._clear_paragraph_caches()
 
     def _clear_paragraph_caches(self) -> None:
-        self._paragraph_template_cache = None
-        self._next_paragraph_id_cache = None
+        self._paragraph_template_cache: etree._Element | None = None
+        self._next_paragraph_id_cache: int | None = None
 
     def _cache_text_paragraph(self, paragraph: etree._Element) -> None:
         self._paragraph_template_cache = paragraph
@@ -672,6 +677,11 @@ class SectionPart(XmlPart):
         return paragraph
 
     def _select_template_paragraph(self, template_index: int | None = None) -> etree._Element:
+        if template_index is None:
+            cached = getattr(self, "_paragraph_template_cache", None)
+            if cached is not None and cached.getparent() is self._root:
+                return cached
+
         paragraphs = self._paragraph_elements()
         if not paragraphs:
             paragraph = etree.Element(qname("hp", "p"))
@@ -684,9 +694,6 @@ class SectionPart(XmlPart):
             return paragraph
         if template_index is not None:
             return paragraphs[template_index]
-        cached = getattr(self, "_paragraph_template_cache", None)
-        if cached is not None and cached.getparent() is self._root:
-            return cached
         safe_text_paragraphs = [
             paragraph
             for paragraph in reversed(paragraphs)

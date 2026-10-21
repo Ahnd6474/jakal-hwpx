@@ -113,6 +113,24 @@ def test_docinfo_model_exposes_typed_docinfo_records(sample_hwp_path: Path) -> N
         assert isinstance(model.bullet_records()[0], BulletRecord)
 
 
+def test_model_batch_contexts_reuse_models_and_flush_replacements(sample_hwp_path: Path) -> None:
+    document = HwpBinaryDocument.open(sample_hwp_path)
+
+    with document.section_model_batch():
+        first_section = document.section_model(0)
+        assert document.section_model(0) is first_section
+        document.replace_section_model(0, first_section)
+
+    assert document.section_model(0) is not first_section
+
+    with document.docinfo_model_batch():
+        first_docinfo = document.docinfo_model()
+        assert document.docinfo_model() is first_docinfo
+        document.replace_docinfo_model(first_docinfo)
+
+    assert document.docinfo_model() is not first_docinfo
+
+
 def test_docinfo_model_exposes_named_docinfo_payload_fields(sample_hwp_path: Path) -> None:
     document = HwpBinaryDocument.open(sample_hwp_path)
     model = document.docinfo_model()

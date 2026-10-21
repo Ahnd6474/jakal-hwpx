@@ -169,7 +169,9 @@ def write_compound_file(path: str | Path, streams: dict[str, bytes], layout: Cfb
     directory_bytes = _build_directory_stream(entries)
     _store_chain_payload(sectors, directory_chain, directory_bytes)
 
-    target_path.write_bytes(header + b"".join(sectors))
+    with target_path.open("wb") as output:
+        output.write(header)
+        output.writelines(sectors)
     return target_path
 
 

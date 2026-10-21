@@ -5,7 +5,7 @@ from typing import Any
 
 from lxml import etree
 
-from .namespaces import NS, local_name, qname, resolve_tag
+from .namespaces import NS, local_name, resolve_tag
 
 
 def _parse_xml_fragment(xml: str | bytes) -> etree._Element:

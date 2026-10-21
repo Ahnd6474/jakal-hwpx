@@ -7,7 +7,7 @@ from typing import Callable
 
 from ._hancom import convert_document
 from .exceptions import HancomInteropError
-from .hwp_binary import TAG_CTRL_HEADER, HwpBinaryDocument
+from .hwp_binary import TAG_CTRL_HEADER
 from .hwp_document import HwpDocument
 from .hwp_pure_profile import HwpPureProfile
 

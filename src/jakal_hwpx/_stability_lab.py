@@ -232,7 +232,7 @@ def _build_note(kind: str, case_name: str, tokens_by_paragraph: tuple[tuple[str,
 
 
 def _section_signatures(document: HwpxDocument, expected_count: int) -> list[Counter[str]]:
-    paragraphs = document.sections[0].root_element.xpath("./hp:p", namespaces=NS)[:expected_count]
+    paragraphs = document.sections[0].readonly_root_element.xpath("./hp:p", namespaces=NS)[:expected_count]
     return [_preserved_structure_signature(paragraph) for paragraph in paragraphs]
 
 

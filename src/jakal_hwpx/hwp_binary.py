@@ -1,10 +1,10 @@
 from __future__ import annotations
 
-import copy
 import json
 import struct
 import zlib
 from collections.abc import Sequence
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Iterator
@@ -12,374 +12,214 @@ from typing import Callable, Iterator
 import olefile
 
 from ._cfb_writer import CfbLayout, capture_compound_file_layout, write_compound_file
+from ._hwp_constants import (  # noqa: F401 - compatibility re-exports
+    _AUTO_NUMBER_TYPE_CODES,
+    _AUTO_NUMBER_TYPE_VALUES,
+    _BLANK_DROP_CONTROL_IDS,
+    _BOOKMARK_CTRL_DATA_PREFIX,
+    _CONTROL_MARKER_CODES,
+    _CONTROL_NATIVE_METADATA_PREFIX,
+    _DEFAULT_ARC_CTRL_HEADER,
+    _DEFAULT_ARC_PAYLOAD,
+    _DEFAULT_ARC_SHAPE_COMPONENT,
+    _DEFAULT_COMPLEX_SHAPE_COMPONENT_LINE_WIDTH,
+    _DEFAULT_ELLIPSE_CTRL_HEADER,
+    _DEFAULT_ELLIPSE_PAYLOAD,
+    _DEFAULT_ELLIPSE_SHAPE_COMPONENT,
+    _DEFAULT_EQUATION_CTRL_HEADER,
+    _DEFAULT_OLE_LINE_WIDTH,
+    _DEFAULT_POLYGON_CTRL_HEADER,
+    _DEFAULT_POLYGON_PAYLOAD,
+    _DEFAULT_POLYGON_SHAPE_COMPONENT,
+    _DEFAULT_RECT_CTRL_HEADER,
+    _DEFAULT_RECT_SHAPE_COMPONENT,
+    _DEFAULT_SHAPE_COMPONENT,
+    _DEFAULT_SHAPE_CTRL_HEADER,
+    _DEFAULT_SHAPE_LINE_PAYLOAD,
+    _DEFAULT_SHAPE_LINE_WIDTH,
+    _DEFAULT_SHAPE_LIST_HEADER,
+    _DEFAULT_SHAPE_RECTANGLE_PAYLOAD,
+    _DEFAULT_SHAPE_TEXT_CHAR_SHAPE,
+    _DEFAULT_SHAPE_TEXT_LINE_SEG,
+    _DEFAULT_SHAPE_TEXT_PARA_CONTROL_MASK,
+    _DEFAULT_SHAPE_TEXT_PARA_SHAPE_ID,
+    _DEFAULT_SHAPE_TEXT_PARA_TRAILING,
+    _DEFAULT_SHAPE_TEXT_SPLIT_FLAGS,
+    _DEFAULT_SHAPE_TEXT_STYLE_ID,
+    _DEFAULT_TEXTART_CTRL_HEADER,
+    _DEFAULT_TEXTART_FONT_NAME,
+    _DEFAULT_TEXTART_FONT_STYLE,
+    _DEFAULT_TEXTART_SHAPE_COMPONENT,
+    _ENDNOTE_CTRL_HEADER,
+    _EQUATION_VERSION_MARKER,
+    _FOOTER_CTRL_HEADER,
+    _FOOTER_LIST_HEADER,
+    _FOOTER_PARA_CHAR_SHAPE,
+    _FOOTER_PARA_HEADER,
+    _FOOTER_PARA_LINE_SEG,
+    _FOOTNOTE_CTRL_HEADER,
+    _HANCOM_CONNECTLINE_COMPONENT_SIGNATURE,
+    _HEADER_CTRL_HEADER,
+    _HEADER_LIST_HEADER,
+    _HEADER_PARA_CHAR_SHAPE,
+    _HEADER_PARA_HEADER,
+    _HEADER_PARA_LINE_SEG,
+    _HWP_CHAR_FONT_ORDER,
+    _HWP_COMPLEX_SHAPE_TEMPLATES,
+    _HWP_DRAW_ASPECT_CODES,
+    _HWP_DRAW_ASPECT_NAMES,
+    _HWP_FILLED_SHAPE_COMMON_PAYLOAD_SIZE,
+    _HWP_LINE_ARROW_CODES,
+    _HWP_LINE_ARROW_NAMES,
+    _HWP_LINE_ARROW_SIZE_CODES,
+    _HWP_LINE_ARROW_SIZE_NAMES,
+    _HWP_LINE_END_CAP_CODES,
+    _HWP_LINE_END_CAP_NAMES,
+    _HWP_LINE_OUTLINE_STYLE_CODES,
+    _HWP_LINE_OUTLINE_STYLE_NAMES,
+    _HWP_LINE_STYLE_CODES,
+    _HWP_LINE_STYLE_NAMES,
+    _HWP_OLE_OBJECT_TYPE_CODES,
+    _HWP_OLE_OBJECT_TYPE_NAMES,
+    _HWP_PICTURE_EFFECT_CODES,
+    _HWP_PICTURE_EFFECT_NAMES,
+    _HWP_TAB_LEADER_NAMES,
+    _HWP_TAB_TYPE_NAMES,
+    _HYPERLINK_CHAR_SHAPE,
+    _HYPERLINK_CTRL_PREFIX,
+    _HYPERLINK_CTRL_SUFFIX,
+    _HYPERLINK_LINE_SEG,
+    _HYPERLINK_PARA_HEADER_TAIL,
+    _HYPERLINK_TEXT_END_MARKER,
+    _HYPERLINK_TEXT_START_MARKER,
+    _MEMO_SHAPE_NATIVE_METADATA_PREFIX,
+    _NOTE_CHAR_SHAPE,
+    _NOTE_LINE_SEG,
+    _NOTE_LIST_HEADER,
+    _NOTE_PARA_HEADER,
+    _PICTURE_CTRL_HEADER,
+    _PICTURE_SHAPE_COMPONENT,
+    _PICTURE_SHAPE_PICTURE,
+    _PICTURE_TOP_CHAR_SHAPE,
+    _PICTURE_TOP_LINE_SEG,
+    _PICTURE_TOP_PARA_HEADER_TAIL,
+    _PICTURE_TOP_PARA_TEXT,
+    _SHAPE_NATIVE_METADATA_PREFIX,
+    _TABLE_CELL_CHAR_SHAPE,
+    _TABLE_CELL_LINE_SEG,
+    _TABLE_CELL_PARA_HEADER_TAIL,
+    _TABLE_CTRL_HEADER,
+    _TABLE_TOP_CHAR_SHAPE,
+    _TABLE_TOP_LINE_SEG,
+    _TABLE_TOP_PARA_HEADER_TAIL,
+    _TABLE_TOP_PARA_TEXT,
+    _TEXTART_COMPONENT_REFERENCE_EXTENT,
+    DEFAULT_HWP_EQUATION_FONT,
+    DEFAULT_HWP_EQUATION_SCRIPT,
+    DEFAULT_HWP_HYPERLINK_METADATA_FIELDS,
+    DEFAULT_HWP_HYPERLINK_TEXT,
+    DEFAULT_HWP_HYPERLINK_URL,
+    DEFAULT_HWP_SHAPE_HEIGHT,
+    DEFAULT_HWP_SHAPE_TEXT,
+    DEFAULT_HWP_SHAPE_WIDTH,
+    DEFAULT_HWP_TABLE_BORDER_FILL_ID,
+    DEFAULT_HWP_TABLE_CELL_HEIGHT,
+    DEFAULT_HWP_TABLE_CELL_MARGIN,
+    DEFAULT_HWP_TABLE_CELL_WIDTH,
+    DEFAULT_HWP_TABLE_COLS,
+    DEFAULT_HWP_TABLE_ROWS,
+    FILE_HEADER_SIGNATURE,
+    FILE_HEADER_SIZE,
+    FLAG_COMPRESSED,
+    FLAG_DISTRIBUTABLE,
+    FLAG_PASSWORD_PROTECTED,
+    TAG_BIN_DATA,
+    TAG_BORDER_FILL,
+    TAG_BULLET,
+    TAG_CHAR_SHAPE,
+    TAG_CHART_DATA,
+    TAG_COMPATIBLE_DOCUMENT,
+    TAG_CTRL_DATA,
+    TAG_CTRL_HEADER,
+    TAG_DOC_DATA,
+    TAG_DOCUMENT_PROPERTIES,
+    TAG_EQEDIT,
+    TAG_FACE_NAME,
+    TAG_FOOTNOTE_SHAPE,
+    TAG_FORM_OBJECT,
+    TAG_ID_MAPPINGS,
+    TAG_LAYOUT_COMPATIBILITY,
+    TAG_LIST_HEADER,
+    TAG_MEMO_LIST,
+    TAG_MEMO_SHAPE,
+    TAG_NAMES,
+    TAG_NUMBERING,
+    TAG_PAGE_BORDER_FILL,
+    TAG_PAGE_DEF,
+    TAG_PARA_CHAR_SHAPE,
+    TAG_PARA_HEADER,
+    TAG_PARA_LINE_SEG,
+    TAG_PARA_RANGE_TAG,
+    TAG_PARA_SHAPE,
+    TAG_PARA_TEXT,
+    TAG_SHAPE_COMPONENT,
+    TAG_SHAPE_COMPONENT_ARC,
+    TAG_SHAPE_COMPONENT_CONTAINER,
+    TAG_SHAPE_COMPONENT_CURVE,
+    TAG_SHAPE_COMPONENT_ELLIPSE,
+    TAG_SHAPE_COMPONENT_LINE,
+    TAG_SHAPE_COMPONENT_OLE,
+    TAG_SHAPE_COMPONENT_PICTURE,
+    TAG_SHAPE_COMPONENT_POLYGON,
+    TAG_SHAPE_COMPONENT_RECTANGLE,
+    TAG_SHAPE_COMPONENT_TEXTART,
+    TAG_STYLE,
+    TAG_TAB_DEF,
+    TAG_TABLE,
+    TAG_TRACK_CHANGE,
+    TAG_TRACK_CHANGE_AUTHOR,
+)
+from ._hwp_payload_codecs import (  # noqa: F401 - compatibility re-exports
+    _bit_flags,
+    _parse_arc_shape_payload,
+    _parse_border_fill_payload,
+    _parse_border_line_payload,
+    _parse_bullet_payload,
+    _parse_character_shape_payload,
+    _parse_chart_data_payload,
+    _parse_colorref,
+    _parse_connectline_shape_payload,
+    _parse_container_shape_payload,
+    _parse_curve_shape_payload,
+    _parse_ellipse_shape_payload,
+    _parse_face_name_payload,
+    _parse_form_object_payload,
+    _parse_hwp_colorref_or_none,
+    _parse_length_prefixed_utf16,
+    _parse_line_attribute_flags,
+    _parse_line_shape_payload,
+    _parse_list_header_payload,
+    _parse_memo_list_payload,
+    _parse_memo_shape_native_metadata,
+    _parse_memo_shape_payload,
+    _parse_numbering_payload,
+    _parse_paragraph_style_payload,
+    _parse_polygon_shape_payload,
+    _parse_rectangle_shape_payload,
+    _parse_shape_component_common_payload,
+    _parse_shape_fill_payload,
+    _parse_shape_line_info_payload,
+    _parse_style_definition_payload,
+    _parse_tab_def_payload,
+    _parse_textart_payload_text,
+    _parse_track_change_author_payload,
+    _parse_track_change_payload,
+    _payload_u16_values,
+    _payload_u32_values,
+    _shape_common_payload_size,
+    _shape_specific_payload_size,
+)
 from .exceptions import HwpBinaryEditError, InvalidHwpFileError
-
-
-FILE_HEADER_SIGNATURE = b"HWP Document File"
-FILE_HEADER_SIZE = 256
-
-TAG_DOCUMENT_PROPERTIES = 0x010
-TAG_ID_MAPPINGS = 0x011
-TAG_BIN_DATA = 0x012
-TAG_FACE_NAME = 0x013
-TAG_BORDER_FILL = 0x014
-TAG_CHAR_SHAPE = 0x015
-TAG_TAB_DEF = 0x016
-TAG_NUMBERING = 0x017
-TAG_BULLET = 0x018
-TAG_PARA_SHAPE = 0x019
-TAG_STYLE = 0x01A
-TAG_DOC_DATA = 0x01B
-TAG_COMPATIBLE_DOCUMENT = 0x01E
-TAG_LAYOUT_COMPATIBILITY = 0x01F
-TAG_PARA_HEADER = 0x042
-TAG_PARA_TEXT = 0x043
-TAG_PARA_CHAR_SHAPE = 0x044
-TAG_PARA_LINE_SEG = 0x045
-TAG_PARA_RANGE_TAG = 0x046
-TAG_CTRL_HEADER = 0x047
-TAG_LIST_HEADER = 0x048
-TAG_PAGE_DEF = 0x049
-TAG_FOOTNOTE_SHAPE = 0x04A
-TAG_PAGE_BORDER_FILL = 0x04B
-TAG_SHAPE_COMPONENT = 0x04C
-TAG_TABLE = 0x04D
-TAG_SHAPE_COMPONENT_LINE = 0x04E
-TAG_SHAPE_COMPONENT_RECTANGLE = 0x04F
-TAG_SHAPE_COMPONENT_ELLIPSE = 0x050
-TAG_SHAPE_COMPONENT_ARC = 0x051
-TAG_SHAPE_COMPONENT_POLYGON = 0x052
-TAG_SHAPE_COMPONENT_CURVE = 0x053
-TAG_SHAPE_COMPONENT_OLE = 0x054
-TAG_SHAPE_COMPONENT_PICTURE = 0x055
-TAG_SHAPE_COMPONENT_CONTAINER = 0x056
-TAG_CTRL_DATA = 0x057
-TAG_EQEDIT = 0x058
-TAG_SHAPE_COMPONENT_TEXTART = 0x05A
-TAG_FORM_OBJECT = 0x05B
-TAG_MEMO_SHAPE = 0x05C
-TAG_MEMO_LIST = 0x05D
-TAG_CHART_DATA = 0x05E
-TAG_TRACK_CHANGE = 0x05F
-TAG_TRACK_CHANGE_AUTHOR = 0x060
-
-FLAG_COMPRESSED = 1 << 0
-FLAG_PASSWORD_PROTECTED = 1 << 1
-FLAG_DISTRIBUTABLE = 1 << 2
-
-
-TAG_NAMES = {
-    TAG_DOCUMENT_PROPERTIES: "document_properties",
-    TAG_ID_MAPPINGS: "id_mappings",
-    TAG_BIN_DATA: "bin_data",
-    TAG_FACE_NAME: "face_name",
-    TAG_BORDER_FILL: "border_fill",
-    TAG_CHAR_SHAPE: "char_shape",
-    TAG_TAB_DEF: "tab_def",
-    TAG_NUMBERING: "numbering",
-    TAG_BULLET: "bullet",
-    TAG_PARA_SHAPE: "para_shape",
-    TAG_STYLE: "style",
-    TAG_DOC_DATA: "doc_data",
-    TAG_COMPATIBLE_DOCUMENT: "compatible_document",
-    TAG_LAYOUT_COMPATIBILITY: "layout_compatibility",
-    TAG_PARA_HEADER: "para_header",
-    TAG_PARA_TEXT: "para_text",
-    TAG_PARA_CHAR_SHAPE: "para_char_shape",
-    TAG_PARA_LINE_SEG: "para_line_seg",
-    TAG_PARA_RANGE_TAG: "para_range_tag",
-    TAG_CTRL_HEADER: "ctrl_header",
-    TAG_LIST_HEADER: "list_header",
-    TAG_PAGE_DEF: "page_def",
-    TAG_FOOTNOTE_SHAPE: "footnote_shape",
-    TAG_PAGE_BORDER_FILL: "page_border_fill",
-    TAG_SHAPE_COMPONENT: "shape_component",
-    TAG_TABLE: "table",
-    TAG_SHAPE_COMPONENT_LINE: "shape_line",
-    TAG_SHAPE_COMPONENT_RECTANGLE: "shape_rectangle",
-    TAG_SHAPE_COMPONENT_ELLIPSE: "shape_ellipse",
-    TAG_SHAPE_COMPONENT_ARC: "shape_arc",
-    TAG_SHAPE_COMPONENT_POLYGON: "shape_polygon",
-    TAG_SHAPE_COMPONENT_CURVE: "shape_curve",
-    TAG_SHAPE_COMPONENT_OLE: "shape_ole",
-    TAG_SHAPE_COMPONENT_PICTURE: "shape_picture",
-    TAG_SHAPE_COMPONENT_CONTAINER: "shape_container",
-    TAG_CTRL_DATA: "ctrl_data",
-    TAG_EQEDIT: "equation",
-    TAG_SHAPE_COMPONENT_TEXTART: "shape_textart",
-    TAG_FORM_OBJECT: "form_object",
-    TAG_MEMO_SHAPE: "memo_shape",
-    TAG_MEMO_LIST: "memo_list",
-    TAG_CHART_DATA: "chart_data",
-    TAG_TRACK_CHANGE: "track_change",
-    TAG_TRACK_CHANGE_AUTHOR: "track_change_author",
-}
-
-
-DEFAULT_HWP_HYPERLINK_URL = "http://www.chungsa.go.kr/chungsa/cms/1/3/4.html"
-DEFAULT_HWP_HYPERLINK_TEXT = "http://www.chungsa.go.kr/chungsa/cms/1/3/4.html"
-DEFAULT_HWP_HYPERLINK_METADATA_FIELDS = ("1", "0", "0")
-
-DEFAULT_HWP_TABLE_ROWS = 1
-DEFAULT_HWP_TABLE_COLS = 1
-DEFAULT_HWP_TABLE_CELL_WIDTH = 47341
-DEFAULT_HWP_TABLE_CELL_HEIGHT = 282
-DEFAULT_HWP_TABLE_BORDER_FILL_ID = 1
-DEFAULT_HWP_TABLE_CELL_MARGIN = (510, 510, 141, 141)
-DEFAULT_HWP_EQUATION_SCRIPT = "x+y"
-DEFAULT_HWP_EQUATION_FONT = "HYhwpEQ"
-DEFAULT_HWP_SHAPE_TEXT = ""
-DEFAULT_HWP_SHAPE_WIDTH = 12000
-DEFAULT_HWP_SHAPE_HEIGHT = 3200
-
-_TABLE_TOP_PARA_HEADER_TAIL = bytes.fromhex("0008000019000000010000000100000000800000")
-_TABLE_TOP_PARA_TEXT = bytes.fromhex("0b00206c627400000000000000000b000d00")
-_TABLE_TOP_CHAR_SHAPE = bytes.fromhex("0000000004000000")
-_TABLE_TOP_LINE_SEG = bytes.fromhex("00000000b87600008c0400008c040000dd030000f401000038ffffff04bd000000000600")
-_TABLE_CTRL_HEADER = bytes.fromhex(
-    "206c627411232a08000000000000000059bd000072030000020000008d008d008d008d002b945768000000000000"
-)
-_TABLE_CELL_PARA_HEADER_TAIL = bytes.fromhex("000000000b000000010000000100000000800000")
-_TABLE_CELL_CHAR_SHAPE = bytes.fromhex("000000002f000000")
-_TABLE_CELL_LINE_SEG = bytes.fromhex("00000000000000005802000058020000fe010000e0ffffff000000005cb9000000000600")
-
-_HYPERLINK_PARA_HEADER_TAIL = bytes.fromhex("180000000000000003000000010000000080")
-_HYPERLINK_CHAR_SHAPE = bytes.fromhex("000000000600000013000000070000004200000006000000")
-_HYPERLINK_LINE_SEG = bytes.fromhex("0000000027e90000b0040000b0040000fc030000d00200000000000018a6000000000600")
-_HYPERLINK_TEXT_START_MARKER = bytes.fromhex("03006b6c682500000000000000000300")
-_HYPERLINK_TEXT_END_MARKER = bytes.fromhex("04006b6c680000000000000000000400")
-_HYPERLINK_CTRL_PREFIX = bytes.fromhex("6b6c68250008000000")
-_HYPERLINK_CTRL_SUFFIX = bytes.fromhex("93caed41")
-
-_PICTURE_TOP_PARA_HEADER_TAIL = bytes.fromhex("000800000e00000001000000010000000080")
-_PICTURE_TOP_PARA_TEXT = bytes.fromhex("0b00206f736700000000000000000b000d00")
-_PICTURE_TOP_CHAR_SHAPE = bytes.fromhex("0000000006000000")
-_PICTURE_TOP_LINE_SEG = bytes.fromhex("00000000381800009c8100009c8100002b6e00000c030000000000002cb1000000000600")
-_PICTURE_CTRL_HEADER = bytes.fromhex(
-    "206f736711232a040000000000000000b8b000009c8100000000000000000000000000009c52be4200000000"
-)
-_PICTURE_SHAPE_COMPONENT = bytes.fromhex(
-    "6369702463697024000000000000000000000100b8b000009c810000b8b000009c8100000000082400005c580000ce4000000100000000000000"
-    "f03f000000000000000000000000000000000000000000000000000000000000f03f0000000000000000000000000000f03f00000000000000000000"
-    "000000000000000000000000000000000000f03f0000000000000000000000000000f03f000000000000000000000000000000000000000000000000"
-    "0000000000f03f0000000000000000"
-)
-_PICTURE_SHAPE_PICTURE = bytes.fromhex(
-    "0000000000000000010000c00000000000000000b8b0000000000000b8b000009c810000000000009c81000000000000000000007cb0000024810000"
-    "00000000000000000000000100"
-)
-
-_DEFAULT_EQUATION_CTRL_HEADER = bytes.fromhex(
-    "6465716511222a0c000000000000000045120000ef0800001300000000000000000000006d58f07000000000030031bcb9c2b0c6"
-)
-_DEFAULT_SHAPE_CTRL_HEADER = bytes.fromhex(
-    "206f736700206a048d2a0000fb1400006e2300002e0c00004902000000000000000000009158d143000000000000"
-)
-_HANCOM_CONNECTLINE_COMPONENT_SIGNATURE = b"loc$loc$"
-_DEFAULT_RECT_CTRL_HEADER = bytes.fromhex(
-    "206f736711222a000000000000000000d80e0000d007000000000000000000000000000076a7417f000000000700acc001ac15d685c7c8b2e4b22e00"
-)
-_DEFAULT_ELLIPSE_CTRL_HEADER = bytes.fromhex(
-    "206f736711222a000000000000000000d80e0000d00700000000000000000000000000008da7417f000000000600c0d0d0c685c7c8b2e4b22e00"
-)
-_DEFAULT_ARC_CTRL_HEADER = bytes.fromhex(
-    "206f736711222a000000000000000000d80e0000d0070000000000000000000000000000a1a7417f00000000050038d685c7c8b2e4b22e00"
-)
-_DEFAULT_POLYGON_CTRL_HEADER = bytes.fromhex(
-    "206f736711222a000000000000000000d80e0000d0070000000000000000000000000000b6a7417f000000000700e4b201ac15d685c7c8b2e4b22e00"
-)
-_DEFAULT_TEXTART_CTRL_HEADER = bytes.fromhex(
-    "206f736711220a040000000000000000e457000088130000000000003800380000000000cc76387f00000000070000aef5b9dcc285c7c8b2e4b22e00"
-)
-_DEFAULT_SHAPE_COMPONENT = bytes.fromhex(
-    "636572246365722400000000feffffff000001006c2300002c0c00006e2300002d0c0000000000010000b7110000170600000100000000000000"
-    "f03f000000000000000000000000000000000000000000000000000000000000f03f00000000000000c0a435ff44e700f03f00000000000000000000"
-    "000000000000000000000000001db2e606a102f03f0000000000000040000000000000f03f000000000000000000000000000000000000000000000000"
-    "0000000000f03f00000000000000000000000038000000410000c0000000000000000000000000000000000000000000000000009258d1030000"
-)
-_DEFAULT_RECT_SHAPE_COMPONENT = bytes.fromhex(
-    "63657224636572240000000000000000000001000000000000000000000000000000000000000800000000000000000000000100000000000000f03f000000000000000000000000000000000000000000000000000000000000f03f0000000000000000000000000000f03f000000000000000000000000000000000000000000000000000000000000f03f0000000000000000000000000000f03f000000000000000000000000000000000000000000000000000000000000f03f000000000000000030201000780000000000000000000000000000000000000000b2b2b200000000000000000077a7413f0000"
-)
-_DEFAULT_ELLIPSE_SHAPE_COMPONENT = bytes.fromhex(
-    "6c6c65246c6c65240000000000000000000001000000000000000000000000000000000000000800000000000000000000000100000000000000f03f000000000000000000000000000000000000000000000000000000000000f03f0000000000000000000000000000f03f000000000000000000000000000000000000000000000000000000000000f03f0000000000000000000000000000f03f000000000000000000000000000000000000000000000000000000000000f03f000000000000000030201000780000000000000000000000000000000000000000b2b2b20000000000000000004f35443f0000"
-)
-_DEFAULT_ARC_SHAPE_COMPONENT = bytes.fromhex(
-    "63726124637261240000000000000000000001000000000000000000000000000000000000000800000000000000000000000100000000000000f03f000000000000000000000000000000000000000000000000000000000000f03f0000000000000000000000000000f03f000000000000000000000000000000000000000000000000000000000000f03f0000000000000000000000000000f03f000000000000000000000000000000000000000000000000000000000000f03f000000000000000030201000780000000000000000000000000000000000000000b2b2b20000000000000000006735443f0000"
-)
-_DEFAULT_POLYGON_SHAPE_COMPONENT = bytes.fromhex(
-    "6c6f70246c6f70240000000000000000000001000000000000000000000000000000000000000800000000000000000000000100000000000000f03f000000000000000000000000000000000000000000000000000000000000f03f0000000000000000000000000000f03f000000000000000000000000000000000000000000000000000000000000f03f0000000000000000000000000000f03f000000000000000000000000000000000000000000000000000000000000f03f000000000000000030201000780000000000000000000000000000000000000000b2b2b20000000000000000007c35443f0000"
-)
-_DEFAULT_TEXTART_SHAPE_COMPONENT = bytes.fromhex(
-    "74617424746174240000000000000000000001005d3700005d3700005d3700005d37000000000b00000000000000000000000100000000000000f03f000000000000000000000000000000000000000000000000000000000000f03f0000000000000000000000000000f03f000000000000000000000000000000000000000000000000000000000000f03f0000000000000000000000000000f03f000000000000000000000000000000000000000000000000000000000000f03f00000000000000004455660021000000000000000201000000ddeeff000000000001000000000000000000000000b2b2b2000000000000000000cd76383f0000"
-)
-_TEXTART_COMPONENT_REFERENCE_EXTENT = int.from_bytes(_DEFAULT_TEXTART_SHAPE_COMPONENT[20:24], "little", signed=False)
-_DEFAULT_SHAPE_LIST_HEADER = bytes.fromhex("010000000000000000000000000000006e230000000000000000000000000000ff1b0201000000004001000000")
-_DEFAULT_SHAPE_TEXT_PARA_CONTROL_MASK = int.from_bytes(bytes.fromhex("00000080"), "little", signed=False)
-_DEFAULT_SHAPE_TEXT_PARA_SHAPE_ID = 0x17
-_DEFAULT_SHAPE_TEXT_STYLE_ID = 0x16
-_DEFAULT_SHAPE_TEXT_SPLIT_FLAGS = 0x00
-_DEFAULT_SHAPE_TEXT_PARA_TRAILING = bytes.fromhex("070000000100000000800000")
-_DEFAULT_SHAPE_TEXT_CHAR_SHAPE = bytes.fromhex(
-    "000000001a000000010000001b000000020000001c000000030000001b000000040000001d000000050000001e000000"
-)
-_DEFAULT_SHAPE_TEXT_LINE_SEG = bytes.fromhex("000000006400000098080000980800004e07000028050000000000006c23000000000600")
-_DEFAULT_SHAPE_RECTANGLE_PAYLOAD = bytes(33)
-_DEFAULT_SHAPE_LINE_PAYLOAD = bytes.fromhex("0000000000000000640000006400000000000000")
-_DEFAULT_ELLIPSE_PAYLOAD = bytes(60)
-_DEFAULT_ARC_PAYLOAD = bytes(25)
-_DEFAULT_POLYGON_PAYLOAD = bytes.fromhex("0000000000000000")
-_EQUATION_VERSION_MARKER = "Equation Version 60"
-_DEFAULT_TEXTART_FONT_NAME = "Malgun Gothic"
-_DEFAULT_TEXTART_FONT_STYLE = "Bold"
-_DEFAULT_SHAPE_LINE_WIDTH = 33
-_DEFAULT_COMPLEX_SHAPE_COMPONENT_LINE_WIDTH = 120
-_DEFAULT_OLE_LINE_WIDTH = 0
-_HWP_FILLED_SHAPE_COMMON_PAYLOAD_SIZE = 32
-_SHAPE_NATIVE_METADATA_PREFIX = "JAKAL_SHAPE_META"
-_CONTROL_NATIVE_METADATA_PREFIX = "JAKAL_CTRL_META"
-_MEMO_SHAPE_NATIVE_METADATA_PREFIX = "JAKAL_MEMO_SHAPE_META"
-_HWP_COMPLEX_SHAPE_TEMPLATES = {
-    "rect": {
-        "ctrl": _DEFAULT_RECT_CTRL_HEADER,
-        "component": _DEFAULT_RECT_SHAPE_COMPONENT,
-    },
-    "ellipse": {
-        "ctrl": _DEFAULT_ELLIPSE_CTRL_HEADER,
-        "component": _DEFAULT_ELLIPSE_SHAPE_COMPONENT,
-    },
-    "arc": {
-        "ctrl": _DEFAULT_ARC_CTRL_HEADER,
-        "component": _DEFAULT_ARC_SHAPE_COMPONENT,
-    },
-    "polygon": {
-        "ctrl": _DEFAULT_POLYGON_CTRL_HEADER,
-        "component": _DEFAULT_POLYGON_SHAPE_COMPONENT,
-    },
-    "textart": {
-        "ctrl": _DEFAULT_TEXTART_CTRL_HEADER,
-        "component": _DEFAULT_TEXTART_SHAPE_COMPONENT,
-    },
-}
-
-_HWP_LINE_STYLE_CODES = {
-    "SOLID": 0,
-    "NONE": 0,
-}
-_HWP_LINE_STYLE_NAMES = {
-    0: "SOLID",
-}
-_HWP_LINE_END_CAP_CODES = {
-    "ROUND": 0,
-    "FLAT": 1,
-}
-_HWP_LINE_END_CAP_NAMES = {value: key for key, value in _HWP_LINE_END_CAP_CODES.items()}
-_HWP_LINE_ARROW_CODES = {
-    "NORMAL": 0,
-}
-_HWP_LINE_ARROW_NAMES = {value: key for key, value in _HWP_LINE_ARROW_CODES.items()}
-_HWP_LINE_ARROW_SIZE_CODES = {
-    "SMALL_SMALL": 0,
-    "SMALL_MEDIUM": 1,
-    "SMALL_LARGE": 2,
-    "MEDIUM_SMALL": 3,
-    "MEDIUM_MEDIUM": 4,
-    "MEDIUM_LARGE": 5,
-    "LARGE_SMALL": 6,
-    "LARGE_MEDIUM": 7,
-    "LARGE_LARGE": 8,
-}
-_HWP_LINE_ARROW_SIZE_NAMES = {value: key for key, value in _HWP_LINE_ARROW_SIZE_CODES.items()}
-_HWP_LINE_OUTLINE_STYLE_CODES = {
-    "NORMAL": 0,
-    "OUTER": 1,
-    "INNER": 2,
-}
-_HWP_LINE_OUTLINE_STYLE_NAMES = {value: key for key, value in _HWP_LINE_OUTLINE_STYLE_CODES.items()}
-_HWP_TAB_TYPE_NAMES = {
-    0: "LEFT",
-    1: "RIGHT",
-    2: "CENTER",
-    3: "DECIMAL",
-}
-_HWP_TAB_LEADER_NAMES = {
-    0: "NONE",
-    1: "SOLID",
-    2: "DOT",
-    3: "DASH",
-    4: "LONG_DASH",
-}
-_HWP_DRAW_ASPECT_CODES = {
-    "CONTENT": 1,
-    "THUMBNAIL": 2,
-    "ICON": 4,
-    "DOCPRINT": 8,
-}
-_HWP_DRAW_ASPECT_NAMES = {value: key for key, value in _HWP_DRAW_ASPECT_CODES.items()}
-_HWP_OLE_OBJECT_TYPE_CODES = {
-    "UNKNOWN": 0,
-    "EMBEDDED": 1,
-    "LINK": 2,
-    "STATIC": 3,
-    "EQUATION": 4,
-}
-_HWP_OLE_OBJECT_TYPE_NAMES = {value: key for key, value in _HWP_OLE_OBJECT_TYPE_CODES.items()}
-_HWP_PICTURE_EFFECT_NAMES = {
-    0: "REAL_PIC",
-    1: "GRAY_SCALE",
-}
-_HWP_PICTURE_EFFECT_CODES = {value: key for key, value in _HWP_PICTURE_EFFECT_NAMES.items()}
-_HWP_CHAR_FONT_ORDER = ("hangul", "latin", "hanja", "japanese", "other", "symbol", "user")
-
-_CONTROL_MARKER_CODES = {
-    "head": 0x10,
-    "foot": 0x10,
-    "atno": 0x12,
-    "nwno": 0x15,
-    "pgnp": 0x15,
-    "gso ": 0x0B,
-    "eqed": 0x0B,
-    "fn  ": 0x11,
-    "en  ": 0x11,
-    "bokm": 0x16,
-}
-_AUTO_NUMBER_TYPE_CODES = {
-    "PAGE": 0x0C,
-}
-_AUTO_NUMBER_TYPE_VALUES = {value: key for key, value in _AUTO_NUMBER_TYPE_CODES.items()}
-
-_HEADER_CTRL_HEADER = bytes.fromhex("646165680000000001000000")
-_HEADER_LIST_HEADER = bytes.fromhex("01000000000000003ebc00009b100000000000000000000000000000000000000000")
-_HEADER_PARA_HEADER = bytes.fromhex("01000080000000001b000a00010000000100000000800000")
-_HEADER_PARA_CHAR_SHAPE = bytes.fromhex("0000000014000000")
-_HEADER_PARA_LINE_SEG = bytes.fromhex("00000000000000006400000064000000550000003c000000000000003cbc000000000600")
-
-_FOOTER_CTRL_HEADER = bytes.fromhex("746f6f660000000002000000")
-_FOOTER_LIST_HEADER = bytes.fromhex("01000000400000003ebc00009c100000000000000000000000000000000000000000")
-_FOOTER_PARA_HEADER = bytes.fromhex("01000080000000002f00000001000000010000000080")
-_FOOTER_PARA_CHAR_SHAPE = bytes.fromhex("000000006a000000")
-_FOOTER_PARA_LINE_SEG = bytes.fromhex("00000000000000008403000084030000fd0200001c020000000000003cbc000000000600")
-
-_BOOKMARK_CTRL_DATA_PREFIX = bytes.fromhex("1b020100000000400100")
-
-_FOOTNOTE_CTRL_HEADER = bytes.fromhex("20206e6601000000000029000000000000000000")
-_ENDNOTE_CTRL_HEADER = bytes.fromhex("20206e6501000000000029000000000000000000")
-_NOTE_LIST_HEADER = bytes.fromhex("01000000000000000000000000000000")
-_NOTE_PARA_HEADER = bytes.fromhex("000000800000000000000000010000000000010000000000")
-_NOTE_CHAR_SHAPE = bytes.fromhex("0000000000000000")
-_NOTE_LINE_SEG = bytes.fromhex("0000000000000000e8030000e803000052030000580200000000000018a6000000000600")
-
-_BLANK_DROP_CONTROL_IDS = {
-    "atno",
-    "bokm",
-    "en  ",
-    "eqed",
-    "fn  ",
-    "foot",
-    "gso ",
-    "head",
-    "nwno",
-    "tbl ",
-}
 
 
 def _build_control_id_payload(control_id: str) -> bytes:
@@ -447,641 +287,46 @@ def _build_equation_payload(script: str, *, font: str = DEFAULT_HWP_EQUATION_FON
     return b"\x00\x00\x00\x00" + body.encode("utf-16-le")
 
 
-def _build_graphic_control_header_payload(
-    template: bytes,
-    control_id: str,
-    *,
-    width: int,
-    height: int,
-    description: str | None = None,
-) -> bytes:
-    payload = bytearray(template)
-    payload[0:4] = _build_control_id_payload(control_id)
-    if len(payload) >= 24:
-        payload[16:20] = int(width).to_bytes(4, "little", signed=False)
-        payload[20:24] = int(height).to_bytes(4, "little", signed=False)
-    encoded_description = str(description or "").encode("utf-16-le")
-    base = bytes(payload[:44]).ljust(44, b"\x00")
-    return base + (len(encoded_description) // 2).to_bytes(2, "little", signed=False) + encoded_description
-
-
-def _build_minimal_shape_component_payload(width: int, height: int) -> bytes:
-    payload = bytearray(28)
-    payload[20:24] = int(width).to_bytes(4, "little", signed=False)
-    payload[24:28] = int(height).to_bytes(4, "little", signed=False)
-    return bytes(payload)
-
-
-def _shape_control_header_template(kind: str) -> bytes:
-    return _HWP_COMPLEX_SHAPE_TEMPLATES.get(kind, {}).get("ctrl", _DEFAULT_SHAPE_CTRL_HEADER)
-
-
-def _build_shape_component_payload(
-    kind: str,
-    width: int,
-    height: int,
-    *,
-    fill_color: str = "#FFFFFF",
-    line_color: str = "#000000",
-    line_width: int = _DEFAULT_SHAPE_LINE_WIDTH,
-) -> bytes:
-    template = _HWP_COMPLEX_SHAPE_TEMPLATES.get(kind, {}).get("component")
-    if template is not None:
-        payload = bytearray(template)
-        uses_template_extents = kind in {"ellipse", "arc", "polygon"}
-        if kind == "textart":
-            if len(payload) >= 36:
-                payload[28:32] = int(width).to_bytes(4, "little", signed=False)
-                payload[32:36] = int(height).to_bytes(4, "little", signed=False)
-            if len(payload) >= 40:
-                payload[36:40] = (0x00080000).to_bytes(4, "little", signed=False)
-            if len(payload) >= 48:
-                payload[40:44] = (int(width) << 15).to_bytes(4, "little", signed=False)
-                payload[44:48] = (int(height) << 15).to_bytes(4, "little", signed=False)
-            if len(payload) >= 108 and _TEXTART_COMPONENT_REFERENCE_EXTENT:
-                payload[100:108] = struct.pack("<d", float(width) / float(_TEXTART_COMPONENT_REFERENCE_EXTENT))
-            if len(payload) >= 140 and _TEXTART_COMPONENT_REFERENCE_EXTENT:
-                payload[132:140] = struct.pack("<d", float(height) / float(_TEXTART_COMPONENT_REFERENCE_EXTENT))
-        elif not uses_template_extents and len(payload) >= 24:
-            payload[20:24] = int(width).to_bytes(4, "little", signed=False)
-        if kind != "textart" and not uses_template_extents and len(payload) >= 28:
-            payload[24:28] = int(height).to_bytes(4, "little", signed=False)
-        if kind != "textart" and not uses_template_extents and len(payload) >= 32:
-            payload[28:32] = int(width).to_bytes(4, "little", signed=False)
-        if kind != "textart" and not uses_template_extents and len(payload) >= 36:
-            payload[32:36] = int(height).to_bytes(4, "little", signed=False)
-        if len(payload) >= 200:
-            payload[196:200] = _build_colorref(line_color)
-        if len(payload) >= 202:
-            resolved_line_width = (
-                _DEFAULT_COMPLEX_SHAPE_COMPONENT_LINE_WIDTH if kind in {"ellipse", "arc", "polygon"} else line_width
-            )
-            payload[200:202] = max(0, min(int(resolved_line_width), 0xFFFF)).to_bytes(2, "little", signed=False)
-        if kind == "textart" and len(payload) >= 217:
-            payload[213:217] = _build_colorref(fill_color)
-        return bytes(payload)
-    payload = bytearray(_DEFAULT_SHAPE_COMPONENT)
-    payload[20:24] = int(width).to_bytes(4, "little", signed=False)
-    payload[24:28] = int(height).to_bytes(4, "little", signed=False)
-    payload[28:32] = int(width).to_bytes(4, "little", signed=False)
-    payload[32:36] = int(height).to_bytes(4, "little", signed=False)
-    return bytes(payload)
-
-
-def _build_prefixed_metadata_payload(prefix: str, **fields: object) -> bytes:
-    serialized_fields: list[str] = []
-    for name, value in fields.items():
-        if value is None:
-            continue
-        if isinstance(value, bool):
-            rendered = "1" if value else "0"
-        else:
-            rendered = str(value)
-        serialized_fields.append(f"{name}={rendered}")
-    serialized = ";".join(serialized_fields)
-    text = f"{prefix};{serialized}" if serialized else prefix
-    return text.encode("utf-16-le")
-
-
-def _build_shape_native_metadata_payload(**fields: object) -> bytes:
-    return _build_prefixed_metadata_payload(_SHAPE_NATIVE_METADATA_PREFIX, **fields)
-
-
-def _build_control_native_metadata_payload(**fields: object) -> bytes:
-    return _build_prefixed_metadata_payload(_CONTROL_NATIVE_METADATA_PREFIX, **fields)
-
-
-def _build_memo_shape_native_metadata_payload(**fields: object) -> bytes:
-    return _build_prefixed_metadata_payload(_MEMO_SHAPE_NATIVE_METADATA_PREFIX, **fields)
-
-
-def _graphic_control_out_margin_values(payload: bytes) -> tuple[int, int, int, int]:
-    if len(payload) < 36:
-        return (0, 0, 0, 0)
-    return (
-        int.from_bytes(payload[28:30], "little", signed=False),
-        int.from_bytes(payload[30:32], "little", signed=False),
-        int.from_bytes(payload[32:34], "little", signed=False),
-        int.from_bytes(payload[34:36], "little", signed=False),
-    )
-
-
-def _parse_graphic_control_out_margins(payload: bytes) -> dict[str, int]:
-    left, right, top, bottom = _graphic_control_out_margin_values(payload)
-    if not any((left, right, top, bottom)):
-        return {}
-    return {
-        "left": left,
-        "right": right,
-        "top": top,
-        "bottom": bottom,
-    }
-
-
-def _parse_graphic_control_layout(payload: bytes) -> dict[str, str]:
-    if len(payload) < 16:
-        return {}
-    flow_bits = payload[7] & 0x03
-    result = {
-        "textWrap": "TOP_AND_BOTTOM" if payload[6] & 0x20 else "SQUARE",
-        "textFlow": "LEFT_ONLY" if flow_bits == 0x01 else "RIGHT_ONLY" if flow_bits == 0x02 else "BOTH_SIDES",
-        "treatAsChar": "1" if payload[4] & 0x01 else "0",
-        "vertRelTo": "PARA" if payload[4] & 0x10 else "PAPER",
-        "horzRelTo": "COLUMN" if payload[5] & 0x02 else "PAPER",
-    }
-    if payload[4] & 0x20:
-        result["vertAlign"] = "CENTER"
-    if payload[5] & 0x08:
-        result["horzAlign"] = "RIGHT"
-    vert_offset = int.from_bytes(payload[8:12], "little", signed=True)
-    horz_offset = int.from_bytes(payload[12:16], "little", signed=True)
-    if vert_offset:
-        result["vertOffset"] = str(vert_offset)
-    if horz_offset:
-        result["horzOffset"] = str(horz_offset)
-    return result
-
-
-def _set_graphic_control_out_margins_payload(
-    payload: bytes,
-    *,
-    left: int | str | None = None,
-    right: int | str | None = None,
-    top: int | str | None = None,
-    bottom: int | str | None = None,
-) -> bytes:
-    updated = bytearray(payload)
-    if len(updated) < 36:
-        updated.extend(b"\x00" * (36 - len(updated)))
-    current_left, current_right, current_top, current_bottom = _graphic_control_out_margin_values(bytes(updated))
-    resolved = (
-        current_left if left is None else int(left),
-        current_right if right is None else int(right),
-        current_top if top is None else int(top),
-        current_bottom if bottom is None else int(bottom),
-    )
-    for offset, value in zip((28, 30, 32, 34), resolved, strict=True):
-        updated[offset : offset + 2] = max(0, min(int(value), 0xFFFF)).to_bytes(2, "little", signed=False)
-    return bytes(updated)
-
-
-def _set_graphic_control_layout_payload(
-    payload: bytes,
-    *,
-    text_wrap: str | None = None,
-    text_flow: str | None = None,
-    treat_as_char: bool | None = None,
-    vert_rel_to: str | None = None,
-    horz_rel_to: str | None = None,
-    vert_align: str | None = None,
-    horz_align: str | None = None,
-    vert_offset: int | str | None = None,
-    horz_offset: int | str | None = None,
-) -> bytes:
-    updated = bytearray(payload)
-    if len(updated) < 16:
-        updated.extend(b"\x00" * (16 - len(updated)))
-    if text_wrap == "TOP_AND_BOTTOM":
-        updated[6] |= 0x20
-    elif text_wrap == "SQUARE":
-        updated[6] &= ~0x20
-    if text_flow == "BOTH_SIDES":
-        updated[7] &= ~0x03
-    elif text_flow == "LEFT_ONLY":
-        updated[7] = (updated[7] & ~0x03) | 0x01
-    elif text_flow == "RIGHT_ONLY":
-        updated[7] = (updated[7] & ~0x03) | 0x02
-    if treat_as_char is True:
-        updated[4] |= 0x01
-    elif treat_as_char is False:
-        updated[4] &= ~0x01
-    if vert_rel_to == "PARA":
-        updated[4] |= 0x10
-    elif vert_rel_to == "PAPER":
-        updated[4] &= ~0x10
-    if horz_rel_to == "COLUMN":
-        updated[5] |= 0x02
-    elif horz_rel_to == "PAPER":
-        updated[5] &= ~0x02
-    if vert_align == "CENTER":
-        updated[4] |= 0x20
-    elif vert_align == "TOP":
-        updated[4] &= ~0x20
-    if horz_align == "RIGHT":
-        updated[5] |= 0x08
-    elif horz_align == "LEFT":
-        updated[5] &= ~0x08
-    if vert_offset is not None:
-        updated[8:12] = int(vert_offset).to_bytes(4, "little", signed=True)
-    if horz_offset is not None:
-        updated[12:16] = int(horz_offset).to_bytes(4, "little", signed=True)
-    return bytes(updated)
-
-
-def _shape_component_rotation_values(payload: bytes) -> tuple[int, int, int]:
-    if len(payload) < 50:
-        return (0, 0, 0)
-    return (
-        int.from_bytes(payload[40:42], "little", signed=False),
-        int.from_bytes(payload[42:46], "little", signed=True),
-        int.from_bytes(payload[46:50], "little", signed=True),
-    )
-
-
-def _shape_component_default_rotation_center(payload: bytes) -> tuple[int, int]:
-    if len(payload) < 36:
-        return (0, 0)
-    return (
-        int.from_bytes(payload[28:32], "little", signed=False) // 2,
-        int.from_bytes(payload[32:36], "little", signed=False) // 2,
-    )
-
-
-def _parse_shape_component_rotation_payload(payload: bytes, *, include_center: bool = True) -> dict[str, str]:
-    angle, center_x, center_y = _shape_component_rotation_values(payload)
-    default_center_x, default_center_y = _shape_component_default_rotation_center(payload)
-    has_nondefault_center = center_x != default_center_x or center_y != default_center_y
-    if angle == 0 and not has_nondefault_center:
-        return {}
-    result: dict[str, str] = {"angle": str(angle)}
-    if include_center and has_nondefault_center:
-        result["centerX"] = str(center_x)
-        result["centerY"] = str(center_y)
-    return result
-
-
-def _set_shape_component_rotation_payload(
-    payload: bytes,
-    *,
-    angle: int | str | None = None,
-    center_x: int | str | None = None,
-    center_y: int | str | None = None,
-) -> bytes:
-    updated = bytearray(payload)
-    if len(updated) < 50:
-        updated.extend(b"\x00" * (50 - len(updated)))
-    current_angle, current_center_x, current_center_y = _shape_component_rotation_values(bytes(updated))
-    resolved_angle = current_angle if angle is None else int(angle)
-    resolved_center_x = current_center_x if center_x is None else int(center_x)
-    resolved_center_y = current_center_y if center_y is None else int(center_y)
-    updated[40:42] = max(0, min(resolved_angle, 0xFFFF)).to_bytes(2, "little", signed=False)
-    updated[42:46] = int(resolved_center_x).to_bytes(4, "little", signed=True)
-    updated[46:50] = int(resolved_center_y).to_bytes(4, "little", signed=True)
-    return bytes(updated)
-
-
-def _picture_crop_values(payload: bytes) -> tuple[int, int, int, int]:
-    if len(payload) < 60:
-        return (0, 0, 0, 0)
-    return (
-        int.from_bytes(payload[44:48], "little", signed=False),
-        int.from_bytes(payload[48:52], "little", signed=False),
-        int.from_bytes(payload[52:56], "little", signed=False),
-        int.from_bytes(payload[56:60], "little", signed=False),
-    )
-
-
-def _picture_default_clip_size(payload: bytes) -> tuple[int, int]:
-    if len(payload) < 36:
-        return (0, 0)
-    return (
-        int.from_bytes(payload[28:32], "little", signed=False),
-        int.from_bytes(payload[32:36], "little", signed=False),
-    )
-
-
-def _parse_picture_crop_payload(payload: bytes) -> dict[str, int]:
-    left, top, right, bottom = _picture_crop_values(payload)
-    default_right, default_bottom = _picture_default_clip_size(payload)
-    if left == 0 and top == 0:
-        if right == 0 and bottom == 0:
-            return {}
-        if default_right and default_bottom and right == default_right and bottom == default_bottom:
-            return {}
-    return {
-        "left": left,
-        "right": right,
-        "top": top,
-        "bottom": bottom,
-    }
-
-
-def _set_picture_crop_payload(
-    payload: bytes,
-    *,
-    left: int | str | None = None,
-    right: int | str | None = None,
-    top: int | str | None = None,
-    bottom: int | str | None = None,
-) -> bytes:
-    updated = bytearray(payload)
-    if len(updated) < 60:
-        updated.extend(b"\x00" * (60 - len(updated)))
-    current_left, current_top, current_right, current_bottom = _picture_crop_values(bytes(updated))
-    resolved = (
-        current_left if left is None else int(left),
-        current_top if top is None else int(top),
-        current_right if right is None else int(right),
-        current_bottom if bottom is None else int(bottom),
-    )
-    for offset, value in zip((44, 48, 52, 56), resolved, strict=True):
-        updated[offset : offset + 4] = max(0, int(value)).to_bytes(4, "little", signed=False)
-    return bytes(updated)
-
-
-def _picture_image_adjustment_values(payload: bytes) -> tuple[int, int, int, int]:
-    contrast = payload[68] if len(payload) >= 69 else 0
-    bright = payload[69] if len(payload) >= 70 else 0
-    effect_code = payload[70] if len(payload) >= 71 else 0
-    alpha = payload[90] if len(payload) >= 91 else 0
-    return (contrast, bright, effect_code, alpha)
-
-
-def _picture_effect_name(code: int) -> str:
-    return _HWP_PICTURE_EFFECT_NAMES.get(code, f"CODE_{code}")
-
-
-def _picture_effect_code(effect: str | None) -> int | None:
-    if effect is None:
-        return None
-    return _HWP_PICTURE_EFFECT_CODES.get(str(effect).strip().upper())
-
-
-def _parse_picture_image_adjustment_payload(payload: bytes) -> dict[str, str]:
-    contrast, bright, effect_code, alpha = _picture_image_adjustment_values(payload)
-    if contrast == 0 and bright == 0 and effect_code == 0 and alpha == 0:
-        return {}
-    return {
-        "bright": str(bright),
-        "contrast": str(contrast),
-        "effect": _picture_effect_name(effect_code),
-        "alpha": str(alpha),
-    }
-
-
-def _set_picture_image_adjustment_payload(
-    payload: bytes,
-    *,
-    bright: int | str | None = None,
-    contrast: int | str | None = None,
-    effect_code: int | None = None,
-    alpha: int | str | None = None,
-) -> bytes:
-    updated = bytearray(payload)
-    if len(updated) < 91:
-        updated.extend(b"\x00" * (91 - len(updated)))
-    current_contrast, current_bright, current_effect_code, current_alpha = _picture_image_adjustment_values(bytes(updated))
-    updated[68] = max(0, min(0xFF, current_contrast if contrast is None else int(contrast)))
-    updated[69] = max(0, min(0xFF, current_bright if bright is None else int(bright)))
-    updated[70] = max(0, min(0xFF, current_effect_code if effect_code is None else int(effect_code)))
-    updated[90] = max(0, min(0xFF, current_alpha if alpha is None else int(alpha)))
-    return bytes(updated)
-
-
-def _set_picture_line_payload(
-    payload: bytes,
-    *,
-    color: str | None = None,
-    width: int | None = None,
-) -> bytes:
-    updated = bytearray(payload)
-    if len(updated) < 8:
-        updated.extend(b"\x00" * (8 - len(updated)))
-    if color is not None:
-        updated[0:4] = _build_rgb_color(color)
-    if width is not None:
-        updated[4:8] = max(0, int(width)).to_bytes(4, "little", signed=False)
-    return bytes(updated)
-
-
-def _build_line_attribute_flags(
-    *,
-    line_style: str = "SOLID",
-    end_cap: str = "FLAT",
-    head_style: str = "NORMAL",
-    tail_style: str = "NORMAL",
-    head_size: str = "MEDIUM_MEDIUM",
-    tail_size: str = "MEDIUM_MEDIUM",
-    head_fill: bool = True,
-    tail_fill: bool = True,
-) -> int:
-    value = _HWP_LINE_STYLE_CODES.get(str(line_style).upper(), 0) & 0x3F
-    value |= (_HWP_LINE_END_CAP_CODES.get(str(end_cap).upper(), 1) & 0x0F) << 6
-    value |= (_HWP_LINE_ARROW_CODES.get(str(head_style).upper(), 0) & 0x3F) << 10
-    value |= (_HWP_LINE_ARROW_CODES.get(str(tail_style).upper(), 0) & 0x3F) << 16
-    value |= (_HWP_LINE_ARROW_SIZE_CODES.get(str(head_size).upper(), 4) & 0x0F) << 22
-    value |= (_HWP_LINE_ARROW_SIZE_CODES.get(str(tail_size).upper(), 4) & 0x0F) << 26
-    if head_fill:
-        value |= 1 << 30
-    if tail_fill:
-        value |= 1 << 31
-    return value
-
-
-def _build_shape_line_info_payload(
-    *,
-    color: str = "#000000",
-    width: int = _DEFAULT_SHAPE_LINE_WIDTH,
-    line_style: str = "SOLID",
-    end_cap: str = "FLAT",
-    head_style: str = "NORMAL",
-    tail_style: str = "NORMAL",
-    head_size: str = "MEDIUM_MEDIUM",
-    tail_size: str = "MEDIUM_MEDIUM",
-    head_fill: bool = True,
-    tail_fill: bool = True,
-    outline_style: str = "NORMAL",
-) -> bytes:
-    payload = bytearray(11)
-    payload[0:4] = _build_colorref(color)
-    payload[4:6] = max(0, min(int(width), 0xFFFF)).to_bytes(2, "little", signed=False)
-    payload[6:10] = _build_line_attribute_flags(
-        line_style=line_style,
-        end_cap=end_cap,
-        head_style=head_style,
-        tail_style=tail_style,
-        head_size=head_size,
-        tail_size=tail_size,
-        head_fill=head_fill,
-        tail_fill=tail_fill,
-    ).to_bytes(4, "little", signed=False)
-    payload[10] = _HWP_LINE_OUTLINE_STYLE_CODES.get(str(outline_style).upper(), 0) & 0xFF
-    return bytes(payload)
-
-
-def _build_shape_fill_payload(*, face_color: str = "#FFFFFF", hatch_color: str = "#000000") -> bytes:
-    payload = bytearray()
-    payload.extend((0x00000001).to_bytes(4, "little", signed=False))
-    payload.extend(_build_colorref(face_color))
-    payload.extend(_build_colorref(hatch_color))
-    payload.extend((0).to_bytes(4, "little", signed=True))
-    payload.append(0)
-    payload.extend((0).to_bytes(4, "little", signed=False))
-    return bytes(payload)
-
-
-def _build_filled_shape_common_payload(*, fill_color: str = "#FFFFFF", line_color: str = "#000000") -> bytes:
-    return (
-        _build_shape_line_info_payload(color=line_color, width=_DEFAULT_SHAPE_LINE_WIDTH)
-        + _build_shape_fill_payload(face_color=fill_color, hatch_color=line_color)
-    )
-
-
-def _build_ellipse_specific_payload(width: int, height: int, *, arc_flags: int = 0) -> bytes:
-    payload = bytearray()
-    center_x = int(width) // 2
-    center_y = int(height) // 2
-    axis1_x = int(width) // 2
-    axis1_y = 0
-    axis2_x = 0
-    axis2_y = int(height) // 2
-    start_pos_x = int(width)
-    start_pos_y = center_y
-    end_pos_x = center_x
-    end_pos_y = 0
-    for value in (
-        int(arc_flags),
-        center_x,
-        center_y,
-        axis1_x,
-        axis1_y,
-        axis2_x,
-        axis2_y,
-        start_pos_x,
-        start_pos_y,
-        end_pos_x,
-        end_pos_y,
-        start_pos_x,
-        start_pos_y,
-        end_pos_x,
-        end_pos_y,
-    ):
-        payload.extend(int(value).to_bytes(4, "little", signed=True))
-    return bytes(payload)
-
-
-def _build_arc_specific_payload(width: int, height: int) -> bytes:
-    payload = bytearray()
-    center_x = int(width) // 2
-    center_y = int(height) // 2
-    axis1_x = int(width) // 2
-    axis1_y = 0
-    axis2_x = 0
-    axis2_y = int(height) // 2
-    for value in (0x00000002, center_x, center_y, axis1_x, axis1_y, axis2_x, axis2_y):
-        payload.extend(int(value).to_bytes(4, "little", signed=True))
-    return bytes(payload)
-
-
-def _build_polygon_specific_payload(width: int, height: int) -> bytes:
-    x_points = (0, int(width), int(width), 0)
-    y_points = (0, 0, int(height), int(height))
-    payload = bytearray()
-    payload.extend(len(x_points).to_bytes(2, "little", signed=False))
-    for value in x_points:
-        payload.extend(int(value).to_bytes(4, "little", signed=True))
-    for value in y_points:
-        payload.extend(int(value).to_bytes(4, "little", signed=True))
-    return bytes(payload)
-
-
-def _build_textart_specific_payload(
-    text: str,
-    *,
-    font_name: str = _DEFAULT_TEXTART_FONT_NAME,
-    font_style: str = _DEFAULT_TEXTART_FONT_STYLE,
-) -> bytes:
-    raw_text = text
-    payload = bytearray(bytes.fromhex("00000000000000005d370000000000005d3700005d370000000000005d370000"))
-    payload.extend(len(raw_text).to_bytes(2, "little", signed=False))
-    payload.extend(raw_text.encode("utf-16-le"))
-    payload.extend(len(font_name).to_bytes(2, "little", signed=False))
-    payload.extend(font_name.encode("utf-16-le"))
-    payload.extend(len(font_style).to_bytes(2, "little", signed=False))
-    payload.extend(font_style.encode("utf-16-le"))
-    payload.extend(bytes.fromhex("01000000000000007800000064000000000000000000000000000000000000000000000000000000"))
-    return bytes(payload)
-
-
-def _build_ole_attribute_flags(
-    *,
-    object_type: str = "EMBEDDED",
-    draw_aspect: str = "CONTENT",
-    has_moniker: bool = False,
-    eq_baseline: int = 0,
-) -> int:
-    value = _HWP_DRAW_ASPECT_CODES.get(str(draw_aspect).upper(), 1) & 0xFF
-    if has_moniker:
-        value |= 1 << 8
-    baseline = max(0, min(int(eq_baseline), 0x7F))
-    value |= (baseline & 0x7F) << 9
-    value |= (_HWP_OLE_OBJECT_TYPE_CODES.get(str(object_type).upper(), 1) & 0x3F) << 16
-    return value
-
-
-def _build_ole_specific_payload(
-    *,
-    storage_id: int,
-    width: int,
-    height: int,
-    object_type: str = "EMBEDDED",
-    draw_aspect: str = "CONTENT",
-    has_moniker: bool = False,
-    eq_baseline: int = 0,
-    line_color: str = "#000000",
-    line_width: int = _DEFAULT_OLE_LINE_WIDTH,
-) -> bytes:
-    payload = bytearray(24)
-    payload[0:4] = _build_ole_attribute_flags(
-        object_type=object_type,
-        draw_aspect=draw_aspect,
-        has_moniker=has_moniker,
-        eq_baseline=eq_baseline,
-    ).to_bytes(4, "little", signed=False)
-    payload[4:8] = int(width).to_bytes(4, "little", signed=True)
-    payload[8:12] = int(height).to_bytes(4, "little", signed=True)
-    payload[12:14] = max(0, min(int(storage_id), 0xFFFF)).to_bytes(2, "little", signed=False)
-    payload[14:18] = _build_rgb_color(line_color)
-    payload[18:20] = max(0, min(int(line_width), 0xFFFF)).to_bytes(2, "little", signed=False)
-    payload[20:24] = _build_line_attribute_flags(
-        line_style="NONE" if int(line_width) <= 0 else "SOLID",
-        end_cap="ROUND",
-        head_style="NORMAL",
-        tail_style="NORMAL",
-        head_size="SMALL_SMALL",
-        tail_size="SMALL_SMALL",
-        head_fill=False,
-        tail_fill=False,
-    ).to_bytes(4, "little", signed=False)
-    return bytes(payload)
-
-
-def _build_shape_specific_payload(
-    kind: str,
-    *,
-    text: str = DEFAULT_HWP_SHAPE_TEXT,
-    width: int,
-    height: int,
-    fill_color: str = "#FFFFFF",
-    line_color: str = "#000000",
-) -> bytes:
-    if kind == "rect":
-        return _build_filled_shape_common_payload(fill_color=fill_color, line_color=line_color) + _DEFAULT_SHAPE_RECTANGLE_PAYLOAD
-    if kind == "ellipse":
-        return _DEFAULT_ELLIPSE_PAYLOAD
-    if kind == "arc":
-        return _DEFAULT_ARC_PAYLOAD
-    if kind == "polygon":
-        return _DEFAULT_POLYGON_PAYLOAD
-    if kind in {"line", "connectLine"}:
-        common = _build_shape_line_info_payload(color=line_color, width=_DEFAULT_SHAPE_LINE_WIDTH)
-        payload = bytearray(_DEFAULT_SHAPE_LINE_PAYLOAD)
-        payload[8:12] = int(width).to_bytes(4, "little", signed=False)
-        payload[12:16] = int(height).to_bytes(4, "little", signed=False)
-        return common + bytes(payload)
-    if kind == "textart":
-        return _build_textart_specific_payload(text)
-    return b""
+from ._hwp_graphic_payloads import (  # noqa: E402, F401 - compatibility re-exports
+    _build_graphic_control_header_payload,
+    _build_minimal_shape_component_payload,
+    _shape_control_header_template,
+    _build_shape_component_payload,
+    _build_prefixed_metadata_payload,
+    _build_shape_native_metadata_payload,
+    _build_control_native_metadata_payload,
+    _build_memo_shape_native_metadata_payload,
+    _graphic_control_out_margin_values,
+    _parse_graphic_control_out_margins,
+    _parse_graphic_control_layout,
+    _set_graphic_control_out_margins_payload,
+    _set_graphic_control_layout_payload,
+    _shape_component_rotation_values,
+    _shape_component_default_rotation_center,
+    _parse_shape_component_rotation_payload,
+    _set_shape_component_rotation_payload,
+    _picture_crop_values,
+    _picture_default_clip_size,
+    _parse_picture_crop_payload,
+    _set_picture_crop_payload,
+    _picture_image_adjustment_values,
+    _picture_effect_name,
+    _picture_effect_code,
+    _parse_picture_image_adjustment_payload,
+    _set_picture_image_adjustment_payload,
+    _set_picture_line_payload,
+    _build_line_attribute_flags,
+    _build_shape_line_info_payload,
+    _build_shape_fill_payload,
+    _build_filled_shape_common_payload,
+    _build_ellipse_specific_payload,
+    _build_arc_specific_payload,
+    _build_polygon_specific_payload,
+    _build_textart_specific_payload,
+    _build_ole_attribute_flags,
+    _build_ole_specific_payload,
+    _build_shape_specific_payload,
+)
 
 
 def _build_shape_text_records(text: str) -> tuple[RecordNode, ParagraphHeaderRecord]:
@@ -1322,455 +567,55 @@ def _insert_paragraph_control_node(model: "SectionModel", control_node: RecordNo
     children.insert(insert_at, control_node)
 
 
-_SECTION_DEF_HIDE_HEADER_FLAG = 1 << 0
-_SECTION_DEF_HIDE_FOOTER_FLAG = 1 << 1
-_SECTION_DEF_HIDE_MASTER_PAGE_FLAG = 1 << 2
-_SECTION_DEF_HIDE_PAGE_NUM_FLAG = 1 << 5
-_SECTION_DEF_HIDE_EMPTY_LINE_FLAG = 1 << 19
-_SECTION_DEF_WONGGOJI_FORMAT_FLAG = 1 << 22
-_SECTION_PAGE_STARTS_ON_MASK = 0x3
-_SECTION_PAGE_STARTS_ON_CODES = {
-    "BOTH": 0,
-    "EVEN": 1,
-    "ODD": 2,
-}
-_SECTION_PAGE_STARTS_ON_VALUES = {value: key for key, value in _SECTION_PAGE_STARTS_ON_CODES.items()}
-_HEADER_FOOTER_APPLY_PAGE_TYPE_CODES = {
-    "BOTH": 0,
-    "EVEN": 1,
-    "ODD": 2,
-}
-_HEADER_FOOTER_APPLY_PAGE_TYPE_VALUES = {
-    value: key for key, value in _HEADER_FOOTER_APPLY_PAGE_TYPE_CODES.items()
-}
-_PAGE_HIDING_FLAGS = {
-    "hideFirstHeader": 0x01,
-    "hideFirstFooter": 0x02,
-    "hideFirstMasterPage": 0x04,
-    "hideBorder": 0x08,
-    "hideFill": 0x10,
-    "hideFirstPageNum": 0x20,
-}
-_SECTION_DEF_BORDER_FIRST_FLAG = 1 << 8
-_SECTION_DEF_FILL_FIRST_FLAG = 1 << 9
-_PAGE_NUM_POSITION_CODES = {
-    "NONE": 0,
-    "TOP_LEFT": 1,
-    "TOP_CENTER": 2,
-    "TOP_RIGHT": 3,
-    "BOTTOM_LEFT": 4,
-    "BOTTOM_CENTER": 5,
-    "BOTTOM_RIGHT": 6,
-    "OUTSIDE_TOP": 7,
-    "OUTSIDE_BOTTOM": 8,
-    "INSIDE_TOP": 9,
-    "INSIDE_BOTTOM": 10,
-}
-_PAGE_NUM_POSITION_VALUES = {value: key for key, value in _PAGE_NUM_POSITION_CODES.items()}
-_NUMBER_TYPE_CODES = {
-    "DIGIT": 0,
-    "CIRCLED_DIGIT": 1,
-    "ROMAN_CAPITAL": 2,
-    "ROMAN_SMALL": 3,
-    "LATIN_CAPITAL": 4,
-    "LATIN_SMALL": 5,
-    "CIRCLED_LATIN_CAPITAL": 6,
-    "CIRCLED_LATIN_SMALL": 7,
-    "HANGUL_SYLLABLE": 8,
-    "CIRCLED_HANGUL_SYLLABLE": 9,
-    "HANGUL_JAMO": 10,
-    "CIRCLED_HANGUL_JAMO": 11,
-    "HANGUL_PHONETIC": 12,
-    "IDEOGRAPH": 13,
-    "CIRCLED_IDEOGRAPH": 14,
-    "DECAGON_CIRCLE_HANGUL": 15,
-    "DECAGON_CIRCLE_HANJA": 16,
-}
-_NUMBER_TYPE_VALUES = {value: key for key, value in _NUMBER_TYPE_CODES.items()}
-_NOTE_PLACEMENT_CODES = {
-    "EACH_COLUMN": 0,
-    "MERGED_COLUMN": 1,
-    "RIGHT_MOST_COLUMN": 2,
-    "END_OF_DOCUMENT": 0,
-    "END_OF_SECTION": 1,
-}
-_NOTE_NUMBERING_CODES = {
-    "CONTINUOUS": 0,
-    "ON_SECTION": 1,
-    "ON_PAGE": 2,
-}
-_NOTE_NUMBERING_VALUES = {value: key for key, value in _NOTE_NUMBERING_CODES.items()}
-_NOTE_LINE_TYPE_CODES = {
-    "SOLID": 1,
-    "DOT": 2,
-    "DASH": 3,
-}
-_NOTE_LINE_TYPE_VALUES = {value: key for key, value in _NOTE_LINE_TYPE_CODES.items()}
-_NOTE_LINE_WIDTH_CODES = {
-    "0.1 mm": 0,
-    "0.12 mm": 1,
-    "0.15 mm": 2,
-    "0.2 mm": 3,
-    "0.25 mm": 4,
-    "0.3 mm": 5,
-    "0.4 mm": 6,
-    "0.5 mm": 7,
-    "0.6 mm": 8,
-    "0.7 mm": 9,
-    "1.0 mm": 10,
-    "1.5 mm": 11,
-    "2.0 mm": 12,
-    "3.0 mm": 13,
-    "4.0 mm": 14,
-    "5.0 mm": 15,
-}
-_NOTE_LINE_WIDTH_VALUES = {value: key for key, value in _NOTE_LINE_WIDTH_CODES.items()}
-
-
-def _parse_section_definition_payload(payload: bytes) -> dict[str, object]:
-    body = payload[4:].ljust(26, b"\x00")
-    attributes = int.from_bytes(body[0:4], "little")
-    return {
-        "attributes": attributes,
-        "space_columns": int.from_bytes(body[4:6], "little"),
-        "line_grid": int.from_bytes(body[6:8], "little"),
-        "char_grid": int.from_bytes(body[8:10], "little"),
-        "tab_stop": int.from_bytes(body[10:14], "little"),
-        "numbering_shape_id": int.from_bytes(body[14:16], "little"),
-        "page": int.from_bytes(body[16:18], "little"),
-        "pic": int.from_bytes(body[18:20], "little"),
-        "tbl": int.from_bytes(body[20:22], "little"),
-        "equation": int.from_bytes(body[22:24], "little"),
-        "language": int.from_bytes(body[24:26], "little"),
-    }
-
-
-def _build_section_definition_payload(
-    payload: bytes,
-    *,
-    visibility: dict[str, str] | None = None,
-    grid: dict[str, int] | None = None,
-    start_numbers: dict[str, str] | None = None,
-    numbering_shape_id: int | None = None,
-) -> bytes:
-    updated = bytearray(payload[:30].ljust(30, b"\x00"))
-    attributes = int.from_bytes(updated[4:8], "little")
-    if visibility is not None:
-        visibility_flags = {
-            "hideFirstHeader": _SECTION_DEF_HIDE_HEADER_FLAG,
-            "hideFirstFooter": _SECTION_DEF_HIDE_FOOTER_FLAG,
-            "hideFirstMasterPage": _SECTION_DEF_HIDE_MASTER_PAGE_FLAG,
-            "hideFirstPageNum": _SECTION_DEF_HIDE_PAGE_NUM_FLAG,
-            "hideFirstEmptyLine": _SECTION_DEF_HIDE_EMPTY_LINE_FLAG,
-        }
-        for key, flag in visibility_flags.items():
-            if key not in visibility or visibility[key] is None:
-                continue
-            if str(visibility[key]) in {"1", "true", "True"}:
-                attributes |= flag
-            else:
-                attributes &= ~flag
-    if grid is not None:
-        if "lineGrid" in grid and grid["lineGrid"] is not None:
-            updated[10:12] = int(grid["lineGrid"]).to_bytes(2, "little", signed=False)
-        if "charGrid" in grid and grid["charGrid"] is not None:
-            updated[12:14] = int(grid["charGrid"]).to_bytes(2, "little", signed=False)
-        if "wonggojiFormat" in grid and grid["wonggojiFormat"] is not None:
-            if int(grid["wonggojiFormat"]):
-                attributes |= _SECTION_DEF_WONGGOJI_FORMAT_FLAG
-            else:
-                attributes &= ~_SECTION_DEF_WONGGOJI_FORMAT_FLAG
-    if numbering_shape_id is not None:
-        updated[18:20] = int(numbering_shape_id).to_bytes(2, "little", signed=False)
-    if start_numbers is not None:
-        for key, offset in {"page": 20, "pic": 22, "tbl": 24, "equation": 26}.items():
-            if key in start_numbers and start_numbers[key] is not None:
-                updated[offset : offset + 2] = int(start_numbers[key]).to_bytes(2, "little", signed=False)
-    updated[4:8] = attributes.to_bytes(4, "little", signed=False)
-    return bytes(updated) + payload[30:]
-
-
-def _parse_page_starts_on_payload(payload: bytes) -> str:
-    attributes = int.from_bytes(payload[4:8].ljust(4, b"\x00"), "little")
-    return _SECTION_PAGE_STARTS_ON_VALUES.get(attributes & _SECTION_PAGE_STARTS_ON_MASK, "BOTH")
-
-
-def _build_page_starts_on_payload(page_starts_on: str) -> bytes:
-    code = _SECTION_PAGE_STARTS_ON_CODES.get(str(page_starts_on).upper(), 0)
-    return _build_control_id_payload("pgct") + code.to_bytes(4, "little", signed=False)
-
-
-def _parse_page_hiding_payload(payload: bytes) -> dict[str, str]:
-    attributes = int.from_bytes(payload[4:8].ljust(4, b"\x00"), "little")
-    return {
-        "hideFirstHeader": "1" if attributes & _PAGE_HIDING_FLAGS["hideFirstHeader"] else "0",
-        "hideFirstFooter": "1" if attributes & _PAGE_HIDING_FLAGS["hideFirstFooter"] else "0",
-        "hideFirstMasterPage": "1" if attributes & _PAGE_HIDING_FLAGS["hideFirstMasterPage"] else "0",
-        "hideFirstPageNum": "1" if attributes & _PAGE_HIDING_FLAGS["hideFirstPageNum"] else "0",
-        "hideBorder": "1" if attributes & _PAGE_HIDING_FLAGS["hideBorder"] else "0",
-        "hideFill": "1" if attributes & _PAGE_HIDING_FLAGS["hideFill"] else "0",
-    }
-
-
-def _build_page_hiding_payload(visibility: dict[str, str]) -> bytes:
-    attributes = 0
-    for key, flag in _PAGE_HIDING_FLAGS.items():
-        value = visibility.get(key)
-        if value is not None and str(value) in {"1", "true", "True"}:
-            attributes |= flag
-    return _build_control_id_payload("pghd") + attributes.to_bytes(4, "little", signed=False)
-
-
-def _parse_page_num_payload(payload: bytes) -> dict[str, str]:
-    attributes = int.from_bytes(payload[4:8].ljust(4, b"\x00"), "little")
-    side_char = payload[14:16].decode("utf-16-le", errors="ignore") if len(payload) >= 16 else "-"
-    return {
-        "pos": _PAGE_NUM_POSITION_VALUES.get((attributes >> 8) & 0x0F, "BOTTOM_CENTER"),
-        "formatType": _NUMBER_TYPE_VALUES.get(attributes & 0xFF, "DIGIT"),
-        "sideChar": side_char or "-",
-    }
-
-
-def _build_page_num_payload(page_num: dict[str, str]) -> bytes:
-    format_code = _NUMBER_TYPE_CODES.get(str(page_num.get("formatType", "DIGIT")).upper(), 0)
-    position_code = _PAGE_NUM_POSITION_CODES.get(str(page_num.get("pos", "BOTTOM_CENTER")).upper(), 5)
-    attributes = format_code | (position_code << 8)
-    side_char = str(page_num.get("sideChar", "-"))[:1]
-    return (
-        _build_control_id_payload("pgnp")
-        + attributes.to_bytes(4, "little", signed=False)
-        + ("\x00\x00\x00" + side_char).encode("utf-16-le")
-    )
-
-
-def _parse_note_shape_payload(payload: bytes, *, kind: str) -> dict[str, object]:
-    values = payload[:26].ljust(26, b"\x00")
-    attributes = int.from_bytes(values[0:4], "little")
-    line_type_code = values[20] if len(values) > 20 else 1
-    line_width_code = values[21] if len(values) > 21 else 1
-    if kind == "endNotePr":
-        place = {0: "END_OF_DOCUMENT", 1: "END_OF_SECTION"}.get((attributes >> 8) & 0x03, "END_OF_DOCUMENT")
-        length = str(int.from_bytes(values[12:14], "little", signed=False))
-    else:
-        place = {0: "EACH_COLUMN", 1: "MERGED_COLUMN", 2: "RIGHT_MOST_COLUMN"}.get((attributes >> 8) & 0x03, "EACH_COLUMN")
-        length = str(int.from_bytes(values[12:14], "little", signed=True))
-    return {
-        "autoNumFormat": {
-            "type": _NUMBER_TYPE_VALUES.get(attributes & 0xFF, "DIGIT"),
-            "userChar": values[4:6].decode("utf-16-le", errors="ignore").rstrip("\x00"),
-            "prefixChar": values[6:8].decode("utf-16-le", errors="ignore").rstrip("\x00"),
-            "suffixChar": values[8:10].decode("utf-16-le", errors="ignore").rstrip("\x00"),
-            "supscript": "1" if attributes & (1 << 12) else "0",
-        },
-        "numbering": {
-            "type": _NOTE_NUMBERING_VALUES.get((attributes >> 10) & 0x03, "CONTINUOUS"),
-            "newNum": str(int.from_bytes(values[10:12], "little")),
-        },
-        "noteLine": {
-            "length": length,
-            "type": _NOTE_LINE_TYPE_VALUES.get(line_type_code, "SOLID"),
-            "width": _NOTE_LINE_WIDTH_VALUES.get(line_width_code, "0.12 mm"),
-            "color": _parse_colorref(values[22:26]),
-        },
-        "noteSpacing": {
-            "aboveLine": str(int.from_bytes(values[14:16], "little")),
-            "belowLine": str(int.from_bytes(values[16:18], "little")),
-            "betweenNotes": str(int.from_bytes(values[18:20], "little")),
-        },
-        "placement": {
-            "place": place,
-            "beneathText": "1" if attributes & (1 << 13) else "0",
-        },
-    }
-
-
-def _build_note_shape_payload(payload: bytes, *, note_pr: dict[str, object], kind: str) -> bytes:
-    original = payload[:26].ljust(26, b"\x00")
-    attributes = int.from_bytes(original[0:4], "little")
-    auto_num = dict(note_pr.get("autoNumFormat", {}))
-    numbering = dict(note_pr.get("numbering", {}))
-    note_line = dict(note_pr.get("noteLine", {}))
-    note_spacing = dict(note_pr.get("noteSpacing", {}))
-    placement = dict(note_pr.get("placement", {}))
-    attributes &= ~0xFF
-    attributes |= _NUMBER_TYPE_CODES.get(str(auto_num.get("type", "DIGIT")).upper(), 0)
-    attributes &= ~(0x03 << 8)
-    if kind == "endNotePr":
-        attributes |= ({ "END_OF_DOCUMENT": 0, "END_OF_SECTION": 1 }.get(str(placement.get("place", "END_OF_DOCUMENT")).upper(), 0) << 8)
-    else:
-        attributes |= ({ "EACH_COLUMN": 0, "MERGED_COLUMN": 1, "RIGHT_MOST_COLUMN": 2 }.get(str(placement.get("place", "EACH_COLUMN")).upper(), 0) << 8)
-    attributes &= ~(0x03 << 10)
-    attributes |= (_NOTE_NUMBERING_CODES.get(str(numbering.get("type", "CONTINUOUS")).upper(), 0) << 10)
-    if str(auto_num.get("supscript", "0")) in {"1", "true", "True"}:
-        attributes |= 1 << 12
-    else:
-        attributes &= ~(1 << 12)
-    if str(placement.get("beneathText", "0")) in {"1", "true", "True"}:
-        attributes |= 1 << 13
-    else:
-        attributes &= ~(1 << 13)
-    updated = bytearray(payload)
-    if len(updated) < 26:
-        updated.extend(b"\x00" * (26 - len(updated)))
-    updated[0:4] = attributes.to_bytes(4, "little", signed=False)
-    updated[4:6] = str(auto_num.get("userChar", ""))[:1].encode("utf-16-le")
-    updated[6:8] = str(auto_num.get("prefixChar", ""))[:1].encode("utf-16-le")
-    updated[8:10] = str(auto_num.get("suffixChar", ""))[:1].encode("utf-16-le")
-    updated[10:12] = int(numbering.get("newNum", 1)).to_bytes(2, "little", signed=False)
-    length_value = int(str(note_line.get("length", -1)))
-    if kind == "endNotePr":
-        updated[12:14] = (length_value & 0xFFFF).to_bytes(2, "little", signed=False)
-    else:
-        updated[12:14] = length_value.to_bytes(2, "little", signed=True)
-    updated[14:16] = int(note_spacing.get("aboveLine", 850)).to_bytes(2, "little", signed=False)
-    updated[16:18] = int(note_spacing.get("belowLine", 567)).to_bytes(2, "little", signed=False)
-    updated[18:20] = int(note_spacing.get("betweenNotes", 283)).to_bytes(2, "little", signed=False)
-    updated[20] = _NOTE_LINE_TYPE_CODES.get(str(note_line.get("type", "SOLID")).upper(), 1)
-    updated[21] = _NOTE_LINE_WIDTH_CODES.get(str(note_line.get("width", "0.12 mm")), 1)
-    updated[22:26] = _build_colorref(str(note_line.get("color", "#000000")))
-    return bytes(updated)
-
-
-def _parse_colorref(payload: bytes) -> str:
-    values = payload[:4].ljust(4, b"\x00")
-    blue = values[0]
-    green = values[1]
-    red = values[2]
-    return f"#{red:02X}{green:02X}{blue:02X}"
-
-
-def _build_colorref(value: str) -> bytes:
-    normalized = str(value).strip().lstrip("#")
-    if len(normalized) != 6:
-        normalized = "000000"
-    red = int(normalized[0:2], 16)
-    green = int(normalized[2:4], 16)
-    blue = int(normalized[4:6], 16)
-    return bytes((blue, green, red, 0))
-
-
-def _parse_rgb_color(payload: bytes) -> str:
-    values = payload[:4].ljust(4, b"\x00")
-    red = values[0]
-    green = values[1]
-    blue = values[2]
-    return f"#{red:02X}{green:02X}{blue:02X}"
-
-
-def _build_rgb_color(value: str) -> bytes:
-    normalized = str(value).strip().lstrip("#")
-    if len(normalized) != 6:
-        normalized = "000000"
-    red = int(normalized[0:2], 16)
-    green = int(normalized[2:4], 16)
-    blue = int(normalized[4:6], 16)
-    return bytes((red, green, blue, 0))
-
-
-def _parse_page_def_payload(payload: bytes) -> dict[str, int]:
-    values = list(struct.unpack("<10I", payload[:40].ljust(40, b"\x00")))
-    return {
-        "page_width": values[0],
-        "page_height": values[1],
-        "left": values[2],
-        "right": values[3],
-        "top": values[4],
-        "header": values[5],
-        "footer": values[6],
-        "bottom": values[7],
-        "gutter": values[8],
-    }
-
-
-def _build_page_def_payload(
-    payload: bytes,
-    *,
-    page_width: int | None = None,
-    page_height: int | None = None,
-    landscape: str | None = None,
-    margins: dict[str, int] | None = None,
-) -> bytes:
-    values = list(struct.unpack("<10I", payload[:40].ljust(40, b"\x00")))
-    width = values[0] if page_width is None else int(page_width)
-    height = values[1] if page_height is None else int(page_height)
-    if landscape is not None and page_width is None and page_height is None:
-        normalized_landscape = str(landscape).upper()
-        if normalized_landscape == "LANDSCAPE" and width < height:
-            width, height = height, width
-        elif normalized_landscape in {"WIDELY", "PORTRAIT"} and width > height:
-            width, height = height, width
-    values[0] = width
-    values[1] = height
-    margin_mapping = {
-        "left": 2,
-        "right": 3,
-        "top": 4,
-        "header": 5,
-        "footer": 6,
-        "bottom": 7,
-        "gutter": 8,
-    }
-    for key, index in margin_mapping.items():
-        if margins is not None and key in margins and margins[key] is not None:
-            values[index] = int(margins[key])
-    updated = struct.pack("<10I", *values)
-    return updated + payload[40:]
-
-
-_SECTION_PAGE_BORDER_FILL_TYPES = ("BOTH", "EVEN", "ODD")
-_PAGE_BORDER_FILL_TEXT_BORDER_FLAG = 0x01
-_PAGE_BORDER_FILL_HEADER_INSIDE_FLAG = 0x02
-_PAGE_BORDER_FILL_FOOTER_INSIDE_FLAG = 0x04
-_PAGE_BORDER_FILL_BORDER_AREA_FLAG = 0x10
-
-
-def _parse_page_border_fill_payload(payload: bytes, *, border_type: str) -> dict[str, str | int]:
-    values = payload[:14].ljust(14, b"\x00")
-    flags, left, right, top, bottom, border_fill_id = struct.unpack("<I5H", values)
-    return {
-        "type": border_type,
-        "borderFillIDRef": str(border_fill_id),
-        "textBorder": "PAPER" if flags & _PAGE_BORDER_FILL_TEXT_BORDER_FLAG else "BORDER",
-        "headerInside": "1" if flags & _PAGE_BORDER_FILL_HEADER_INSIDE_FLAG else "0",
-        "footerInside": "1" if flags & _PAGE_BORDER_FILL_FOOTER_INSIDE_FLAG else "0",
-        "fillArea": "BORDER" if flags & _PAGE_BORDER_FILL_BORDER_AREA_FLAG else "PAPER",
-        "left": left,
-        "right": right,
-        "top": top,
-        "bottom": bottom,
-    }
-
-
-def _build_page_border_fill_payload(
-    payload: bytes,
-    *,
-    border_fill: dict[str, str | int],
-) -> bytes:
-    values = payload[:14].ljust(14, b"\x00")
-    flags, left, right, top, bottom, border_fill_id = struct.unpack("<I5H", values)
-    if str(border_fill.get("textBorder", "PAPER")).upper() == "PAPER":
-        flags |= _PAGE_BORDER_FILL_TEXT_BORDER_FLAG
-    else:
-        flags &= ~_PAGE_BORDER_FILL_TEXT_BORDER_FLAG
-    if str(border_fill.get("headerInside", "0")) in {"1", "true", "True"}:
-        flags |= _PAGE_BORDER_FILL_HEADER_INSIDE_FLAG
-    else:
-        flags &= ~_PAGE_BORDER_FILL_HEADER_INSIDE_FLAG
-    if str(border_fill.get("footerInside", "0")) in {"1", "true", "True"}:
-        flags |= _PAGE_BORDER_FILL_FOOTER_INSIDE_FLAG
-    else:
-        flags &= ~_PAGE_BORDER_FILL_FOOTER_INSIDE_FLAG
-    if str(border_fill.get("fillArea", "PAPER")).upper() == "BORDER":
-        flags |= _PAGE_BORDER_FILL_BORDER_AREA_FLAG
-    else:
-        flags &= ~_PAGE_BORDER_FILL_BORDER_AREA_FLAG
-    left = int(border_fill.get("left", left))
-    right = int(border_fill.get("right", right))
-    top = int(border_fill.get("top", top))
-    bottom = int(border_fill.get("bottom", bottom))
-    border_fill_id = int(border_fill.get("borderFillIDRef", border_fill_id))
-    updated = struct.pack("<I5H", flags, left, right, top, bottom, border_fill_id)
-    return updated + payload[14:]
+from ._hwp_page_payloads import (  # noqa: E402, F401 - compatibility re-exports
+    _SECTION_DEF_HIDE_HEADER_FLAG,
+    _SECTION_DEF_HIDE_FOOTER_FLAG,
+    _SECTION_DEF_HIDE_MASTER_PAGE_FLAG,
+    _SECTION_DEF_HIDE_PAGE_NUM_FLAG,
+    _SECTION_DEF_HIDE_EMPTY_LINE_FLAG,
+    _SECTION_DEF_WONGGOJI_FORMAT_FLAG,
+    _SECTION_PAGE_STARTS_ON_MASK,
+    _SECTION_PAGE_STARTS_ON_CODES,
+    _SECTION_PAGE_STARTS_ON_VALUES,
+    _HEADER_FOOTER_APPLY_PAGE_TYPE_CODES,
+    _HEADER_FOOTER_APPLY_PAGE_TYPE_VALUES,
+    _PAGE_HIDING_FLAGS,
+    _SECTION_DEF_BORDER_FIRST_FLAG,
+    _SECTION_DEF_FILL_FIRST_FLAG,
+    _PAGE_NUM_POSITION_CODES,
+    _PAGE_NUM_POSITION_VALUES,
+    _NUMBER_TYPE_CODES,
+    _NUMBER_TYPE_VALUES,
+    _NOTE_PLACEMENT_CODES,
+    _NOTE_NUMBERING_CODES,
+    _NOTE_NUMBERING_VALUES,
+    _NOTE_LINE_TYPE_CODES,
+    _NOTE_LINE_TYPE_VALUES,
+    _NOTE_LINE_WIDTH_CODES,
+    _NOTE_LINE_WIDTH_VALUES,
+    _parse_section_definition_payload,
+    _build_section_definition_payload,
+    _parse_page_starts_on_payload,
+    _build_page_starts_on_payload,
+    _parse_page_hiding_payload,
+    _build_page_hiding_payload,
+    _parse_page_num_payload,
+    _build_page_num_payload,
+    _parse_note_shape_payload,
+    _build_note_shape_payload,
+    _build_colorref,
+    _parse_rgb_color,
+    _build_rgb_color,
+    _parse_page_def_payload,
+    _build_page_def_payload,
+    _SECTION_PAGE_BORDER_FILL_TYPES,
+    _PAGE_BORDER_FILL_TEXT_BORDER_FLAG,
+    _PAGE_BORDER_FILL_HEADER_INSIDE_FLAG,
+    _PAGE_BORDER_FILL_FOOTER_INSIDE_FLAG,
+    _PAGE_BORDER_FILL_BORDER_AREA_FLAG,
+    _parse_page_border_fill_payload,
+    _build_page_border_fill_payload,
+)
 
 
 def _build_control_marker_text(control_id: str) -> str:
@@ -1884,38 +729,6 @@ def _parse_object_description(payload: bytes) -> str:
     char_count = int.from_bytes(payload[44:46], "little", signed=False)
     encoded = payload[46 : 46 + char_count * 2]
     return encoded.decode("utf-16-le", errors="ignore")
-
-
-def _parse_shape_fill_payload(payload: bytes) -> dict[str, object]:
-    if len(payload) < 4:
-        return {}
-    fill_type = int.from_bytes(payload[0:4], "little", signed=False)
-    result: dict[str, object] = {
-        "fill_type": fill_type,
-        "fill_type_flags": {
-            "color_pattern": bool(fill_type & 0x00000001),
-            "image_fill": bool(fill_type & 0x00000002),
-            "gradation_fill": bool(fill_type & 0x00000004),
-        },
-    }
-    if fill_type & 0x00000001:
-        if len(payload) >= 8:
-            result["faceColor"] = _parse_colorref(payload[4:8])
-        if len(payload) >= 12:
-            result["hatchColor"] = _parse_colorref(payload[8:12])
-        if len(payload) >= 16:
-            result["pattern_flags"] = int.from_bytes(payload[12:16], "little", signed=False)
-        if len(payload) >= 17:
-            result["pattern_alpha"] = payload[16]
-        if len(payload) > 17:
-            result["pattern_tail"] = payload[17:]
-    elif len(payload) > 4:
-        result["raw_payload"] = payload[4:]
-    result["u16_values"] = _payload_u16_values(payload)
-    result["u32_values"] = _payload_u32_values(payload)
-    return result
-
-
 def _parse_shape_native_metadata(payload: bytes) -> dict[str, str]:
     if not payload:
         return {}
@@ -1923,8 +736,8 @@ def _parse_shape_native_metadata(payload: bytes) -> dict[str, str]:
     if not text.startswith(_SHAPE_NATIVE_METADATA_PREFIX):
         return {}
     metadata: dict[str, str] = {}
-    for field in text.split(";")[1:]:
-        key, separator, value = field.partition("=")
+    for item in text.split(";")[1:]:
+        key, separator, value = item.partition("=")
         if separator and key:
             metadata[key] = value
     return metadata
@@ -1937,27 +750,11 @@ def _parse_control_native_metadata(payload: bytes) -> dict[str, str]:
     if not text.startswith(_CONTROL_NATIVE_METADATA_PREFIX):
         return {}
     metadata: dict[str, str] = {}
-    for field in text.split(";")[1:]:
-        key, separator, value = field.partition("=")
+    for item in text.split(";")[1:]:
+        key, separator, value = item.partition("=")
         if separator and key:
             metadata[key] = value
     return metadata
-
-
-def _parse_memo_shape_native_metadata(payload: bytes) -> dict[str, str]:
-    if not payload:
-        return {}
-    text = payload.decode("utf-16-le", errors="ignore")
-    if not text.startswith(_MEMO_SHAPE_NATIVE_METADATA_PREFIX):
-        return {}
-    metadata: dict[str, str] = {}
-    for field in text.split(";")[1:]:
-        key, separator, value = field.partition("=")
-        if separator and key:
-            metadata[key] = value
-    return metadata
-
-
 def _metadata_prefixed_str_map(metadata: dict[str, str], prefix: str) -> dict[str, str]:
     result: dict[str, str] = {}
     for key, value in metadata.items():
@@ -2020,839 +817,6 @@ def _update_control_native_metadata(
             control_node.children.remove(node)
         return
     control_node.add_child(RecordNode(tag_id=TAG_CTRL_DATA, level=control_node.level + 1, payload=payload))
-
-
-def _parse_list_header_payload(payload: bytes) -> dict[str, object]:
-    values = bytes(payload)
-    result: dict[str, object] = {
-        "u16_values": _payload_u16_values(values),
-        "u32_values": _payload_u32_values(values),
-    }
-    if len(values) >= 4:
-        result["paragraph_count"] = int.from_bytes(values[0:4], "little", signed=False)
-    if len(values) >= 8:
-        result["property_flags"] = int.from_bytes(values[4:8], "little", signed=False)
-        result["property_bits"] = _bit_flags(int(result["property_flags"]))
-    return result
-
-
-def _parse_memo_shape_payload(payload: bytes) -> dict[str, object]:
-    values = bytes(payload)
-    result: dict[str, object] = {
-        "raw_payload": values,
-        "u16_values": _payload_u16_values(values),
-        "u32_values": _payload_u32_values(values),
-    }
-    metadata = _parse_memo_shape_native_metadata(values)
-    if metadata:
-        result.update(metadata)
-        if "width" in metadata:
-            try:
-                result["width"] = int(metadata["width"])
-            except ValueError:
-                pass
-        if "lineWidth" in metadata:
-            try:
-                result["line_width"] = int(metadata["lineWidth"])
-            except ValueError:
-                pass
-        if "lineType" in metadata:
-            result["line_type"] = metadata["lineType"]
-        if "lineColor" in metadata:
-            result["line_color"] = metadata["lineColor"]
-        if "fillColor" in metadata:
-            result["fill_color"] = metadata["fillColor"]
-        if "activeColor" in metadata:
-            result["active_color"] = metadata["activeColor"]
-        if "memoType" in metadata:
-            result["memo_type"] = metadata["memoType"]
-    decoded = values.decode("utf-16-le", errors="ignore").replace("\x00", "")
-    if decoded:
-        result["utf16_text"] = decoded
-    return result
-
-
-def _parse_form_object_payload(payload: bytes) -> dict[str, object]:
-    values = bytes(payload)
-    result: dict[str, object] = {
-        "raw_payload": values,
-        "u16_values": _payload_u16_values(values),
-        "u32_values": _payload_u32_values(values),
-    }
-    decoded = values.decode("utf-16-le", errors="ignore").replace("\x00", "")
-    if decoded:
-        result["utf16_text"] = decoded
-        result["label"] = decoded
-    return result
-
-
-def _parse_memo_list_payload(payload: bytes) -> dict[str, object]:
-    values = bytes(payload)
-    result: dict[str, object] = {
-        "raw_payload": values,
-        "u16_values": _payload_u16_values(values),
-        "u32_values": _payload_u32_values(values),
-    }
-    decoded = values.decode("utf-16-le", errors="ignore").replace("\x00", "")
-    if decoded:
-        result["utf16_text"] = decoded
-        result["text"] = decoded
-    return result
-
-
-def _parse_chart_data_payload(payload: bytes) -> dict[str, object]:
-    values = bytes(payload)
-    result: dict[str, object] = {
-        "raw_payload": values,
-        "u16_values": _payload_u16_values(values),
-        "u32_values": _payload_u32_values(values),
-    }
-    decoded = values.decode("utf-16-le", errors="ignore").replace("\x00", "")
-    if decoded:
-        result["utf16_text"] = decoded
-        result["title"] = decoded
-    return result
-
-
-def _parse_track_change_payload(payload: bytes) -> dict[str, object]:
-    values = bytes(payload)
-    result: dict[str, object] = {
-        "u16_values": _payload_u16_values(values),
-        "u32_values": _payload_u32_values(values),
-    }
-    if len(values) >= 4:
-        result["flags"] = int.from_bytes(values[0:4], "little", signed=False)
-        result["flag_bits"] = _bit_flags(int(result["flags"]))
-    decoded = values.decode("utf-16-le", errors="ignore").replace("\x00", "")
-    if decoded:
-        result["utf16_text"] = decoded
-    return result
-
-
-def _parse_track_change_author_payload(payload: bytes) -> dict[str, object]:
-    values = bytes(payload)
-    name, cursor = _parse_length_prefixed_utf16(values, 0)
-    result: dict[str, object] = {
-        "name": name,
-        "name_length": len(name),
-        "u16_values": _payload_u16_values(values),
-        "u32_values": _payload_u32_values(values),
-    }
-    if cursor < len(values):
-        result["trailing_payload"] = values[cursor:]
-    return result
-
-
-def _parse_textart_payload_text(payload: bytes) -> str:
-    if len(payload) < 34:
-        return ""
-    text_length = int.from_bytes(payload[32:34], "little", signed=False)
-    end = 34 + text_length * 2
-    if end > len(payload):
-        return ""
-    return payload[34:end].decode("utf-16-le", errors="ignore").replace("\r", "")
-
-
-def _parse_length_prefixed_utf16(payload: bytes, cursor: int) -> tuple[str, int]:
-    if cursor + 2 > len(payload):
-        return ("", cursor)
-    char_count = int.from_bytes(payload[cursor : cursor + 2], "little", signed=False)
-    cursor += 2
-    end = min(cursor + char_count * 2, len(payload))
-    encoded = payload[cursor:end]
-    if len(encoded) % 2:
-        encoded = encoded[:-1]
-    return (encoded.decode("utf-16-le", errors="ignore"), end)
-
-
-def _parse_line_attribute_flags(value: int) -> dict[str, object]:
-    return {
-        "line_style_code": value & 0x3F,
-        "line_style": _HWP_LINE_STYLE_NAMES.get(value & 0x3F, f"CODE_{value & 0x3F}"),
-        "end_cap_code": (value >> 6) & 0x0F,
-        "end_cap": _HWP_LINE_END_CAP_NAMES.get((value >> 6) & 0x0F, f"CODE_{(value >> 6) & 0x0F}"),
-        "head_style_code": (value >> 10) & 0x3F,
-        "head_style": _HWP_LINE_ARROW_NAMES.get((value >> 10) & 0x3F, f"CODE_{(value >> 10) & 0x3F}"),
-        "tail_style_code": (value >> 16) & 0x3F,
-        "tail_style": _HWP_LINE_ARROW_NAMES.get((value >> 16) & 0x3F, f"CODE_{(value >> 16) & 0x3F}"),
-        "head_size_code": (value >> 22) & 0x0F,
-        "head_size": _HWP_LINE_ARROW_SIZE_NAMES.get((value >> 22) & 0x0F, f"CODE_{(value >> 22) & 0x0F}"),
-        "tail_size_code": (value >> 26) & 0x0F,
-        "tail_size": _HWP_LINE_ARROW_SIZE_NAMES.get((value >> 26) & 0x0F, f"CODE_{(value >> 26) & 0x0F}"),
-        "head_fill": bool(value & (1 << 30)),
-        "tail_fill": bool(value & (1 << 31)),
-    }
-
-
-def _payload_u16_values(payload: bytes) -> list[int]:
-    if len(payload) < 2:
-        return []
-    even_length = len(payload) - (len(payload) % 2)
-    return list(struct.unpack("<" + "H" * (even_length // 2), payload[:even_length]))
-
-
-def _payload_u32_values(payload: bytes) -> list[int]:
-    if len(payload) < 4:
-        return []
-    aligned_length = len(payload) - (len(payload) % 4)
-    return list(struct.unpack("<" + "I" * (aligned_length // 4), payload[:aligned_length]))
-
-
-def _bit_flags(value: int, *, width: int = 32, start: int = 0, prefix: str = "bit") -> dict[str, bool]:
-    return {f"{prefix}_{index}": bool(value & (1 << index)) for index in range(start, start + width)}
-
-
-def _parse_hwp_colorref_or_none(payload: bytes) -> str:
-    values = payload[:4].ljust(4, b"\x00")
-    if values == b"\xff\xff\xff\xff":
-        return "none"
-    return _parse_colorref(values)
-
-
-def _parse_shape_line_info_payload(payload: bytes) -> dict[str, object]:
-    values = payload[:11].ljust(11, b"\x00")
-    attributes = int.from_bytes(values[6:10], "little", signed=False)
-    return {
-        "color": _parse_colorref(values[0:4]),
-        "width": int.from_bytes(values[4:6], "little", signed=False),
-        "attributes": attributes,
-        "attribute_flags": _parse_line_attribute_flags(attributes),
-        "outline_style_code": values[10],
-        "outline_style": _HWP_LINE_OUTLINE_STYLE_NAMES.get(values[10], f"CODE_{values[10]}"),
-    }
-
-
-def _parse_border_line_payload(payload: bytes) -> dict[str, object]:
-    values = payload[:6].ljust(6, b"\x00")
-    style_code = values[0]
-    width_code = values[1]
-    return {
-        "style_code": style_code,
-        "style": _HWP_LINE_STYLE_NAMES.get(style_code, f"CODE_{style_code}"),
-        "width_code": width_code,
-        "color": _parse_colorref(values[2:6]),
-    }
-
-
-def _parse_face_name_payload(payload: bytes) -> dict[str, object]:
-    if not payload:
-        return {"flags": 0, "name": ""}
-    flags = payload[0]
-    cursor = 1
-    name, cursor = _parse_length_prefixed_utf16(payload, cursor)
-    result: dict[str, object] = {
-        "flags": flags,
-        "name": name,
-        "has_substitute_font": bool(flags & 0x80),
-        "has_font_information": bool(flags & 0x40),
-        "has_default_font": bool(flags & 0x20),
-        "flag_bits": {
-            "alternate_font": bool(flags & 0x80),
-            "font_information": bool(flags & 0x40),
-            "default_font": bool(flags & 0x20),
-            "metric_font": bool(flags & 0x10),
-        },
-    }
-    if result["has_substitute_font"] and cursor < len(payload):
-        result["substitute_font_type"] = payload[cursor]
-        cursor += 1
-        substitute_name, cursor = _parse_length_prefixed_utf16(payload, cursor)
-        result["substitute_font_name"] = substitute_name
-    if result["has_font_information"] and cursor + 10 <= len(payload):
-        panose = payload[cursor : cursor + 10]
-        cursor += 10
-        result["font_information"] = {
-            "family_type": panose[0],
-            "serif_style": panose[1],
-            "weight": panose[2],
-            "proportion": panose[3],
-            "contrast": panose[4],
-            "stroke_variation": panose[5],
-            "arm_style": panose[6],
-            "letterform": panose[7],
-            "midline": panose[8],
-            "x_height": panose[9],
-        }
-    if result["has_default_font"]:
-        default_name, cursor = _parse_length_prefixed_utf16(payload, cursor)
-        result["default_font_name"] = default_name
-    if cursor < len(payload):
-        result["trailing_payload"] = payload[cursor:]
-    return result
-
-
-def _parse_border_fill_payload(payload: bytes) -> dict[str, object]:
-    values = payload
-    border_flags = int.from_bytes(values[0:2], "little", signed=False) if len(values) >= 2 else 0
-    result: dict[str, object] = {
-        "border_flags": border_flags,
-        "border_flag_bits": {
-            "three_d": bool(border_flags & 0x0001),
-            "shadow": bool(border_flags & 0x0002),
-            "slash": (border_flags >> 2) & 0x07,
-            "backslash": (border_flags >> 5) & 0x07,
-            "crooked_slash": bool(border_flags & 0x0100),
-            "crooked_backslash": bool(border_flags & 0x0200),
-            "counter_slash": bool(border_flags & 0x0400),
-        },
-        "border_flag_words": {
-            "low": border_flags & 0x00FF,
-            "high": (border_flags >> 8) & 0x00FF,
-        },
-    }
-    if len(values) >= 32:
-        result["left"] = _parse_border_line_payload(values[2:8])
-        result["right"] = _parse_border_line_payload(values[8:14])
-        result["top"] = _parse_border_line_payload(values[14:20])
-        result["bottom"] = _parse_border_line_payload(values[20:26])
-        result["diagonal"] = _parse_border_line_payload(values[26:32])
-    if len(values) >= 34:
-        fill_flags = int.from_bytes(values[32:34], "little", signed=False)
-        result["fill_flags"] = fill_flags
-        result["fill_flag_bits"] = {
-            "color_pattern": bool(fill_flags & 0x0001),
-            "image_fill": bool(fill_flags & 0x0002),
-            "gradation_fill": bool(fill_flags & 0x0004),
-        }
-        fill_payload = values[34:]
-        result["fill"] = _parse_shape_fill_payload(fill_payload)
-        if fill_payload:
-            result["fill_payload"] = fill_payload
-    result["u16_values"] = _payload_u16_values(values)
-    result["u32_values"] = _payload_u32_values(values)
-    return result
-
-
-def _parse_character_shape_payload(payload: bytes) -> dict[str, object]:
-    values = bytes(payload)
-    attribute_raw = int.from_bytes(values[46:50].ljust(4, b"\x00"), "little", signed=False) if len(values) >= 50 else 0
-    attribute_low = int.from_bytes(values[46:48].ljust(2, b"\x00"), "little", signed=False) if len(values) >= 48 else 0
-    attribute_high = int.from_bytes(values[48:50].ljust(2, b"\x00"), "little", signed=False) if len(values) >= 50 else 0
-    result: dict[str, object] = {
-        "font_refs": {
-            key: int.from_bytes(values[index * 2 : (index + 1) * 2].ljust(2, b"\x00"), "little", signed=False)
-            for index, key in enumerate(_HWP_CHAR_FONT_ORDER)
-        }
-    }
-    if len(values) >= 28:
-        result["ratios"] = {
-            key: int.from_bytes(values[14 + index : 15 + index], "little", signed=False)
-            for index, key in enumerate(_HWP_CHAR_FONT_ORDER)
-        }
-        result["spacings"] = {
-            key: int.from_bytes(values[21 + index : 22 + index], "little", signed=True)
-            for index, key in enumerate(_HWP_CHAR_FONT_ORDER)
-        }
-    if len(values) >= 42:
-        result["relative_sizes"] = {
-            key: int.from_bytes(values[28 + index : 29 + index], "little", signed=False)
-            for index, key in enumerate(_HWP_CHAR_FONT_ORDER)
-        }
-        result["position_offsets"] = {
-            key: int.from_bytes(values[35 + index : 36 + index], "little", signed=True)
-            for index, key in enumerate(_HWP_CHAR_FONT_ORDER)
-        }
-    if len(values) >= 50:
-        result["base_size"] = int.from_bytes(values[42:46], "little", signed=False)
-        result["attributes"] = attribute_raw
-        result["attribute_bytes"] = list(values[46:50])
-        result["attribute_words"] = {
-            "low": attribute_low,
-            "high": attribute_high,
-        }
-        result["attribute_sections"] = {
-            "style_code": values[46],
-            "outline_shadow_code": values[47],
-            "effect_code": values[48],
-            "decoration_code": values[49],
-        }
-        result["attribute_low_bits"] = {
-            "bit_0": bool(attribute_low & 0x0001),
-            "bit_1": bool(attribute_low & 0x0002),
-            "bit_2": bool(attribute_low & 0x0004),
-            "bit_3": bool(attribute_low & 0x0008),
-            "bit_4": bool(attribute_low & 0x0010),
-            "bit_5": bool(attribute_low & 0x0020),
-            "bit_6": bool(attribute_low & 0x0040),
-            "bit_7": bool(attribute_low & 0x0080),
-            "bit_8": bool(attribute_low & 0x0100),
-            "bit_9": bool(attribute_low & 0x0200),
-            "bit_10": bool(attribute_low & 0x0400),
-            "bit_11": bool(attribute_low & 0x0800),
-            "bit_12": bool(attribute_low & 0x1000),
-            "bit_13": bool(attribute_low & 0x2000),
-            "bit_14": bool(attribute_low & 0x4000),
-            "bit_15": bool(attribute_low & 0x8000),
-        }
-        result["attribute_high_bits"] = {
-            "bit_16": bool(attribute_high & 0x0001),
-            "bit_17": bool(attribute_high & 0x0002),
-            "bit_18": bool(attribute_high & 0x0004),
-            "bit_19": bool(attribute_high & 0x0008),
-            "bit_20": bool(attribute_high & 0x0010),
-            "bit_21": bool(attribute_high & 0x0020),
-            "bit_22": bool(attribute_high & 0x0040),
-            "bit_23": bool(attribute_high & 0x0080),
-            "bit_24": bool(attribute_high & 0x0100),
-            "bit_25": bool(attribute_high & 0x0200),
-            "bit_26": bool(attribute_high & 0x0400),
-            "bit_27": bool(attribute_high & 0x0800),
-            "bit_28": bool(attribute_high & 0x1000),
-            "bit_29": bool(attribute_high & 0x2000),
-            "bit_30": bool(attribute_high & 0x4000),
-            "bit_31": bool(attribute_high & 0x8000),
-        }
-    if len(values) >= 54:
-        result["shadow_offset"] = {
-            "x": int.from_bytes(values[50:52], "little", signed=True),
-            "y": int.from_bytes(values[52:54], "little", signed=True),
-        }
-    if len(values) >= 58:
-        result["text_color"] = _parse_hwp_colorref_or_none(values[54:58])
-    if len(values) >= 60:
-        result["tail_gap_58_60"] = values[58:60]
-    if len(values) >= 64:
-        result["shade_color"] = _parse_hwp_colorref_or_none(values[60:64])
-    if len(values) >= 68:
-        result["shadow_color"] = _parse_hwp_colorref_or_none(values[64:68])
-    if len(values) >= 72:
-        result["border_fill_id"] = int.from_bytes(values[68:72], "little", signed=False)
-    if len(values) > 72:
-        result["tail_reserved"] = values[72:]
-    elif len(values) > 68:
-        result["tail_reserved"] = values[68:]
-    result["probable_effect_flags"] = {
-        "attribute_bit_0": bool(attribute_raw & 0x00000001),
-        "attribute_bit_1": bool(attribute_raw & 0x00000002),
-        "attribute_bit_2": bool(attribute_raw & 0x00000004),
-        "emboss": bool(attribute_raw & 0x00002000),
-        "engrave": bool(attribute_raw & 0x00004000),
-        "superscript": bool(attribute_raw & 0x00008000),
-        "subscript": bool(attribute_raw & 0x00010000),
-        "use_font_space": bool(attribute_raw & 0x20000000),
-        "use_kerning": bool(attribute_raw & 0x40000000),
-    }
-    result["hwpx_compatible_flags"] = {
-        "useFontSpace": bool(attribute_raw & 0x20000000),
-        "useKerning": bool(attribute_raw & 0x40000000),
-    }
-    result["colors"] = {
-        "text": result.get("text_color", "#000000"),
-        "shade": result.get("shade_color", "none"),
-        "shadow": result.get("shadow_color", "#C0C0C0"),
-    }
-    result["u16_values"] = _payload_u16_values(values)
-    result["u32_values"] = _payload_u32_values(values)
-    return result
-
-
-def _parse_tab_def_payload(payload: bytes) -> dict[str, object]:
-    values = bytes(payload)
-    if len(values) < 8:
-        return {"attributes": int.from_bytes(values[:4].ljust(4, b"\x00"), "little", signed=False), "tabs": []}
-    attributes = int.from_bytes(values[0:4], "little", signed=False)
-    tab_count = int.from_bytes(values[4:8], "little", signed=False)
-    cursor = 8
-    tabs: list[dict[str, int]] = []
-    while len(tabs) < tab_count and cursor + 8 <= len(values):
-        tabs.append(
-            {
-                "position": int.from_bytes(values[cursor : cursor + 4], "little", signed=True),
-                "tab_type": values[cursor + 4],
-                "tab_type_name": _HWP_TAB_TYPE_NAMES.get(values[cursor + 4], f"CODE_{values[cursor + 4]}"),
-                "leader_type": values[cursor + 5],
-                "leader_type_name": _HWP_TAB_LEADER_NAMES.get(values[cursor + 5], f"CODE_{values[cursor + 5]}"),
-                "reserved": int.from_bytes(values[cursor + 6 : cursor + 8], "little", signed=False),
-            }
-        )
-        cursor += 8
-    result: dict[str, object] = {
-        "attributes": attributes,
-        "auto_tab_left": bool(attributes & 0x01),
-        "auto_tab_right": bool(attributes & 0x02),
-        "tabs": tabs,
-    }
-    if cursor < len(values):
-        result["trailing_payload"] = values[cursor:]
-    return result
-
-
-def _parse_numbering_payload(payload: bytes) -> dict[str, object]:
-    levels: list[dict[str, object]] = []
-    values = bytes(payload)
-    cursor = 0
-    for _index in range(7):
-        if cursor + 14 > len(values):
-            break
-        para_head = int.from_bytes(values[cursor : cursor + 4], "little", signed=False)
-        cursor += 4
-        width_adjust = int.from_bytes(values[cursor : cursor + 2], "little", signed=True)
-        cursor += 2
-        text_offset = int.from_bytes(values[cursor : cursor + 2], "little", signed=True)
-        cursor += 2
-        char_pr_id = int.from_bytes(values[cursor : cursor + 4], "little", signed=True)
-        cursor += 4
-        format_length = int.from_bytes(values[cursor : cursor + 2], "little", signed=False)
-        cursor += 2
-        end = min(cursor + format_length * 2, len(values))
-        format_bytes = values[cursor:end]
-        if len(format_bytes) % 2:
-            format_bytes = format_bytes[:-1]
-        cursor = end
-        levels.append(
-            {
-                "level_index": len(levels),
-                "para_head": para_head,
-                "para_head_flags": _bit_flags(para_head),
-                "width_adjust": width_adjust,
-                "text_offset": text_offset,
-                "char_pr_id": None if char_pr_id < 0 else char_pr_id,
-                "format_length": format_length,
-                "format": format_bytes.decode("utf-16-le", errors="ignore"),
-                "format_is_empty": format_length == 0,
-            }
-        )
-    unknown_short = int.from_bytes(values[cursor : cursor + 2].ljust(2, b"\x00"), "little", signed=False)
-    cursor += 2 if cursor + 2 <= len(values) else 0
-    start_numbers: list[int] = []
-    while cursor + 4 <= len(values):
-        start_numbers.append(int.from_bytes(values[cursor : cursor + 4], "little", signed=False))
-        cursor += 4
-    result: dict[str, object] = {
-        "levels": levels,
-        "unknown_short": unknown_short,
-        "unknown_short_bits": _bit_flags(unknown_short, width=16),
-        "start_numbers": start_numbers,
-        "start_number_map": {
-            f"level_{index}": value
-            for index, value in enumerate(start_numbers)
-        },
-    }
-    for index, level in enumerate(levels):
-        if index < len(start_numbers):
-            level["start_number"] = start_numbers[index]
-    if cursor < len(values):
-        result["trailing_payload"] = values[cursor:]
-    result["u16_values"] = _payload_u16_values(values)
-    result["u32_values"] = _payload_u32_values(values)
-    return result
-
-
-def _parse_bullet_payload(payload: bytes) -> dict[str, object]:
-    values = bytes(payload)
-    result: dict[str, object] = {}
-    if len(values) >= 4:
-        result["flags"] = int.from_bytes(values[0:4], "little", signed=False)
-        result["flag_bits"] = _bit_flags(int(result["flags"]))
-    if len(values) >= 6:
-        result["width_adjust"] = int.from_bytes(values[4:6], "little", signed=True)
-    if len(values) >= 8:
-        result["text_offset"] = int.from_bytes(values[6:8], "little", signed=True)
-    if len(values) >= 12:
-        char_pr_id = int.from_bytes(values[8:12], "little", signed=True)
-        result["char_pr_id"] = None if char_pr_id < 0 else char_pr_id
-    if len(values) >= 14:
-        result["bullet_char"] = values[12:14].decode("utf-16-le", errors="ignore") or "\uf0a1"
-        result["bullet_char_codepoint"] = ord(str(result["bullet_char"])[0])
-    if len(values) > 14:
-        result["unknown_tail"] = values[14:]
-    result["flag_bytes"] = list(values[:4].ljust(4, b"\x00"))
-    result["u16_values"] = _payload_u16_values(values)
-    result["u32_values"] = _payload_u32_values(values)
-    return result
-
-
-def _parse_paragraph_style_payload(payload: bytes) -> dict[str, object]:
-    values = bytes(payload)
-    result: dict[str, object] = {}
-    attributes = int.from_bytes(values[0:4].ljust(4, b"\x00"), "little", signed=False)
-    result["attributes"] = attributes
-    result["attribute_words"] = {
-        "low": int.from_bytes(values[0:2].ljust(2, b"\x00"), "little", signed=False),
-        "high": int.from_bytes(values[2:4].ljust(2, b"\x00"), "little", signed=False),
-    }
-    result["attribute_sections"] = {
-        "byte_0": values[0] if len(values) >= 1 else 0,
-        "byte_1": values[1] if len(values) >= 2 else 0,
-        "byte_2": values[2] if len(values) >= 3 else 0,
-        "byte_3": values[3] if len(values) >= 4 else 0,
-    }
-    result["alignment_code"] = attributes & 0x07
-    result["alignment_horizontal"] = {
-        0: "JUSTIFY",
-        1: "LEFT",
-        2: "RIGHT",
-        3: "CENTER",
-        4: "DISTRIBUTE",
-        5: "DISTRIBUTE_SPACE",
-    }.get(attributes & 0x07, f"CODE_{attributes & 0x07}")
-    word_break_keep_word = bool(attributes & (1 << 8))
-    result["break_setting"] = {
-        "breakLatinWord": "KEEP_WORD" if word_break_keep_word else "BREAK_WORD",
-        "breakNonLatinWord": "KEEP_WORD" if word_break_keep_word else "BREAK_WORD",
-        "widowOrphan": "1" if attributes & (1 << 9) else "0",
-        "keepWithNext": "1" if attributes & (1 << 10) else "0",
-        "keepLines": "1" if attributes & (1 << 11) else "0",
-        "pageBreakBefore": "1" if attributes & (1 << 12) else "0",
-        "lineWrap": "SQUEEZE" if attributes & (1 << 15) else "BREAK",
-    }
-    result["auto_spacing"] = {
-        "eAsianEng": "1" if attributes & (1 << 23) else "0",
-        "eAsianNum": "1" if attributes & (1 << 24) else "0",
-    }
-    result["attribute_bits"] = {
-        "snap_to_grid": bool(attributes & (1 << 7)),
-        "word_break_keep_word": word_break_keep_word,
-        "widow_orphan": bool(attributes & (1 << 9)),
-        "keep_with_next": bool(attributes & (1 << 10)),
-        "keep_lines": bool(attributes & (1 << 11)),
-        "page_break_before": bool(attributes & (1 << 12)),
-        "line_wrap_squeeze": bool(attributes & (1 << 15)),
-        "auto_space_easian_eng": bool(attributes & (1 << 23)),
-        "auto_space_easian_num": bool(attributes & (1 << 24)),
-    }
-    if len(values) >= 24:
-        result["margins"] = {
-            "intent": int.from_bytes(values[4:8], "little", signed=True),
-            "left": int.from_bytes(values[8:12], "little", signed=True),
-            "right": int.from_bytes(values[12:16], "little", signed=True),
-            "prev": int.from_bytes(values[16:20], "little", signed=True),
-            "next": int.from_bytes(values[20:24], "little", signed=True),
-            "unit": "HWPUNIT",
-        }
-    if len(values) >= 28:
-        result["line_spacing_primary"] = int.from_bytes(values[24:28], "little", signed=True)
-    if len(values) >= 30:
-        result["tab_def_id"] = int.from_bytes(values[28:30], "little", signed=False)
-    if len(values) >= 32:
-        result["numbering_bullet_id"] = int.from_bytes(values[30:32], "little", signed=False)
-    if len(values) >= 34:
-        result["border_fill_id"] = int.from_bytes(values[32:34], "little", signed=False)
-    if len(values) >= 42:
-        result["border_offsets"] = {
-            "left": int.from_bytes(values[34:36], "little", signed=False),
-            "right": int.from_bytes(values[36:38], "little", signed=False),
-            "top": int.from_bytes(values[38:40], "little", signed=False),
-            "bottom": int.from_bytes(values[40:42], "little", signed=False),
-        }
-    if len(values) >= 46:
-        result["attribute2"] = int.from_bytes(values[42:46], "little", signed=False)
-    if len(values) >= 50:
-        result["attribute3"] = int.from_bytes(values[46:50], "little", signed=False)
-    if len(values) >= 54:
-        result["line_spacing"] = int.from_bytes(values[50:54], "little", signed=True)
-        result["line_spacing_secondary"] = result["line_spacing"]
-    if "line_spacing" not in result and "line_spacing_primary" in result:
-        result["line_spacing"] = result["line_spacing_primary"]
-    result["heading"] = {
-        "type": "NUMBER" if int(result.get("numbering_bullet_id", 0)) > 0 else "NONE",
-        "idRef": str(int(result.get("numbering_bullet_id", 0))),
-        "level": "0",
-        "source": "derived_from_numbering_bullet_id",
-    }
-    result["u32_values"] = _payload_u32_values(values)
-    return result
-
-
-def _parse_style_definition_payload(payload: bytes, *, style_id: int | None = None) -> dict[str, object]:
-    cursor = 0
-    name, cursor = _parse_length_prefixed_utf16(payload, cursor)
-    english_name, cursor = _parse_length_prefixed_utf16(payload, cursor)
-    style_word = int.from_bytes(payload[cursor : cursor + 2].ljust(2, b"\x00"), "little", signed=False)
-    cursor += 2 if cursor + 2 <= len(payload) else 0
-    lang_id = int.from_bytes(payload[cursor : cursor + 2].ljust(2, b"\x00"), "little", signed=False)
-    cursor += 2 if cursor + 2 <= len(payload) else 0
-    next_style_id = int.from_bytes(payload[cursor : cursor + 2].ljust(2, b"\x00"), "little", signed=False)
-    cursor += 2 if cursor + 2 <= len(payload) else 0
-    para_pr_id = int.from_bytes(payload[cursor : cursor + 2].ljust(2, b"\x00"), "little", signed=False)
-    cursor += 2 if cursor + 2 <= len(payload) else 0
-    char_pr_id = int.from_bytes(payload[cursor : cursor + 2].ljust(2, b"\x00"), "little", signed=False)
-    style_type_code = style_word & 0x00FF
-    resolved_style_id = style_word >> 8 if style_id is None else style_id
-    result: dict[str, object] = {
-        "name": name or f"Style {resolved_style_id}",
-        "english_name": english_name,
-        "style_id": resolved_style_id,
-        "style_word": style_word,
-        "style_word_bytes": {
-            "low": style_word & 0x00FF,
-            "high": (style_word >> 8) & 0x00FF,
-        },
-        "style_slot": resolved_style_id,
-        "style_type_code": style_type_code,
-        "style_type": {0: "PARA", 1: "CHAR"}.get(style_type_code, f"CODE_{style_type_code}"),
-        "lang_id": lang_id,
-        "next_style_id": next_style_id,
-        "para_pr_id": para_pr_id,
-        "char_pr_id": char_pr_id,
-        "name_length": len(name),
-        "english_name_length": len(english_name),
-        "lang_id_hex": f"0x{lang_id:04X}",
-    }
-    if cursor < len(payload):
-        result["trailing_payload"] = payload[cursor:]
-    result["u16_values"] = _payload_u16_values(payload)
-    return result
-
-
-def _parse_shape_component_common_payload(payload: bytes) -> dict[str, object]:
-    values = bytes(payload)
-    result: dict[str, object] = {
-        "reference_bounds": {
-            "x": int.from_bytes(values[20:24].ljust(4, b"\x00"), "little", signed=False),
-            "y": int.from_bytes(values[24:28].ljust(4, b"\x00"), "little", signed=False),
-            "width": int.from_bytes(values[28:32].ljust(4, b"\x00"), "little", signed=False),
-            "height": int.from_bytes(values[32:36].ljust(4, b"\x00"), "little", signed=False),
-        }
-    }
-    if len(values) >= 202:
-        result["line_color"] = _parse_colorref(values[196:200])
-        result["line_width"] = int.from_bytes(values[200:202], "little", signed=False)
-    if len(values) >= 217:
-        result["fill_color"] = _parse_colorref(values[213:217])
-    return result
-
-
-def _shape_specific_payload_size(tag_id: int) -> int:
-    if tag_id == TAG_SHAPE_COMPONENT_LINE:
-        return 20
-    if tag_id == TAG_SHAPE_COMPONENT_RECTANGLE:
-        return 33
-    if tag_id == TAG_SHAPE_COMPONENT_ELLIPSE:
-        return 60
-    if tag_id == TAG_SHAPE_COMPONENT_ARC:
-        return 25
-    return 0
-
-
-def _shape_common_payload_size(tag_id: int) -> int:
-    if tag_id == TAG_SHAPE_COMPONENT_LINE:
-        return 11
-    if tag_id in {
-        TAG_SHAPE_COMPONENT_ELLIPSE,
-        TAG_SHAPE_COMPONENT_ARC,
-        TAG_SHAPE_COMPONENT_POLYGON,
-        TAG_SHAPE_COMPONENT_TEXTART,
-    }:
-        return 0
-    if tag_id in {
-        TAG_SHAPE_COMPONENT_RECTANGLE,
-        TAG_SHAPE_COMPONENT_CURVE,
-        TAG_SHAPE_COMPONENT_CONTAINER,
-    }:
-        return 32
-    return 0
-
-
-def _parse_line_shape_payload(payload: bytes) -> dict[str, object]:
-    values = bytes(payload)
-    return {
-        "start": {
-            "x": int.from_bytes(values[0:4].ljust(4, b"\x00"), "little", signed=True),
-            "y": int.from_bytes(values[4:8].ljust(4, b"\x00"), "little", signed=True),
-        },
-        "end": {
-            "x": int.from_bytes(values[8:12].ljust(4, b"\x00"), "little", signed=True),
-            "y": int.from_bytes(values[12:16].ljust(4, b"\x00"), "little", signed=True),
-        },
-        "attributes": int.from_bytes(values[16:20].ljust(4, b"\x00"), "little", signed=False),
-        "u16_values": _payload_u16_values(values),
-        "u32_values": _payload_u32_values(values),
-    }
-
-
-def _parse_connectline_shape_payload(payload: bytes) -> dict[str, object]:
-    values = bytes(payload)
-    return {
-        "raw_payload": values,
-        "u16_values": _payload_u16_values(values),
-        "u32_values": _payload_u32_values(values),
-        "variant": "hancom_connectline",
-    }
-
-
-def _parse_rectangle_shape_payload(payload: bytes) -> dict[str, object]:
-    values = bytes(payload)
-    return {
-        "corner_radius": int.from_bytes(values[0:4].ljust(4, b"\x00"), "little", signed=False) if values else 0,
-        "raw_payload": values,
-        "u16_values": _payload_u16_values(values),
-        "u32_values": _payload_u32_values(values),
-    }
-
-
-def _parse_ellipse_shape_payload(payload: bytes) -> dict[str, object]:
-    values = bytes(payload)
-    u32_values = list(struct.unpack("<15i", values[:60].ljust(60, b"\x00"))) if values else [0] * 15
-    return {
-        "arc_flags": u32_values[0],
-        "center": {"x": u32_values[1], "y": u32_values[2]},
-        "axis1": {"x": u32_values[3], "y": u32_values[4]},
-        "axis2": {"x": u32_values[5], "y": u32_values[6]},
-        "start": {"x": u32_values[7], "y": u32_values[8]},
-        "end": {"x": u32_values[9], "y": u32_values[10]},
-        "start_2": {"x": u32_values[11], "y": u32_values[12]},
-        "end_2": {"x": u32_values[13], "y": u32_values[14]},
-        "u16_values": _payload_u16_values(values),
-        "u32_values": _payload_u32_values(values),
-    }
-
-
-def _parse_arc_shape_payload(payload: bytes) -> dict[str, object]:
-    values = bytes(payload)
-    u32_values = list(struct.unpack("<7i", values[:28].ljust(28, b"\x00"))) if values else [0] * 7
-    return {
-        "arc_type": u32_values[0],
-        "center": {"x": u32_values[1], "y": u32_values[2]},
-        "axis1": {"x": u32_values[3], "y": u32_values[4]},
-        "axis2": {"x": u32_values[5], "y": u32_values[6]},
-        "u16_values": _payload_u16_values(values),
-        "u32_values": _payload_u32_values(values),
-    }
-
-
-def _parse_polygon_shape_payload(payload: bytes) -> dict[str, object]:
-    values = bytes(payload)
-    point_count = int.from_bytes(values[0:2].ljust(2, b"\x00"), "little", signed=False)
-    cursor = 2
-    x_values: list[int] = []
-    y_values: list[int] = []
-    for _ in range(point_count):
-        if cursor + 4 > len(values):
-            break
-        x_values.append(int.from_bytes(values[cursor : cursor + 4], "little", signed=True))
-        cursor += 4
-    for _ in range(point_count):
-        if cursor + 4 > len(values):
-            break
-        y_values.append(int.from_bytes(values[cursor : cursor + 4], "little", signed=True))
-        cursor += 4
-    return {
-        "point_count": point_count,
-        "points": [{"x": x_values[index], "y": y_values[index]} for index in range(min(len(x_values), len(y_values)))],
-        "trailing_payload": values[cursor:] if cursor < len(values) else b"",
-        "u16_values": _payload_u16_values(values),
-        "u32_values": _payload_u32_values(values),
-    }
-
-
-def _parse_curve_shape_payload(payload: bytes) -> dict[str, object]:
-    values = bytes(payload)
-    return {
-        "raw_payload": values,
-        "u16_values": _payload_u16_values(values),
-        "u32_values": _payload_u32_values(values),
-    }
-
-
-def _parse_container_shape_payload(payload: bytes) -> dict[str, object]:
-    values = bytes(payload)
-    return {
-        "raw_payload": values,
-        "u16_values": _payload_u16_values(values),
-        "u32_values": _payload_u32_values(values),
-    }
-
 def _normalize_stream_path(path: str | tuple[str, ...] | list[str]) -> str:
     if isinstance(path, str):
         return path.strip("/").replace("\\", "/")
@@ -4609,575 +2573,18 @@ class ParagraphTextRecord(TypedRecord):
         return super().to_record()
 
 
-def record_node_from_record(record: HwpRecord) -> RecordNode:
-    if record.tag_id == TAG_DOCUMENT_PROPERTIES:
-        return DocumentPropertiesRecord.from_record(record)
-    if record.tag_id == TAG_ID_MAPPINGS:
-        return IdMappingsRecord.from_record(record)
-    if record.tag_id == TAG_BIN_DATA:
-        return BinDataRecord.from_record(record)
-    if record.tag_id == TAG_FACE_NAME:
-        return FaceNameRecord.from_record(record)
-    if record.tag_id == TAG_BORDER_FILL:
-        return BorderFillRecord.from_record(record)
-    if record.tag_id == TAG_CHAR_SHAPE:
-        return CharShapeRecord.from_record(record)
-    if record.tag_id == TAG_TAB_DEF:
-        return TabDefRecord.from_record(record)
-    if record.tag_id == TAG_NUMBERING:
-        return NumberingRecord.from_record(record)
-    if record.tag_id == TAG_BULLET:
-        return BulletRecord.from_record(record)
-    if record.tag_id == TAG_PARA_SHAPE:
-        return ParaShapeRecord.from_record(record)
-    if record.tag_id == TAG_STYLE:
-        return StyleRecord.from_record(record)
-    if record.tag_id == TAG_DOC_DATA:
-        return DocDataRecord.from_record(record)
-    if record.tag_id == TAG_COMPATIBLE_DOCUMENT:
-        return CompatibleDocumentRecord.from_record(record)
-    if record.tag_id == TAG_LAYOUT_COMPATIBILITY:
-        return LayoutCompatibilityRecord.from_record(record)
-    if record.tag_id == TAG_MEMO_SHAPE:
-        return MemoShapeRecord.from_record(record)
-    if record.tag_id == TAG_FORM_OBJECT:
-        return FormObjectRecord.from_record(record)
-    if record.tag_id == TAG_MEMO_LIST:
-        return MemoListRecord.from_record(record)
-    if record.tag_id == TAG_CHART_DATA:
-        return ChartDataRecord.from_record(record)
-    if record.tag_id == TAG_TRACK_CHANGE:
-        return TrackChangeRecord.from_record(record)
-    if record.tag_id == TAG_TRACK_CHANGE_AUTHOR:
-        return TrackChangeAuthorRecord.from_record(record)
-    if record.tag_id == TAG_CTRL_DATA:
-        return ControlDataRecord.from_record(record)
-    if record.tag_id == TAG_CTRL_HEADER:
-        control_id = _decode_control_id_payload(record.payload)
-        if control_id == "secd":
-            return SectionDefinitionControlRecord.from_record(record)  # type: ignore[attr-defined]
-        if control_id == "pghd":
-            return PageHidingControlRecord.from_record(record)  # type: ignore[attr-defined]
-        if control_id == "pgct":
-            return PageStartsOnControlRecord.from_record(record)  # type: ignore[attr-defined]
-        if control_id == "pgnp":
-            return PageNumberControlRecord.from_record(record)  # type: ignore[attr-defined]
-        if control_id == "bokm":
-            return BookmarkControlRecord.from_record(record)  # type: ignore[attr-defined]
-        if control_id in {"nwno", "atno"}:
-            return AutoNumberControlRecord.from_record(record)  # type: ignore[attr-defined]
-        if control_id in {"head", "foot"}:
-            return HeaderFooterControlRecord.from_record(record)  # type: ignore[attr-defined]
-        if control_id in {"fn  ", "en  "}:
-            return NoteControlRecord.from_record(record)  # type: ignore[attr-defined]
-        if control_id == "%hlk":
-            return HyperlinkControlRecord.from_record(record)  # type: ignore[attr-defined]
-        if control_id.startswith("%"):
-            return FieldControlRecord.from_record(record)  # type: ignore[attr-defined]
-        if control_id == "eqed":
-            return EquationControlRecord.from_record(record)  # type: ignore[attr-defined]
-        if control_id == "gso ":
-            return GraphicControlRecord.from_record(record)  # type: ignore[attr-defined]
-        if control_id == "tbl ":
-            return TableControlRecord.from_record(record)  # type: ignore[attr-defined]
-        return ControlHeaderRecord.from_record(record)  # type: ignore[attr-defined]
-    if record.tag_id == TAG_PARA_HEADER:
-        return ParagraphHeaderRecord.from_record(record)
-    if record.tag_id == TAG_PARA_TEXT:
-        return ParagraphTextRecord.from_record(record)
-    if record.tag_id == TAG_LIST_HEADER:
-        return ListHeaderRecord.from_record(record)
-    if record.tag_id == TAG_PAGE_DEF:
-        return PageDefRecord.from_record(record)
-    if record.tag_id == TAG_FOOTNOTE_SHAPE:
-        return FootnoteShapeRecord.from_record(record)
-    if record.tag_id == TAG_PAGE_BORDER_FILL:
-        return PageBorderFillRecord.from_record(record)
-    if record.tag_id == TAG_EQEDIT:
-        return EqEditRecord.from_record(record)
-    if record.tag_id == TAG_SHAPE_COMPONENT:
-        return ShapeComponentRecord.from_record(record)
-    if record.tag_id == TAG_SHAPE_COMPONENT_LINE:
-        return LineShapeComponentRecord.from_record(record)
-    if record.tag_id == TAG_SHAPE_COMPONENT_RECTANGLE:
-        return RectangleShapeComponentRecord.from_record(record)
-    if record.tag_id == TAG_SHAPE_COMPONENT_ELLIPSE:
-        return EllipseShapeComponentRecord.from_record(record)
-    if record.tag_id == TAG_SHAPE_COMPONENT_ARC:
-        return ArcShapeComponentRecord.from_record(record)
-    if record.tag_id == TAG_SHAPE_COMPONENT_POLYGON:
-        return PolygonShapeComponentRecord.from_record(record)
-    if record.tag_id == TAG_SHAPE_COMPONENT_CURVE:
-        return CurveShapeComponentRecord.from_record(record)
-    if record.tag_id == TAG_SHAPE_COMPONENT_CONTAINER:
-        return ContainerShapeComponentRecord.from_record(record)
-    if record.tag_id == TAG_SHAPE_COMPONENT_OLE:
-        return OleShapeComponentRecord.from_record(record)
-    if record.tag_id == TAG_SHAPE_COMPONENT_PICTURE:
-        return PictureShapeComponentRecord.from_record(record)
-    if record.tag_id == TAG_SHAPE_COMPONENT_TEXTART:
-        return TextArtShapeComponentRecord.from_record(record)
-    if record.tag_id in TAG_NAMES:
-        return TypedRecord(
-            tag_id=record.tag_id,
-            level=record.level,
-            payload=record.payload,
-            header_size=record.header_size,
-            offset=record.offset,
-        )
-    return UnknownRecord(
-        tag_id=record.tag_id,
-        level=record.level,
-        payload=record.payload,
-        header_size=record.header_size,
-        offset=record.offset,
-    )
-
-
-def build_record_tree(records: list[HwpRecord]) -> list[RecordNode]:
-    roots: list[RecordNode] = []
-    stack: list[RecordNode] = []
-    for record in records:
-        node = record_node_from_record(record)
-        while stack and stack[-1].level >= node.level:
-            stack.pop()
-        if stack:
-            stack[-1].children.append(node)
-        else:
-            roots.append(node)
-        stack.append(node)
-    _specialize_record_tree(roots)
-    return roots
-
-
-def _specialize_record_tree(nodes: list[RecordNode]) -> None:
-    for index, node in enumerate(list(nodes)):
-        if node.children:
-            _specialize_record_tree(node.children)
-        nodes[index] = _specialize_record_node(node)
-
-
-def _specialize_record_node(node: RecordNode) -> RecordNode:
-    if isinstance(node, GraphicControlRecord) and type(node) is GraphicControlRecord:
-        if any(isinstance(descendant, OleShapeComponentRecord) for descendant in node.iter_descendants()):
-            return OleControlRecord(
-                level=node.level,
-                payload=node.payload,
-                header_size=node.header_size,
-                offset=node.offset,
-                children=node.children,
-            )
-        if any(isinstance(descendant, PictureShapeComponentRecord) for descendant in node.iter_descendants()):
-            return PictureControlRecord(
-                level=node.level,
-                payload=node.payload,
-                header_size=node.header_size,
-                offset=node.offset,
-                children=node.children,
-            )
-        return ShapeControlRecord(
-            level=node.level,
-            payload=node.payload,
-            header_size=node.header_size,
-            offset=node.offset,
-            children=node.children,
-        )
-    return node
-
-
-def flatten_record_tree(roots: list[RecordNode]) -> list[HwpRecord]:
-    records: list[HwpRecord] = []
-    for root in roots:
-        records.extend(root.to_records())
-    return records
-
-
-@dataclass
-class DocInfoModel:
-    roots: list[RecordNode]
-
-    @classmethod
-    def from_records(cls, records: list[HwpRecord]) -> "DocInfoModel":
-        return cls(roots=build_record_tree(records))
-
-    def document_properties_record(self) -> DocumentPropertiesRecord:
-        for root in self.roots:
-            if isinstance(root, DocumentPropertiesRecord):
-                return root
-        raise InvalidHwpFileError("DocInfo does not start with a document properties record.")
-
-    def document_properties(self) -> HwpDocumentProperties:
-        return self.document_properties_record().to_properties()
-
-    def id_mappings_record(self) -> IdMappingsRecord:
-        for root in self.roots:
-            if isinstance(root, IdMappingsRecord):
-                return root
-        raise InvalidHwpFileError("DocInfo does not contain an id mappings record.")
-
-    def bin_data_records(self) -> list[BinDataRecord]:
-        return [node for node in self.iter_nodes() if isinstance(node, BinDataRecord)]
-
-    def face_name_records(self) -> list[FaceNameRecord]:
-        return self.records_by_tag_id(TAG_FACE_NAME)
-
-    def border_fill_records(self) -> list[BorderFillRecord]:
-        return self.records_by_tag_id(TAG_BORDER_FILL)
-
-    def char_shape_records(self) -> list[CharShapeRecord]:
-        return self.records_by_tag_id(TAG_CHAR_SHAPE)
-
-    def tab_def_records(self) -> list[TabDefRecord]:
-        return self.records_by_tag_id(TAG_TAB_DEF)
-
-    def numbering_records(self) -> list[NumberingRecord]:
-        return self.records_by_tag_id(TAG_NUMBERING)
-
-    def bullet_records(self) -> list[BulletRecord]:
-        return self.records_by_tag_id(TAG_BULLET)
-
-    def para_shape_records(self) -> list[ParaShapeRecord]:
-        return self.records_by_tag_id(TAG_PARA_SHAPE)
-
-    def style_records(self) -> list[StyleRecord]:
-        return self.records_by_tag_id(TAG_STYLE)
-
-    def face_name_fields(self) -> list[dict[str, object]]:
-        return [record.fields() for record in self.face_name_records()]
-
-    def border_fill_fields(self) -> list[dict[str, object]]:
-        return [record.fields() for record in self.border_fill_records()]
-
-    def char_shape_fields(self) -> list[dict[str, object]]:
-        return [record.fields() for record in self.char_shape_records()]
-
-    def tab_def_fields(self) -> list[dict[str, object]]:
-        return [record.fields() for record in self.tab_def_records()]
-
-    def numbering_fields(self) -> list[dict[str, object]]:
-        return [record.fields() for record in self.numbering_records()]
-
-    def bullet_fields(self) -> list[dict[str, object]]:
-        return [record.fields() for record in self.bullet_records()]
-
-    def para_shape_fields(self) -> list[dict[str, object]]:
-        return [record.fields() for record in self.para_shape_records()]
-
-    def style_fields(self) -> list[dict[str, object]]:
-        return [record.fields(style_id=index) for index, record in enumerate(self.style_records())]
-
-    def doc_data_records(self) -> list[DocDataRecord]:
-        return self.records_by_tag_id(TAG_DOC_DATA)
-
-    def compatible_document_records(self) -> list[CompatibleDocumentRecord]:
-        return self.records_by_tag_id(TAG_COMPATIBLE_DOCUMENT)
-
-    def layout_compatibility_records(self) -> list[LayoutCompatibilityRecord]:
-        return self.records_by_tag_id(TAG_LAYOUT_COMPATIBILITY)
-
-    def memo_shape_records(self) -> list[MemoShapeRecord]:
-        return self.records_by_tag_id(TAG_MEMO_SHAPE)
-
-    def track_change_records(self) -> list[TrackChangeRecord]:
-        return self.records_by_tag_id(TAG_TRACK_CHANGE)
-
-    def track_change_author_records(self) -> list[TrackChangeAuthorRecord]:
-        return self.records_by_tag_id(TAG_TRACK_CHANGE_AUTHOR)
-
-    def next_bin_data_id(self) -> int:
-        id_record = self.id_mappings_record()
-        return id_record.bin_data_count + 1
-
-    def add_embedded_bindata(self, extension: str, *, storage_id: int | None = None, flags: int = 0x0001) -> BinDataRecord:
-        id_record = self.id_mappings_record()
-        if storage_id is None:
-            storage_id = self.next_bin_data_id()
-        bindata = BinDataRecord.embedded(level=0, storage_id=storage_id, extension=extension, flags=flags)
-        insert_at = 0
-        for index, root in enumerate(self.roots):
-            if isinstance(root, BinDataRecord):
-                insert_at = index + 1
-            elif isinstance(root, IdMappingsRecord):
-                insert_at = index + 1
-        self.roots.insert(insert_at, bindata)
-        id_record.bin_data_count = max(id_record.bin_data_count, storage_id)
-        return bindata
-
-    def remove_bindata(self, storage_id: int) -> bool:
-        for index, root in enumerate(self.roots):
-            if isinstance(root, BinDataRecord) and root.storage_id == storage_id:
-                del self.roots[index]
-                id_record = self.id_mappings_record()
-                remaining_ids = [record.storage_id or 0 for record in self.bin_data_records()]
-                id_record.bin_data_count = max(remaining_ids, default=0)
-                return True
-        return False
-
-    def tag_counts(self) -> dict[str, int]:
-        counts: dict[str, int] = {}
-        for node in self.iter_nodes():
-            counts[node.tag_name] = counts.get(node.tag_name, 0) + 1
-        return counts
-
-    def iter_nodes(self) -> Iterator[RecordNode]:
-        for root in self.roots:
-            yield from root.iter_preorder()
-
-    def records_by_tag_id(self, tag_id: int) -> list[RecordNode]:
-        return [node for node in self.iter_nodes() if node.tag_id == tag_id]
-
-    def to_records(self) -> list[HwpRecord]:
-        return flatten_record_tree(self.roots)
-
-    def to_bytes(self) -> bytes:
-        return b"".join(record.to_bytes() for record in self.to_records())
-
-
-@dataclass
-class SectionParagraphModel:
-    section_index: int
-    index: int
-    header: ParagraphHeaderRecord
-
-    def text_record(self) -> ParagraphTextRecord | None:
-        for node in self.header.iter_descendants():
-            if isinstance(node, ParagraphTextRecord):
-                return node
-        return None
-
-    @property
-    def raw_text(self) -> str:
-        text_record = self.text_record()
-        return text_record.raw_text if text_record is not None else ""
-
-    @property
-    def text(self) -> str:
-        text_record = self.text_record()
-        return text_record.text if text_record is not None else ""
-
-    def control_nodes(self) -> list[RecordNode]:
-        return [node for node in self.header.iter_descendants() if node.tag_id == TAG_CTRL_HEADER]
-
-    def descendant_nodes(self) -> list[RecordNode]:
-        return list(self.header.iter_descendants())
-
-    def set_text_same_length(self, value: str) -> None:
-        text_record = self.text_record()
-        if text_record is None:
-            raise HwpBinaryEditError("Paragraph does not contain a para text record.")
-        if text_record.raw_text != text_record.text:
-            raise HwpBinaryEditError(
-                "SectionParagraphModel.set_text_same_length is only supported for paragraphs without hidden control characters."
-            )
-        text_record.set_text_same_length(value)
-        self.header.char_count = len(value)
-
-    def replace_text_same_length(self, old: str, new: str, *, count: int = -1) -> int:
-        text_record = self.text_record()
-        if text_record is None:
-            return 0
-        replaced = text_record.replace_text_same_length(old, new, count=count)
-        self.header.char_count = len(text_record.raw_text)
-        return replaced
-
-
-@dataclass
-class SectionModel:
-    section_index: int
-    roots: list[RecordNode]
-    _paragraphs_cache: list[SectionParagraphModel] | None = field(default=None, init=False, repr=False)
-
-    @classmethod
-    def from_records(cls, section_index: int, records: list[HwpRecord]) -> "SectionModel":
-        return cls(section_index=section_index, roots=build_record_tree(records))
-
-    def iter_nodes(self) -> Iterator[RecordNode]:
-        for root in self.roots:
-            yield from root.iter_preorder()
-
-    def paragraphs(self) -> list[SectionParagraphModel]:
-        if self._paragraphs_cache is not None:
-            return self._paragraphs_cache
-        paragraphs: list[SectionParagraphModel] = []
-        paragraph_index = 0
-        for root in self.iter_nodes():
-            if isinstance(root, ParagraphHeaderRecord):
-                paragraphs.append(
-                    SectionParagraphModel(
-                        section_index=self.section_index,
-                        index=paragraph_index,
-                        header=root,
-                    )
-                )
-                paragraph_index += 1
-        self._paragraphs_cache = paragraphs
-        return paragraphs
-
-    def control_nodes(self) -> list[ControlHeaderRecord]:
-        return [node for node in self.iter_nodes() if isinstance(node, ControlHeaderRecord)]
-
-    def controls(self) -> list[ControlHeaderRecord]:
-        return self.control_nodes()
-
-    def controls_by_id(self, control_id: str) -> list[ControlHeaderRecord]:
-        return [node for node in self.control_nodes() if node.control_id == control_id]
-
-    def section_definition_control(self) -> SectionDefinitionControlRecord | None:
-        control = _find_section_definition_control_node(self)
-        return control if isinstance(control, SectionDefinitionControlRecord) else None
-
-    def page_hiding_control(self) -> PageHidingControlRecord | None:
-        control = _find_paragraph_control_node(self, "pghd")
-        return control if isinstance(control, PageHidingControlRecord) else None
-
-    def page_starts_on_control(self) -> PageStartsOnControlRecord | None:
-        control = _find_paragraph_control_node(self, "pgct")
-        return control if isinstance(control, PageStartsOnControlRecord) else None
-
-    def page_number_controls(self) -> list[PageNumberControlRecord]:
-        return [node for node in self.control_nodes() if isinstance(node, PageNumberControlRecord)]
-
-    def form_object_records(self) -> list[FormObjectRecord]:
-        return [node for node in self.iter_nodes() if isinstance(node, FormObjectRecord)]
-
-    def memo_list_records(self) -> list[MemoListRecord]:
-        return [node for node in self.iter_nodes() if isinstance(node, MemoListRecord)]
-
-    def chart_data_records(self) -> list[ChartDataRecord]:
-        return [node for node in self.iter_nodes() if isinstance(node, ChartDataRecord)]
-
-    def append_paragraph(
-        self,
-        text: str,
-        *,
-        para_shape_id: int = 0,
-        style_id: int = 0,
-        split_flags: int = 0,
-        control_mask: int = 0,
-    ) -> SectionParagraphModel:
-        header = ParagraphHeaderRecord(
-            level=0,
-            char_count=len(text),
-            control_mask=control_mask,
-            para_shape_id=para_shape_id,
-            style_id=style_id,
-            split_flags=split_flags,
-        )
-        header.add_child(ParagraphTextRecord(level=1, raw_text=text))
-        paragraph = SectionParagraphModel(
-            section_index=self.section_index,
-            index=len(self.paragraphs()),
-            header=header,
-        )
-        self.roots.append(header)
-        self.paragraphs().append(paragraph)
-        return paragraph
-
-    def insert_paragraph(
-        self,
-        paragraph_index: int,
-        text: str,
-        *,
-        para_shape_id: int = 0,
-        style_id: int = 0,
-        split_flags: int = 0,
-        control_mask: int = 0,
-    ) -> SectionParagraphModel:
-        current_paragraphs = self.paragraphs()
-        if paragraph_index < 0 or paragraph_index > len(current_paragraphs):
-            raise IndexError(f"paragraph_index {paragraph_index} is out of range for section {self.section_index}.")
-        header = ParagraphHeaderRecord(
-            level=0,
-            char_count=len(text),
-            control_mask=control_mask,
-            para_shape_id=para_shape_id,
-            style_id=style_id,
-            split_flags=split_flags,
-        )
-        header.add_child(ParagraphTextRecord(level=1, raw_text=text))
-        if paragraph_index == len(current_paragraphs):
-            self.roots.append(header)
-        else:
-            root_index = self._root_insert_index_for_paragraph(paragraph_index)
-            self.roots.insert(root_index, header)
-        self._paragraphs_cache = None
-        return SectionParagraphModel(
-            section_index=self.section_index,
-            index=paragraph_index,
-            header=header,
-        )
-
-    def _root_insert_index_for_paragraph(self, paragraph_index: int) -> int:
-        seen = 0
-        for root_index, root in enumerate(self.roots):
-            paragraph_count = sum(1 for node in root.iter_preorder() if isinstance(node, ParagraphHeaderRecord))
-            if seen + paragraph_count > paragraph_index:
-                return root_index
-            seen += paragraph_count
-        return len(self.roots)
-
-    def to_records(self) -> list[HwpRecord]:
-        return flatten_record_tree(self.roots)
-
-    def to_bytes(self) -> bytes:
-        return b"".join(record.to_bytes() for record in self.to_records())
-
-
-def _iter_records(data: bytes) -> Iterator[HwpRecord]:
-    offset = 0
-    while offset + 4 <= len(data):
-        header = int.from_bytes(data[offset : offset + 4], "little")
-        tag_id = header & 0x3FF
-        level = (header >> 10) & 0x3FF
-        size = (header >> 20) & 0xFFF
-        header_size = 4
-        if size == 0xFFF:
-            if offset + 8 > len(data):
-                break
-            size = int.from_bytes(data[offset + 4 : offset + 8], "little")
-            header_size = 8
-        payload_offset = offset + header_size
-        payload_end = payload_offset + size
-        if payload_end > len(data):
-            break
-        yield HwpRecord(
-            tag_id=tag_id,
-            level=level,
-            size=size,
-            header_size=header_size,
-            offset=offset,
-            payload=data[payload_offset:payload_end],
-        )
-        offset = payload_end
-
-
-def _strip_para_text_controls(raw_text: str) -> str:
-    units = list(struct.unpack("<" + "H" * (len(raw_text.encode("utf-16-le")) // 2), raw_text.encode("utf-16-le")))
-    output: list[str] = []
-    index = 0
-    while index < len(units):
-        value = units[index]
-        if value >= 32:
-            output.append(chr(value))
-            index += 1
-            continue
-
-        if value in (9, 10, 13):
-            output.append(chr(value))
-
-        # HWP extended/inline controls occupy 8 UTF-16 code units total.
-        if (
-            index + 7 < len(units)
-            and units[index + 3] == 0
-            and units[index + 4] == 0
-            and units[index + 5] == 0
-            and units[index + 6] == 0
-        ):
-            index += 8
-            continue
-
-        index += 1
-    return "".join(output)
+from ._hwp_record_tree import (  # noqa: E402, F401 - compatibility re-exports
+    DocInfoModel,
+    SectionModel,
+    SectionParagraphModel,
+    _iter_records,
+    _specialize_record_node,
+    _specialize_record_tree,
+    _strip_para_text_controls,
+    build_record_tree,
+    flatten_record_tree,
+    record_node_from_record,
+)
 
 
 class HwpBinaryDocument:
@@ -5199,6 +2606,10 @@ class HwpBinaryDocument:
         self._dirty = False
         self._section_model_batch_depth = 0
         self._section_model_cache: dict[int, SectionModel] = {}
+        self._section_model_dirty: set[int] = set()
+        self._docinfo_model_batch_depth = 0
+        self._docinfo_model_cache: DocInfoModel | None = None
+        self._docinfo_model_cache_dirty = False
 
     @classmethod
     def open(cls, path: str | Path) -> "HwpBinaryDocument":
@@ -5327,7 +2738,6 @@ class HwpBinaryDocument:
         if normalized not in self._streams:
             raise KeyError(normalized)
 
-        original_size = self._original_sizes[normalized]
         if compress is None:
             compress = self._stream_is_compressed(normalized)
 
@@ -5359,10 +2769,43 @@ class HwpBinaryDocument:
         return _parse_document_properties_payload(records[0].payload)
 
     def docinfo_model(self) -> DocInfoModel:
+        if self._docinfo_model_batch_depth > 0:
+            if self._docinfo_model_cache is None:
+                self._docinfo_model_cache = DocInfoModel.from_records(self.docinfo_records())
+            return self._docinfo_model_cache
         return DocInfoModel.from_records(self.docinfo_records())
 
     def replace_docinfo_model(self, model: DocInfoModel) -> None:
+        if self._docinfo_model_batch_depth > 0:
+            self._docinfo_model_cache = model
+            self._docinfo_model_cache_dirty = True
+            self._dirty = True
+            return
         self.write_stream("DocInfo", model.to_bytes(), compress=True)
+
+    def begin_docinfo_model_batch(self) -> None:
+        self._docinfo_model_batch_depth += 1
+
+    def end_docinfo_model_batch(self) -> None:
+        if self._docinfo_model_batch_depth <= 0:
+            return
+        self._docinfo_model_batch_depth -= 1
+        if self._docinfo_model_batch_depth > 0:
+            return
+        model = self._docinfo_model_cache
+        dirty = self._docinfo_model_cache_dirty
+        self._docinfo_model_cache = None
+        self._docinfo_model_cache_dirty = False
+        if dirty and model is not None:
+            self.write_stream("DocInfo", model.to_bytes(), compress=True)
+
+    @contextmanager
+    def docinfo_model_batch(self) -> Iterator[None]:
+        self.begin_docinfo_model_batch()
+        try:
+            yield
+        finally:
+            self.end_docinfo_model_batch()
 
     def section_records(self, section_index: int) -> list[HwpRecord]:
         path = self.section_stream_paths()[section_index]
@@ -5386,6 +2829,7 @@ class HwpBinaryDocument:
     def replace_section_model(self, section_index: int, model: SectionModel) -> None:
         if self._section_model_batch_depth > 0:
             self._section_model_cache[section_index] = model
+            self._section_model_dirty.add(section_index)
             self._dirty = True
             return
         self.replace_section_records(section_index, model.to_records())
@@ -5400,9 +2844,19 @@ class HwpBinaryDocument:
         if self._section_model_batch_depth > 0:
             return
         cached_models = self._section_model_cache
+        dirty_indexes = self._section_model_dirty
         self._section_model_cache = {}
-        for section_index, model in cached_models.items():
-            self.replace_section_records(section_index, model.to_records())
+        self._section_model_dirty = set()
+        for section_index in dirty_indexes:
+            self.replace_section_records(section_index, cached_models[section_index].to_records())
+
+    @contextmanager
+    def section_model_batch(self) -> Iterator[None]:
+        self.begin_section_model_batch()
+        try:
+            yield
+        finally:
+            self.end_section_model_batch()
 
     def ensure_section_count(self, section_count: int) -> None:
         if section_count < 1:
@@ -6658,7 +4112,7 @@ class HwpBinaryDocument:
         model = self.section_model(target_section_index)
         paragraphs = model.paragraphs()
         if not paragraphs:
-            paragraph = model.append_paragraph("\r")
+            model.append_paragraph("\r")
             paragraphs = model.paragraphs()
         target_paragraph = paragraphs[0]
         control_node = next(

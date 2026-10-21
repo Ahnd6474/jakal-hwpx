@@ -5,7 +5,7 @@ The machine-readable source of truth is [`stability_contract.json`](./stability_
 
 ## Runtime Scope
 
-- Supported Python runtimes: CPython `3.11`, `3.12`, `3.13`
+- Supported Python runtimes: CPython `3.11`, `3.12`, `3.13`, `3.14`
 - The contract is enforced against the versions declared in [`pyproject.toml`](./pyproject.toml)
 
 ## Format Tiers
