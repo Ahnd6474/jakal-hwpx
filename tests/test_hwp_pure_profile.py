@@ -5,12 +5,11 @@ from pathlib import Path
 from jakal_hwpx import HwpBinaryDocument, HwpDocument, HwpPureProfile, build_hwp_pure_profile, bundled_hwp_profile_root
 
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
-COLLECTION_ROOT = REPO_ROOT / "hwp_collection"
-
-
-def test_build_hwp_pure_profile_creates_base_and_feature_templates(tmp_path: Path) -> None:
-    profile = build_hwp_pure_profile(COLLECTION_ROOT, tmp_path)
+def test_build_hwp_pure_profile_creates_base_and_feature_templates(
+    tmp_path: Path,
+    hwp_collection_dir: Path,
+) -> None:
+    profile = build_hwp_pure_profile(hwp_collection_dir, tmp_path)
 
     assert profile.base_path.exists()
     assert set(profile.template_paths) == {"table", "picture", "hyperlink"}
@@ -19,8 +18,11 @@ def test_build_hwp_pure_profile_creates_base_and_feature_templates(tmp_path: Pat
     assert profile.target_section_index >= 0
 
 
-def test_hwp_document_blank_from_profile_can_append_pure_templates(tmp_path: Path) -> None:
-    profile = build_hwp_pure_profile(COLLECTION_ROOT, tmp_path / "profile")
+def test_hwp_document_blank_from_profile_can_append_pure_templates(
+    tmp_path: Path,
+    hwp_collection_dir: Path,
+) -> None:
+    profile = build_hwp_pure_profile(hwp_collection_dir, tmp_path / "profile")
     loaded_profile = HwpPureProfile.load(profile.root)
 
     document = HwpDocument.blank_from_profile(loaded_profile.root)

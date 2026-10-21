@@ -196,6 +196,11 @@ def _run_pytest(output_dir: Path, *, temp_root: Path) -> dict[str, Any]:
     )
     _write_text(output_dir / "pytest.stdout.log", completed.stdout)
     _write_text(output_dir / "pytest.stderr.log", completed.stderr)
+    if completed.returncode != 0:
+        if completed.stdout:
+            print(completed.stdout, end="" if completed.stdout.endswith("\n") else "\n")
+        if completed.stderr:
+            print(completed.stderr, end="" if completed.stderr.endswith("\n") else "\n", file=sys.stderr)
     detail = completed.stderr.strip() or completed.stdout.strip()
     return {
         "command": command,

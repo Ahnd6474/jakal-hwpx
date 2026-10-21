@@ -83,9 +83,6 @@ jobs:
         run: |
           mkdir -p build/test-results
           python -m tox run -e "${{ matrix.tox-env }}" -- \
-            --ignore=tests/test_hwp_collection.py \
-            --ignore=tests/test_hwp_pure_profile.py \
-            --ignore=tests/test_hwp_template_lab.py \
             --junitxml="build/test-results/python-${{ matrix.python-version }}.xml"
 
       - name: Upload test report

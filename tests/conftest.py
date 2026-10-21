@@ -16,6 +16,7 @@ from lxml import etree
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SRC_ROOT = REPO_ROOT / "src"
 SAMPLE_CORPUS_DIR = REPO_ROOT / "examples" / "samples" / "hwpx"
+HWP_COLLECTION_DIR = REPO_ROOT / "hwp_collection"
 
 if str(SRC_ROOT) not in sys.path:
     sys.path.insert(0, str(SRC_ROOT))
@@ -71,6 +72,13 @@ def valid_hwpx_files(sample_corpus_dir: Path) -> list[Path]:
 @pytest.fixture(scope="session")
 def sample_hwpx_path(valid_hwpx_files: list[Path]) -> Path:
     return valid_hwpx_files[0]
+
+
+@pytest.fixture(scope="session")
+def hwp_collection_dir() -> Path:
+    if not HWP_COLLECTION_DIR.exists() or not any(HWP_COLLECTION_DIR.glob("*.hwp")):
+        pytest.skip("Optional local HWP donor corpus is not available.")
+    return HWP_COLLECTION_DIR
 
 
 def _tmp_dir_name(nodeid: str) -> str:
