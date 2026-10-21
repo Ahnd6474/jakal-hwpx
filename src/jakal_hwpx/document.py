@@ -44,6 +44,7 @@ from ._hwpx_document_controls import (
     _canonical_append_block_type,  # noqa: F401 - compatibility re-export
 )
 from ._hwpx_validation import HwpxValidationMixin
+from ._ole_payloads import default_ole_cfb_bytes, normalize_hwpx_ole_payload
 from .elements import (
     AutoNumberXml,
     BookmarkXml,
@@ -207,11 +208,10 @@ def _default_chart_fallback_ole_bytes() -> bytes:
     candidate = Path(__file__).resolve().parents[2] / ".codex-temp" / "HwpForge" / _DEFAULT_CHART_FALLBACK_OLE_FIXTURE
     if candidate.exists():
         with zipfile.ZipFile(candidate) as archive:
-            _DEFAULT_CHART_FALLBACK_OLE_BYTES = archive.read("BinData/ole1.ole")
+            _DEFAULT_CHART_FALLBACK_OLE_BYTES = normalize_hwpx_ole_payload(archive.read("BinData/ole1.ole"))
             return _DEFAULT_CHART_FALLBACK_OLE_BYTES
 
-    # Fallback stub: enough to keep the package structurally valid when the probe fixture is absent.
-    _DEFAULT_CHART_FALLBACK_OLE_BYTES = bytes.fromhex("d0cf11e0a1b11ae1") + (b"\x00" * 504)
+    _DEFAULT_CHART_FALLBACK_OLE_BYTES = normalize_hwpx_ole_payload(default_ole_cfb_bytes())
     return _DEFAULT_CHART_FALLBACK_OLE_BYTES
 
 

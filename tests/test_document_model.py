@@ -571,9 +571,14 @@ def test_append_table_picture_and_shape_roundtrip(tmp_path: Path) -> None:
 
 def test_append_shape_supports_additional_kinds(tmp_path: Path) -> None:
     document = HwpxDocument.blank()
-    document.append_shape(kind="line", section_index=0, width=4000, height=1000)
+    line = document.append_shape(kind="line", section_index=0, width=4000, height=1000)
+    connect_line = document.append_shape(kind="connectLine", section_index=0, width=4000, height=1000)
+    ellipse = document.append_shape(kind="ellipse", section_index=0, width=4000, height=1000)
+    arc = document.append_shape(kind="arc", section_index=0, width=4000, height=1000)
+    polygon = document.append_shape(kind="polygon", section_index=0, width=4000, height=1000)
+    curve = document.append_shape(kind="curve", section_index=0, width=4000, height=1000)
     document.append_shape(kind="textart", section_index=0, text="Banner", width=7000, height=2200)
-    document.append_shape(kind="container", section_index=0, text="Group", width=6000, height=2000)
+    container = document.append_shape(kind="container", section_index=0, text="Group", width=6000, height=2000)
 
     output_path = tmp_path / "extra_shapes.hwpx"
     document.save(output_path)
@@ -586,6 +591,16 @@ def test_append_shape_supports_additional_kinds(tmp_path: Path) -> None:
     assert "textart" in kinds
     assert "container" in kinds
     assert any(shape.kind == "textart" and shape.text == "Banner" for shape in reopened.shapes())
+    assert line.element.xpath("./hc:startPt", namespaces={"hc": "http://www.hancom.co.kr/hwpml/2011/core"})
+    assert line.element.xpath("./hc:endPt", namespaces={"hc": "http://www.hancom.co.kr/hwpml/2011/core"})
+    assert connect_line.element.get("type") == "STRAIGHT_NOARROW"
+    assert connect_line.element.xpath("./hc:startPt[@subjectIDRef='0']", namespaces=NS)
+    assert ellipse.element.xpath("./hc:center | ./hc:ax1 | ./hc:ax2 | ./hc:start1 | ./hc:start2 | ./hc:end1 | ./hc:end2", namespaces=NS)
+    assert arc.element.get("type") == "NORMAL"
+    assert arc.element.xpath("./hc:center | ./hc:ax1 | ./hc:ax2", namespaces=NS)
+    assert len(polygon.element.xpath("./hc:pt", namespaces=NS)) == 4
+    assert curve.element.xpath("./hp:seg[@type='LINE']", namespaces=NS)
+    assert not container.element.xpath("./hp:lineShape | ./hc:fillBrush | ./hp:shadow", namespaces=NS)
 
 
 def test_append_ole_roundtrip(tmp_path: Path) -> None:
@@ -636,6 +651,23 @@ def test_append_ole_roundtrip(tmp_path: Path) -> None:
     assert manifest_item.get("isEmbeded") == "0"
     assert isinstance(reopened.shapes()[0], OleXml)
     assert reopened_ole.element.getparent().tag.endswith("run")
+
+
+def test_append_ole_adds_hwpx_length_prefix_for_raw_compound_file(tmp_path: Path) -> None:
+    from jakal_hwpx._ole_payloads import default_ole_cfb_bytes
+
+    raw_cfb = default_ole_cfb_bytes()
+    document = HwpxDocument.blank()
+    ole = document.append_ole("sample.ole", raw_cfb)
+
+    stored = ole.binary_data()
+    assert stored[:4] == len(raw_cfb).to_bytes(4, "little")
+    assert stored[4:12] == bytes.fromhex("D0CF11E0A1B11AE1")
+
+    output_path = tmp_path / "prefixed_ole.hwpx"
+    document.save(output_path)
+    reopened = HwpxDocument.open(output_path)
+    assert reopened.oles()[0].binary_data() == stored
 
 
 def test_duplicate_binary_names_keep_distinct_picture_and_ole_references(tmp_path: Path) -> None:

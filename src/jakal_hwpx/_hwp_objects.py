@@ -1585,13 +1585,18 @@ class HwpHeaderFooterObject(HwpControlObject):
             target.children.insert(0, text_record)
         else:
             text_record.set_raw_text(raw_text)
-        target.char_count = len(raw_text)
+        target.char_count = (target.char_count & 0x80000000) | len(raw_text)
         target.sync_payload()
         self._commit(section_model)
 
     def set_apply_page_type(self, value: str) -> None:
         section_model, _paragraph, control_node = self._live_context()
-        control_node.payload = _build_header_footer_control_payload(self.control_id, apply_page_type=str(value).upper())
+        instance_id = int.from_bytes(control_node.payload[8:12].ljust(4, b"\x00"), "little") or 1
+        control_node.payload = _build_header_footer_control_payload(
+            self.control_id,
+            apply_page_type=str(value).upper(),
+            instance_id=instance_id,
+        )
         self._commit(section_model)
 
     def set_nested_blocks(self, blocks: Sequence[object]) -> None:
@@ -1621,7 +1626,7 @@ class HwpHeaderFooterObject(HwpControlObject):
             paragraph_blocks = grouped[paragraph_index]
             paragraph_header = ParagraphHeaderRecord(
                 level=template.level,
-                char_count=0,
+                char_count=template.char_count & 0x80000000,
                 control_mask=template.control_mask,
                 para_shape_id=template.para_shape_id,
                 style_id=template.style_id,
@@ -1706,7 +1711,7 @@ class HwpHeaderFooterObject(HwpControlObject):
                     raw_text_parts.append(str(getattr(block, "text")))
 
             raw_text = hyperlink_only_payload or (("".join(raw_text_parts)) + "\r" if raw_text_parts else "\r")
-            paragraph_header.char_count = len(raw_text)
+            paragraph_header.char_count = (paragraph_header.char_count & 0x80000000) | len(raw_text)
             paragraph_header.add_child(ParagraphTextRecord(level=template.level + 1, raw_text=raw_text))
             for child in template.children:
                 if isinstance(child, ParagraphTextRecord) or child.tag_id == TAG_CTRL_HEADER:

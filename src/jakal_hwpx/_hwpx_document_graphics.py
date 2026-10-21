@@ -5,6 +5,7 @@ from pathlib import PurePosixPath
 from lxml import etree
 
 from ._hwpx_common import _graphic_attribute_xpath
+from ._ole_payloads import normalize_hwpx_ole_payload
 from .elements import OleXml, PictureXml, ShapeXml, TableXml, _set_graphic_layout, _set_margin_values
 from .namespaces import qname
 
@@ -412,6 +413,14 @@ class HwpxDocumentGraphicMixin:
         shape.set("instid", self._next_control_number(_graphic_attribute_xpath("instid")))
         if kind == "textart":
             shape.set("text", text)
+        elif kind == "ellipse":
+            shape.set("intervalDirty", "0")
+            shape.set("hasArcPr", "0")
+            shape.set("arcType", "NORMAL")
+        elif kind == "arc":
+            shape.set("type", "NORMAL")
+        elif kind == "connectLine":
+            shape.set("type", "STRAIGHT_NOARROW")
         if kind not in {"line", "connectLine"}:
             shape.set("ratio", "0")
 
@@ -447,33 +456,34 @@ class HwpxDocumentGraphicMixin:
         self._append_identity_matrix(rendering, "scaMatrix")
         self._append_identity_matrix(rendering, "rotMatrix")
 
-        line_shape = etree.SubElement(shape, qname("hp", "lineShape"))
-        line_shape.set("color", line_color)
-        line_shape.set("width", str(line_width))
-        line_shape.set("style", "SOLID" if line_width > 0 else "NONE")
-        line_shape.set("endCap", "FLAT")
-        line_shape.set("headStyle", "NORMAL")
-        line_shape.set("tailStyle", "NORMAL")
-        line_shape.set("headfill", "1")
-        line_shape.set("tailfill", "1")
-        line_shape.set("headSz", "MEDIUM_MEDIUM")
-        line_shape.set("tailSz", "MEDIUM_MEDIUM")
-        line_shape.set("outlineStyle", "NORMAL")
-        line_shape.set("alpha", "0")
+        if kind != "container":
+            line_shape = etree.SubElement(shape, qname("hp", "lineShape"))
+            line_shape.set("color", line_color)
+            line_shape.set("width", str(line_width))
+            line_shape.set("style", "SOLID" if line_width > 0 else "NONE")
+            line_shape.set("endCap", "FLAT")
+            line_shape.set("headStyle", "NORMAL")
+            line_shape.set("tailStyle", "NORMAL")
+            line_shape.set("headfill", "1")
+            line_shape.set("tailfill", "1")
+            line_shape.set("headSz", "MEDIUM_MEDIUM")
+            line_shape.set("tailSz", "MEDIUM_MEDIUM")
+            line_shape.set("outlineStyle", "NORMAL")
+            line_shape.set("alpha", "0")
 
-        if kind not in {"line", "connectLine"}:
-            fill_brush = etree.SubElement(shape, qname("hc", "fillBrush"))
-            win_brush = etree.SubElement(fill_brush, qname("hc", "winBrush"))
-            win_brush.set("faceColor", fill_color)
-            win_brush.set("hatchColor", line_color)
-            win_brush.set("alpha", "0")
+            if kind not in {"line", "connectLine"}:
+                fill_brush = etree.SubElement(shape, qname("hc", "fillBrush"))
+                win_brush = etree.SubElement(fill_brush, qname("hc", "winBrush"))
+                win_brush.set("faceColor", fill_color)
+                win_brush.set("hatchColor", line_color)
+                win_brush.set("alpha", "0")
 
-        shadow = etree.SubElement(shape, qname("hp", "shadow"))
-        shadow.set("type", "NONE")
-        shadow.set("color", "#B2B2B2")
-        shadow.set("offsetX", "0")
-        shadow.set("offsetY", "0")
-        shadow.set("alpha", "0")
+            shadow = etree.SubElement(shape, qname("hp", "shadow"))
+            shadow.set("type", "NONE")
+            shadow.set("color", "#B2B2B2")
+            shadow.set("offsetX", "0")
+            shadow.set("offsetY", "0")
+            shadow.set("alpha", "0")
 
         if kind in {"rect", "ellipse", "arc", "polygon", "curve", "container"}:
             draw_text = etree.SubElement(shape, qname("hp", "drawText"))
@@ -527,15 +537,51 @@ class HwpxDocumentGraphicMixin:
             textart_shadow.set("offsetY", "0")
             textart_shadow.set("alpha", "0")
 
-        if kind in {"line", "connectLine"}:
-            points = ((0, 0), (width, height))
+        if kind == "line":
+            points = (("startPt", 0, 0), ("endPt", width, height))
+        elif kind == "connectLine":
+            points = (("startPt", 0, 0), ("endPt", width, height))
+        elif kind in {"rect", "textart"}:
+            points = tuple(
+                (f"pt{index}", x, y)
+                for index, (x, y) in enumerate(((0, 0), (width, 0), (width, height), (0, height)))
+            )
+        elif kind == "ellipse":
+            points = (
+                ("center", width // 2, height // 2),
+                ("ax1", width, height // 2),
+                ("ax2", width // 2, height),
+                ("start1", width, height // 2),
+                ("start2", width, height // 2),
+                ("end1", width, height // 2),
+                ("end2", width, height // 2),
+            )
+        elif kind == "arc":
+            points = (
+                ("center", width // 2, height // 2),
+                ("ax1", width, height // 2),
+                ("ax2", width // 2, height),
+            )
+        elif kind == "polygon":
+            points = tuple(("pt", x, y) for x, y in ((0, 0), (width, 0), (width, height), (0, height)))
         else:
-            points = ((0, 0), (width, 0), (width, height), (0, height))
+            points = ()
 
-        for index, (x, y) in enumerate(points):
-            point = etree.SubElement(shape, qname("hc", f"pt{index}"))
+        for point_name, x, y in points:
+            point = etree.SubElement(shape, qname("hc", point_name))
             point.set("x", str(x))
             point.set("y", str(y))
+            if kind == "connectLine":
+                point.set("subjectIDRef", "0")
+                point.set("subjectIdx", "0")
+
+        if kind == "curve":
+            segment = etree.SubElement(shape, qname("hp", "seg"))
+            segment.set("type", "LINE")
+            segment.set("x1", "0")
+            segment.set("y1", "0")
+            segment.set("x2", str(width))
+            segment.set("y2", str(height))
 
         size = etree.SubElement(shape, qname("hp", "sz"))
         size.set("width", str(width))
@@ -639,7 +685,7 @@ class HwpxDocumentGraphicMixin:
         resolved_manifest_id = manifest_id or self.content_hpf.next_manifest_id(PurePosixPath(binary_name).stem or "ole")
         self.add_or_replace_binary(
             binary_name,
-            data,
+            normalize_hwpx_ole_payload(data),
             media_type=media_type,
             manifest_id=resolved_manifest_id,
             is_embedded=False,

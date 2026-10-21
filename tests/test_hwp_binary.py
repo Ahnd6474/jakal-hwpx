@@ -4,6 +4,7 @@ from pathlib import Path
 
 import pytest
 
+import jakal_hwpx._cfb_writer as cfb_writer
 import jakal_hwpx.hwp_binary as hwp_binary_module
 from jakal_hwpx import (
     AutoNumberControlRecord,
@@ -63,6 +64,33 @@ def sample_hwp_path() -> Path:
 
 def _layout_chain(document: HwpBinaryDocument, path: str) -> tuple[int, ...]:
     return next(entry.sector_chain for entry in document._compound_layout.entries if entry.path == path)
+
+
+def test_cfb_directory_builder_creates_a_valid_red_black_tree() -> None:
+    names = ["Z", "alpha", "LongStreamName", "B", "middle", "AA", "한글"]
+    entries = cfb_writer._build_entries({name: name.encode("utf-8") for name in names})
+    root = entries[0].child
+
+    assert root != cfb_writer.NOSTREAM
+    assert entries[root].color == cfb_writer.BLACK
+
+    ordered_names: list[str] = []
+
+    def visit(entry_id: int) -> int:
+        if entry_id == cfb_writer.NOSTREAM:
+            return 1
+        entry = entries[entry_id]
+        left_black_height = visit(entry.left)
+        ordered_names.append(entry.name)
+        right_black_height = visit(entry.right)
+        assert left_black_height == right_black_height
+        if entry.color == cfb_writer.RED:
+            assert entry.left == cfb_writer.NOSTREAM or entries[entry.left].color == cfb_writer.BLACK
+            assert entry.right == cfb_writer.NOSTREAM or entries[entry.right].color == cfb_writer.BLACK
+        return left_black_height + int(entry.color == cfb_writer.BLACK)
+
+    visit(root)
+    assert ordered_names == sorted(names, key=lambda name: (len(name.encode("utf-16-le")), name.upper()))
 
 
 def test_open_hwp_binary_document_exposes_file_header_and_streams(sample_hwp_path: Path) -> None:
@@ -323,8 +351,16 @@ def test_section_model_exposes_typed_control_ast(tmp_path: Path) -> None:
     assert auto_number.fields()["number_type"] == "PAGE"
     assert header.apply_page_type() == "EVEN"
     assert header.paragraph_texts() == ["AST-HEADER"]
+    assert int.from_bytes(header.payload[8:12], "little") == 1
+    assert next(child for child in header.children if isinstance(child, ParagraphHeaderRecord)).char_count & 0x80000000
+    top_paragraph = model.paragraphs()[0]
+    assert top_paragraph.header.char_count & 0x80000000
+    assert top_paragraph.header.control_mask & 0x00010000
+    assert all(child.tag_id != hwp_binary_module.TAG_PARA_LINE_SEG for child in top_paragraph.header.children)
     assert footer.apply_page_type() == "ODD"
     assert footer.paragraph_texts() == ["AST-FOOTER"]
+    assert int.from_bytes(footer.payload[8:12], "little") == 2
+    assert next(child for child in footer.children if isinstance(child, ParagraphHeaderRecord)).char_count & 0x80000000
     assert note.kind() == "footNote"
     assert note.paragraph_texts() == ["AST-NOTE"]
     assert page_number.pos() == "TOP_RIGHT"
@@ -882,6 +918,9 @@ def test_docinfo_model_can_add_and_remove_bindata_records() -> None:
     bindata = model.add_embedded_bindata("png")
     assert isinstance(bindata, BinDataRecord)
     assert bindata.storage_id == before + 1
+    assert bindata.level == id_record.level + 1
+    assert bindata in id_record.children
+    assert bindata not in model.roots
     assert model.id_mappings_record().bin_data_count == before + 1
     assert model.remove_bindata(bindata.storage_id or 0) is True
     assert model.id_mappings_record().bin_data_count == before

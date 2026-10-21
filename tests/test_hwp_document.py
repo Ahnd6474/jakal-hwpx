@@ -14,6 +14,7 @@ from jakal_hwpx.hwp_binary import (
     TAG_LIST_HEADER,
     TAG_MEMO_LIST,
     TAG_PARA_HEADER,
+    TAG_PARA_LINE_SEG,
     TAG_SHAPE_COMPONENT,
     TAG_SHAPE_COMPONENT_LINE,
     TAG_SHAPE_COMPONENT_PICTURE,
@@ -141,6 +142,11 @@ def test_hwp_document_append_paragraph_can_auto_grow_sections(tmp_path: Path) ->
     assert any(paragraph.text.strip() == "SECTION-2" for paragraph in reopened.section(2).paragraphs())
     assert any(paragraph.text.strip() == "SECTION-3" for paragraph in reopened.section(3).paragraphs())
     assert "목 차" not in reopened.get_document_text()
+    for section_index in range(4):
+        top_header = reopened.section_model(section_index).paragraphs()[0].header
+        assert top_header.char_count & 0x80000000
+        assert all(child.tag_id != TAG_PARA_LINE_SEG for child in top_header.children)
+        assert len(top_header.trailing_payload) <= 4 or top_header.trailing_payload[4] == 0
 
 
 def test_hwp_document_bridge_section_settings_roundtrip_to_native_hwp(tmp_path: Path) -> None:
@@ -850,6 +856,12 @@ def test_hwp_field_and_control_setters_can_reconfigure_native_controls(tmp_path:
     assert reopened_auto_number.number_type == "PAGE"
     assert reopened.binary_document().section_page_settings(0)["page_width"] == 60123
     assert reopened.binary_document().section_definition_settings(0)["start_numbers"]["pageStartsOn"] == "ODD"
+    section_model = reopened.section_model(0)
+    section_definition = section_model.section_definition_control()
+    assert section_definition is not None
+    section_attributes = int.from_bytes(section_definition.payload[4:8], "little")
+    assert (section_attributes >> 20) & 0x3 == 1
+    assert all(control.control_id != "pgct" for control in section_model.controls())
 
 
 def test_hwp_paragraph_object_set_text_can_change_length(sample_hwp_path: Path, tmp_path: Path) -> None:
@@ -1288,6 +1300,18 @@ def test_hwp_picture_ole_curve_container_and_table_richer_setters_roundtrip(tmp_
     assert reopened_ole.extent() == {"x": 43000, "y": 14000}
     assert reopened_ole.line_color == "#445566"
     assert reopened_ole.line_width == 77
+
+
+def test_hwp_shape_and_ole_nested_text_use_existing_docinfo_ids(tmp_path: Path) -> None:
+    document = HwpDocument.blank()
+    document.append_shape(kind="rect", text="Nested shape text")
+    document.append_ole("nested.ole", b"OLE-DATA", shape_comment="Nested OLE text")
+
+    output_path = tmp_path / "nested_control_text_ids.hwp"
+    document.save(output_path)
+
+    reopened = HwpDocument.open(output_path)
+    reopened.strict_validate()
 
 
 def test_hwp_strict_lint_reports_form_memo_and_chart_native_semantic_breakage() -> None:

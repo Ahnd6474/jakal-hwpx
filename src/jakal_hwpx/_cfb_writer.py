@@ -17,6 +17,7 @@ STGTY_STREAM = 2
 STGTY_ROOT = 5
 
 BLACK = 1
+RED = 0
 
 HEADER_SIGNATURE = bytes.fromhex("D0CF11E0A1B11AE1")
 HEADER_CLSID = b"\x00" * 16
@@ -251,8 +252,7 @@ def _build_entries(streams: dict[str, bytes]) -> list[_CfbEntry]:
 
     for entry in entries:
         if entry.entry_type in (STGTY_ROOT, STGTY_STORAGE):
-            _assign_btree(entries, entry.children, lambda entry_id: entries[entry_id].name.casefold())
-            entry.child = entry.children[0] if len(entry.children) == 1 else _btree_root(entry.children, entries)
+            entry.child = _assign_btree(entries, entry.children)
 
     return entries
 
@@ -302,7 +302,19 @@ def _write_compound_file_using_layout(streams: dict[str, bytes], layout: CfbLayo
     if not layout.fat_entries or not layout.fat_sector_ids:
         return None
 
-    entries, sid_to_path = _build_entries_with_layout_hints(streams, layout)
+    if _layout_matches_streams(layout, streams):
+        # Changing stream sizes does not require rebuilding the directory tree.
+        # Preserve the original sibling links and red/black colors: some CFB
+        # consumers (including Hancom HWP) reject a structurally readable file
+        # when those invariants are rewritten with mismatched color metadata.
+        entries = _build_entries_from_layout(streams, layout)
+        sid_to_path = {
+            entry.sid: entry.path
+            for entry in layout.entries
+            if entry.entry_type == STGTY_STREAM and entry.path is not None
+        }
+    else:
+        entries, sid_to_path = _build_entries_with_layout_hints(streams, layout)
     templates_by_sid = {entry.sid: entry for entry in layout.entries}
     layout_difat_sector_ids = set(layout.difat_sector_ids or tuple(sector_id for sector_id, value in enumerate(layout.fat_entries) if value == DIFSECT))
     regular_free_pool = {
@@ -716,8 +728,7 @@ def _build_entries_with_layout_hints(streams: dict[str, bytes], layout: CfbLayou
 
     for entry in entries:
         if entry.entry_type in (STGTY_ROOT, STGTY_STORAGE):
-            _assign_btree(entries, entry.children, lambda entry_id: entries[entry_id].name.casefold())
-            entry.child = entry.children[0] if len(entry.children) == 1 else _btree_root(entry.children, entries)
+            entry.child = _assign_btree(entries, entry.children)
 
     return entries, sid_to_path
 
@@ -736,28 +747,107 @@ def _entry_paths_from_tree(entries: list[_CfbEntry]) -> dict[int, str]:
     return path_by_sid
 
 
-def _btree_root(children: list[int], entries: list[_CfbEntry]) -> int:
-    ordered = sorted(children, key=lambda entry_id: entries[entry_id].name.casefold())
-    return ordered[len(ordered) // 2]
+def _directory_name_key(entry: _CfbEntry) -> tuple[int, str]:
+    # [MS-CFB] directory ordering compares name length before a
+    # case-insensitive name comparison.
+    return (len(entry.name.encode("utf-16-le")), entry.name.upper())
 
 
-def _assign_btree(entries: list[_CfbEntry], child_ids: list[int], key) -> None:
-    ordered = sorted(child_ids, key=key)
+def _assign_btree(entries: list[_CfbEntry], child_ids: list[int]) -> int:
+    if not child_ids:
+        return NOSTREAM
 
-    def build(ids: list[int]) -> int:
-        if not ids:
-            return NOSTREAM
-        middle = len(ids) // 2
-        entry_id = ids[middle]
-        entries[entry_id].left = build(ids[:middle])
-        entries[entry_id].right = build(ids[middle + 1 :])
-        return entry_id
+    parent: dict[int, int] = {}
+    root = NOSTREAM
 
-    root = build(ordered)
-    if root == NOSTREAM:
-        return
-    for entry_id in ordered:
-        entries[entry_id].child = entries[entry_id].child if entries[entry_id].children else NOSTREAM
+    def rotate_left(node_id: int) -> None:
+        nonlocal root
+        pivot_id = entries[node_id].right
+        entries[node_id].right = entries[pivot_id].left
+        if entries[pivot_id].left != NOSTREAM:
+            parent[entries[pivot_id].left] = node_id
+        parent[pivot_id] = parent[node_id]
+        if parent[node_id] == NOSTREAM:
+            root = pivot_id
+        elif node_id == entries[parent[node_id]].left:
+            entries[parent[node_id]].left = pivot_id
+        else:
+            entries[parent[node_id]].right = pivot_id
+        entries[pivot_id].left = node_id
+        parent[node_id] = pivot_id
+
+    def rotate_right(node_id: int) -> None:
+        nonlocal root
+        pivot_id = entries[node_id].left
+        entries[node_id].left = entries[pivot_id].right
+        if entries[pivot_id].right != NOSTREAM:
+            parent[entries[pivot_id].right] = node_id
+        parent[pivot_id] = parent[node_id]
+        if parent[node_id] == NOSTREAM:
+            root = pivot_id
+        elif node_id == entries[parent[node_id]].right:
+            entries[parent[node_id]].right = pivot_id
+        else:
+            entries[parent[node_id]].left = pivot_id
+        entries[pivot_id].right = node_id
+        parent[node_id] = pivot_id
+
+    for entry_id in sorted(child_ids, key=lambda item: _directory_name_key(entries[item])):
+        entries[entry_id].left = NOSTREAM
+        entries[entry_id].right = NOSTREAM
+        entries[entry_id].color = RED
+
+        previous = NOSTREAM
+        current = root
+        entry_key = _directory_name_key(entries[entry_id])
+        while current != NOSTREAM:
+            previous = current
+            if entry_key < _directory_name_key(entries[current]):
+                current = entries[current].left
+            else:
+                current = entries[current].right
+        parent[entry_id] = previous
+        if previous == NOSTREAM:
+            root = entry_id
+        elif entry_key < _directory_name_key(entries[previous]):
+            entries[previous].left = entry_id
+        else:
+            entries[previous].right = entry_id
+
+        current = entry_id
+        while parent[current] != NOSTREAM and entries[parent[current]].color == RED:
+            grandparent = parent[parent[current]]
+            if parent[current] == entries[grandparent].left:
+                uncle = entries[grandparent].right
+                if uncle != NOSTREAM and entries[uncle].color == RED:
+                    entries[parent[current]].color = BLACK
+                    entries[uncle].color = BLACK
+                    entries[grandparent].color = RED
+                    current = grandparent
+                else:
+                    if current == entries[parent[current]].right:
+                        current = parent[current]
+                        rotate_left(current)
+                    entries[parent[current]].color = BLACK
+                    entries[parent[parent[current]]].color = RED
+                    rotate_right(parent[parent[current]])
+            else:
+                uncle = entries[grandparent].left
+                if uncle != NOSTREAM and entries[uncle].color == RED:
+                    entries[parent[current]].color = BLACK
+                    entries[uncle].color = BLACK
+                    entries[grandparent].color = RED
+                    current = grandparent
+                else:
+                    if current == entries[parent[current]].left:
+                        current = parent[current]
+                        rotate_right(current)
+                    entries[parent[current]].color = BLACK
+                    entries[parent[parent[current]]].color = RED
+                    rotate_left(parent[parent[current]])
+        entries[root].color = BLACK
+
+    return root
 
 
 def _assign_mini_stream(entries: list[_CfbEntry]) -> bytes:

@@ -234,19 +234,22 @@ def _parse_header_footer_apply_page_type(payload: bytes) -> str:
     return _HEADER_FOOTER_APPLY_PAGE_TYPE_VALUES.get(code, "BOTH")
 
 
-def _build_header_footer_control_payload(control_id: str, *, apply_page_type: str = "BOTH") -> bytes:
+def _build_header_footer_control_payload(
+    control_id: str,
+    *,
+    apply_page_type: str = "BOTH",
+    instance_id: int = 1,
+) -> bytes:
     normalized_control_id = control_id[:4].ljust(4)
     apply_code = _HEADER_FOOTER_APPLY_PAGE_TYPE_CODES.get(str(apply_page_type).upper(), 0)
-    if normalized_control_id == "head":
-        kind_code = 1
-    elif normalized_control_id == "foot":
-        kind_code = 2
-    else:
+    if normalized_control_id not in {"head", "foot"}:
         raise ValueError(f"Unsupported header/footer control id: {control_id}")
+    if instance_id < 1:
+        raise ValueError("instance_id must be at least 1.")
     return (
         _build_control_id_payload(normalized_control_id)
         + apply_code.to_bytes(4, "little", signed=False)
-        + kind_code.to_bytes(4, "little", signed=False)
+        + instance_id.to_bytes(4, "little", signed=False)
     )
 
 
@@ -445,7 +448,7 @@ def _build_blank_section_model(model: "SectionModel", *, section_index: int | No
 
     blank_header = ParagraphHeaderRecord(
         level=source_header.level,
-        char_count=len(blank_raw_text),
+        char_count=(source_header.char_count & 0x80000000) | len(blank_raw_text),
         control_mask=source_header.control_mask,
         para_shape_id=source_header.para_shape_id,
         style_id=source_header.style_id,
@@ -489,7 +492,7 @@ def _build_blank_paragraph_header(source_paragraph: "SectionParagraphModel") -> 
 
     blank_header = ParagraphHeaderRecord(
         level=source_header.level,
-        char_count=len(blank_raw_text),
+        char_count=(source_header.char_count & 0x80000000) | len(blank_raw_text),
         control_mask=source_header.control_mask,
         para_shape_id=source_header.para_shape_id,
         style_id=source_header.style_id,
@@ -537,6 +540,20 @@ def _find_section_definition_control_node(model: "SectionModel") -> ControlHeade
     return None
 
 
+def _normalize_section_definition_paragraph_for_multi_section(model: "SectionModel") -> None:
+    paragraphs = model.paragraphs()
+    if not paragraphs or _find_section_definition_control_node(model) is None:
+        return
+    header = paragraphs[0].header
+    header.char_count |= 0x80000000
+    header.children = [child for child in header.children if child.tag_id != TAG_PARA_LINE_SEG]
+    trailing = bytearray(header.trailing_payload)
+    if len(trailing) > 4:
+        trailing[4] = 0
+        header.trailing_payload = bytes(trailing)
+    header.sync_payload()
+
+
 def _find_child_record(node: RecordNode, tag_id: int) -> RecordNode | None:
     return next((child for child in node.children if child.tag_id == tag_id), None)
 
@@ -577,6 +594,10 @@ from ._hwp_page_payloads import (  # noqa: E402, F401 - compatibility re-exports
     _SECTION_PAGE_STARTS_ON_MASK,
     _SECTION_PAGE_STARTS_ON_CODES,
     _SECTION_PAGE_STARTS_ON_VALUES,
+    _SECTION_DEFINITION_STARTS_ON_SHIFT,
+    _SECTION_DEFINITION_STARTS_ON_MASK,
+    _SECTION_DEFINITION_STARTS_ON_CODES,
+    _SECTION_DEFINITION_STARTS_ON_VALUES,
     _HEADER_FOOTER_APPLY_PAGE_TYPE_CODES,
     _HEADER_FOOTER_APPLY_PAGE_TYPE_VALUES,
     _PAGE_HIDING_FLAGS,
@@ -2868,9 +2889,16 @@ class HwpBinaryDocument:
         if current_count >= section_count:
             return
 
+        if section_count > 1:
+            for existing_section_index in range(current_count):
+                existing_model = self.section_model(existing_section_index)
+                _normalize_section_definition_paragraph_for_multi_section(existing_model)
+                self.replace_section_model(existing_section_index, existing_model)
+
         while current_count < section_count:
             template_index = 1 if current_count > 1 else current_count - 1
             template_model = _build_blank_section_model(self.section_model(template_index), section_index=current_count)
+            _normalize_section_definition_paragraph_for_multi_section(template_model)
             raw = template_model.to_bytes()
             if self._stream_is_compressed("BodyText/Section0"):
                 compressor = zlib.compressobj(level=9, wbits=-15)
@@ -2971,11 +2999,14 @@ class HwpBinaryDocument:
         values = _parse_section_definition_payload(section_definition.payload)
         metadata = _control_native_metadata(section_definition)
         page_hiding = _parse_page_hiding_payload(_find_paragraph_control_node(model, "pghd").payload) if _find_paragraph_control_node(model, "pghd") is not None else {}
-        page_starts_on = "BOTH"
-        page_starts_on_control = _find_paragraph_control_node(model, "pgct")
-        if page_starts_on_control is not None:
-            page_starts_on = _parse_page_starts_on_payload(page_starts_on_control.payload)
         attributes = int(values.get("attributes", 0))
+        page_starts_on_code = (
+            attributes & _SECTION_DEFINITION_STARTS_ON_MASK
+        ) >> _SECTION_DEFINITION_STARTS_ON_SHIFT
+        page_starts_on = _SECTION_DEFINITION_STARTS_ON_VALUES.get(page_starts_on_code, "BOTH")
+        page_starts_on_control = _find_paragraph_control_node(model, "pgct")
+        if page_starts_on_code == 0 and page_starts_on_control is not None:
+            page_starts_on = _parse_page_starts_on_payload(page_starts_on_control.payload)
         border_hidden = page_hiding.get("hideBorder") == "1"
         fill_hidden = page_hiding.get("hideFill") == "1"
         border_first = bool(attributes & _SECTION_DEF_BORDER_FIRST_FLAG)
@@ -3074,21 +3105,9 @@ class HwpBinaryDocument:
             if visibility.get("showLineNumber") is not None:
                 _apply_section_show_line_numbers(model, str(current.get("showLineNumber", "0")) in {"1", "true", "True"})
         if start_numbers is not None and start_numbers.get("pageStartsOn") is not None:
-            page_starts_on = str(start_numbers.get("pageStartsOn", "BOTH")).upper()
             page_starts_on_control = _find_paragraph_control_node(model, "pgct")
-            if page_starts_on == "BOTH":
-                if page_starts_on_control is not None:
-                    model.paragraphs()[0].header.children.remove(page_starts_on_control)
-            else:
-                if page_starts_on_control is None:
-                    page_starts_on_control = RecordNode(
-                        tag_id=TAG_CTRL_HEADER,
-                        level=1,
-                        payload=_build_page_starts_on_payload(page_starts_on),
-                    )
-                    _insert_paragraph_control_node(model, page_starts_on_control, after_control_id="secd")
-                else:
-                    page_starts_on_control.payload = _build_page_starts_on_payload(page_starts_on)
+            if page_starts_on_control is not None:
+                model.paragraphs()[0].header.children.remove(page_starts_on_control)
         self.replace_section_model(section_index, model)
 
     def section_page_numbers(self, section_index: int) -> list[dict[str, str]]:
@@ -4124,11 +4143,26 @@ class HwpBinaryDocument:
             None,
         )
         if control_node is None:
-            control_node = _build_header_footer_control_node(control_id, apply_page_type=apply_page_type)
+            instance_id = 1 + sum(
+                1
+                for child in target_paragraph.header.children
+                if child.tag_id == TAG_CTRL_HEADER
+                and _decode_control_id_payload(child.payload) in {"head", "foot"}
+            )
+            control_node = _build_header_footer_control_node(
+                control_id,
+                apply_page_type=apply_page_type,
+                instance_id=instance_id,
+            )
             target_paragraph.header.add_child(control_node)
             _append_control_marker_to_paragraph(target_paragraph, control_id)
         else:
-            control_node.payload = _build_header_footer_control_payload(control_id, apply_page_type=apply_page_type)
+            instance_id = int.from_bytes(control_node.payload[8:12].ljust(4, b"\x00"), "little") or 1
+            control_node.payload = _build_header_footer_control_payload(
+                control_id,
+                apply_page_type=apply_page_type,
+                instance_id=instance_id,
+            )
         _set_header_footer_control_text(control_node, text)
         self.replace_section_model(target_section_index, model)
 
@@ -4184,10 +4218,10 @@ class HwpBinaryDocument:
             HwpRecord(
                 tag_id=TAG_PARA_HEADER,
                 level=0,
-                size=22,
+                size=24,
                 header_size=4,
                 offset=-1,
-                payload=top_char_count.to_bytes(4, "little") + _PICTURE_TOP_PARA_HEADER_TAIL,
+                payload=(0x80000000 | top_char_count).to_bytes(4, "little") + _PICTURE_TOP_PARA_HEADER_TAIL,
             ),
             HwpRecord(tag_id=TAG_PARA_TEXT, level=1, size=len(_PICTURE_TOP_PARA_TEXT), header_size=4, offset=-1, payload=_PICTURE_TOP_PARA_TEXT),
             HwpRecord(tag_id=TAG_PARA_CHAR_SHAPE, level=1, size=len(_PICTURE_TOP_CHAR_SHAPE), header_size=4, offset=-1, payload=_PICTURE_TOP_CHAR_SHAPE),
@@ -4409,15 +4443,28 @@ class HwpBinaryDocument:
             self.replace_section_model(target_section_index, model)
 
 
-def _build_header_footer_control_node(control_id: str, *, apply_page_type: str = "BOTH") -> RecordNode:
+def _build_header_footer_control_node(
+    control_id: str,
+    *,
+    apply_page_type: str = "BOTH",
+    instance_id: int = 1,
+) -> RecordNode:
     if control_id == "head":
-        control_payload = _build_header_footer_control_payload(control_id, apply_page_type=apply_page_type)
+        control_payload = _build_header_footer_control_payload(
+            control_id,
+            apply_page_type=apply_page_type,
+            instance_id=instance_id,
+        )
         list_payload = _HEADER_LIST_HEADER
         paragraph_payload = _HEADER_PARA_HEADER
         char_shape_payload = _HEADER_PARA_CHAR_SHAPE
         line_seg_payload = _HEADER_PARA_LINE_SEG
     elif control_id == "foot":
-        control_payload = _build_header_footer_control_payload(control_id, apply_page_type=apply_page_type)
+        control_payload = _build_header_footer_control_payload(
+            control_id,
+            apply_page_type=apply_page_type,
+            instance_id=instance_id,
+        )
         list_payload = _FOOTER_LIST_HEADER
         paragraph_payload = _FOOTER_PARA_HEADER
         char_shape_payload = _FOOTER_PARA_CHAR_SHAPE
@@ -4438,7 +4485,8 @@ def _build_header_footer_control_node(control_id: str, *, apply_page_type: str =
         )
     )
     paragraph_header.add_child(RecordNode(tag_id=TAG_PARA_CHAR_SHAPE, level=3, payload=char_shape_payload))
-    paragraph_header.add_child(RecordNode(tag_id=TAG_PARA_LINE_SEG, level=3, payload=line_seg_payload))
+    if line_seg_payload:
+        paragraph_header.add_child(RecordNode(tag_id=TAG_PARA_LINE_SEG, level=3, payload=line_seg_payload))
     control_node.add_child(paragraph_header)
     return control_node
 
@@ -4455,7 +4503,17 @@ def _append_control_marker_to_paragraph(paragraph: SectionParagraphModel, contro
         raw_text += "\r"
     updated = raw_text[:-1] + marker + "\r"
     text_record.set_raw_text(updated)
-    paragraph.header.char_count = len(updated)
+    paragraph.header.char_count = (paragraph.header.char_count & 0x80000000) | len(updated)
+    if control_id in {"head", "foot"}:
+        paragraph.header.control_mask |= 0x00010000
+    if control_id == "head":
+        paragraph.header.children = [
+            child for child in paragraph.header.children if child.tag_id != TAG_PARA_LINE_SEG
+        ]
+        trailing = bytearray(paragraph.header.trailing_payload)
+        if len(trailing) > 4:
+            trailing[4] = 0
+            paragraph.header.trailing_payload = bytes(trailing)
     paragraph.header.sync_payload()
 
 
@@ -4477,7 +4535,7 @@ def _set_header_footer_control_text(control_node: RecordNode, text: str) -> None
         paragraph_header.children.insert(0, text_record)
     else:
         text_record.set_raw_text(raw_text)
-    paragraph_header.char_count = len(raw_text)
+    paragraph_header.char_count = (paragraph_header.char_count & 0x80000000) | len(raw_text)
     paragraph_header.sync_payload()
 
 

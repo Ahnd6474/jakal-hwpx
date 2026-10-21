@@ -1,12 +1,12 @@
 {
-  "donor_name": "_붙임3_ _공모안내서_ 차세대 특화망 융합서비스 확산 사업.hwp",
+  "donor_name": "Hancom 2024 native blank.hwp",
   "base_path": "base.hwp",
   "template_paths": {
     "table": "table.hwp",
     "picture": "picture.hwp",
     "hyperlink": "hyperlink.hwp"
   },
-  "target_section_index": 1,
+  "target_section_index": 0,
   "template_section_indices": {
     "table": 0,
     "picture": 0,

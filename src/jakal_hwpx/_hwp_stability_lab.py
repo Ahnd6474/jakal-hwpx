@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import json
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -65,7 +66,7 @@ def _validate_with_hancom(case_dir: Path, edited_path: Path) -> tuple[str, bool 
     except HancomInteropError as error:
         message = str(error)
         lowered = message.lower()
-        if "security module" in lowered or "comobject" in lowered or "com conversion failed" in lowered or "activeobject" in lowered:
+        if "security module" in lowered or "comobject" in lowered or "activeobject" in lowered:
             return ("skipped", None, [message], artifacts)
         return ("failed", False, [message], artifacts)
     return ("passed", True, errors, artifacts)
@@ -168,7 +169,28 @@ def _default_picture_bytes() -> bytes:
 
 def _bundled_picture_bytes(stream_path: str) -> bytes:
     document = HwpDocument.blank()
-    return document.binary_document().read_stream(stream_path, decompress=False)
+    binary = document.binary_document()
+    if binary.has_stream(stream_path):
+        return binary.read_stream(stream_path, decompress=False)
+
+    extension = Path(stream_path).suffix.lower()
+    if extension == ".png":
+        return base64.b64decode(
+            "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO8B3ioAAAAASUVORK5CYII="
+        )
+    if extension in {".jpg", ".jpeg"}:
+        return base64.b64decode(
+            "/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAP//////////////////////////////////////////////"
+            "////////////////////////////////////2wBDAf//////////////////////////////////////////"
+            "////////////////////////////////////////wAARCAABAAEDASIAAhEBAxEB/8QAFQABAQAAAAAAAAAA"
+            "AAAAAAAAAAX/xAAUEAEAAAAAAAAAAAAAAAAAAAAA/9oADAMBAAIQAxAAAAEf/8QAFBABAAAAAAAAAAAAAAAA"
+            "AAAAAP/aAAgBAQABBQJ//8QAFBEBAAAAAAAAAAAAAAAAAAAAAP/aAAgBAwEBPwF//8QAFBEBAAAAAAAAAAAA"
+            "AAAAAAAAAP/aAAgBAgEBPwF//8QAFBABAAAAAAAAAAAAAAAAAAAAAP/aAAgBAQAGPwJ//8QAFBABAAAAAAAA"
+            "AAAAAAAAAAAAAP/aAAgBAQABPyF//9oADAMBAAIAAwAAABD/xAAUEQEAAAAAAAAAAAAAAAAAAAAA/9oACAED"
+            "AQE/EB//xAAUEQEAAAAAAAAAAAAAAAAAAAAA/9oACAECAQE/EB//xAAUEAEAAAAAAAAAAAAAAAAAAAAA/9oA"
+            "CAEBAAE/EB//2Q=="
+        )
+    raise KeyError(stream_path)
 
 
 def _matrix(prefix: str, rows: int, cols: int) -> list[list[str]]:
@@ -178,7 +200,7 @@ def _matrix(prefix: str, rows: int, cols: int) -> list[list[str]]:
 def _append_paragraph_case(name: str, text: str) -> HwpStabilityCase:
     return HwpStabilityCase(
         name=name,
-        mutate=lambda document, value=text: document.append_paragraph(value, section_index=1),
+        mutate=lambda document, value=text: document.append_paragraph(value, section_index=0),
         expected_texts=(text,),
         min_section_record_delta=2,
     )
@@ -189,8 +211,8 @@ def _replace_case(name: str, paragraph_text: str, old: str, new: str) -> HwpStab
     return HwpStabilityCase(
         name=name,
         mutate=lambda document, paragraph_text=paragraph_text, old=old, new=new: (
-            document.append_paragraph(paragraph_text, section_index=1),
-            document.replace_text_same_length(old, new, section_index=1),
+            document.append_paragraph(paragraph_text, section_index=0),
+            document.replace_text_same_length(old, new, section_index=0),
         ),
         expected_texts=(expected,),
         min_section_record_delta=2,
@@ -533,7 +555,7 @@ def _cases() -> list[HwpStabilityCase]:
             expected_control_ids=("%hlk",),
             min_section_record_delta=7,
             mutate=lambda document: (
-                document.append_paragraph("CPH1", section_index=1),
+                document.append_paragraph("CPH1", section_index=0),
                 document.append_hyperlink("https://example.com/cph1", text="CPH-LINK-1"),
             ),
         ),
@@ -543,7 +565,7 @@ def _cases() -> list[HwpStabilityCase]:
             expected_control_ids=("%hlk",),
             min_section_record_delta=7,
             mutate=lambda document: (
-                document.append_paragraph("CPH2", section_index=1),
+                document.append_paragraph("CPH2", section_index=0),
                 document.append_hyperlink("https://example.com/cph2", text="CPH-LINK-2", metadata_fields=[1, 2, "cph2"]),
             ),
         ),
@@ -553,7 +575,7 @@ def _cases() -> list[HwpStabilityCase]:
             expected_control_ids=("tbl ",),
             min_section_record_delta=12,
             mutate=lambda document: (
-                document.append_paragraph("CPTP", section_index=1),
+                document.append_paragraph("CPTP", section_index=0),
                 document.append_table(rows=1, cols=2, cell_texts=[["CPT11", "CPT12"]]),
             ),
         ),
@@ -642,7 +664,7 @@ def _cases() -> list[HwpStabilityCase]:
             expected_control_ids=("%hlk", "gso "),
             min_section_record_delta=14,
             mutate=lambda document: (
-                document.append_paragraph("CPHP", section_index=1),
+                document.append_paragraph("CPHP", section_index=0),
                 document.append_hyperlink("https://example.com/cphp", text="CPH-LINK-3"),
                 document.append_picture(),
             ),
@@ -654,7 +676,7 @@ def _cases() -> list[HwpStabilityCase]:
             min_section_record_delta=14,
             min_bindata_delta=1,
             mutate=lambda document: (
-                document.append_paragraph("CPHP2", section_index=1),
+                document.append_paragraph("CPHP2", section_index=0),
                 document.append_hyperlink("https://example.com/cphp2", text="CPH-LINK-4", metadata_fields=[5, 6, "cphp2"]),
                 document.append_picture(jpg_bytes, extension="jpg"),
             ),
@@ -713,7 +735,7 @@ def _cases() -> list[HwpStabilityCase]:
             min_section_record_delta=26,
             min_bindata_delta=1,
             mutate=lambda document: (
-                document.append_paragraph("FULL-P", section_index=1),
+                document.append_paragraph("FULL-P", section_index=0),
                 document.append_table(rows=1, cols=2, cell_texts=[["FULL41", "FULL42"]]),
                 document.append_hyperlink("https://example.com/full4", text="FULL-LINK-4", metadata_fields=[8, 9, "full4"]),
                 document.append_picture(jpg_bytes, extension="jpg"),
@@ -725,10 +747,10 @@ def _cases() -> list[HwpStabilityCase]:
             expected_control_ids=("pgnp",),
             min_section_record_delta=4,
             mutate=lambda document: (
-                document.append_paragraph("LINE-NUM-A", section_index=1),
-                document.append_paragraph("LINE-NUM-B", section_index=1),
+                document.append_paragraph("LINE-NUM-A", section_index=0),
+                document.append_paragraph("LINE-NUM-B", section_index=0),
                 document.apply_section_settings(
-                    section_index=1,
+                    section_index=0,
                     visibility={
                         "hideFirstHeader": "1",
                         "border": "HIDE_FIRST",
@@ -739,11 +761,11 @@ def _cases() -> list[HwpStabilityCase]:
                 ),
                 document.apply_section_page_numbers(
                     [{"pos": "BOTTOM_CENTER", "formatType": "DIGIT", "sideChar": "-"}],
-                    section_index=1,
+                    section_index=0,
                 ),
             ),
             validate_document=_expect_section_settings(
-                section_index=1,
+                section_index=0,
                 visibility={
                     "hideFirstHeader": "1",
                     "border": "HIDE_FIRST",
@@ -759,10 +781,10 @@ def _cases() -> list[HwpStabilityCase]:
             expected_control_ids=("fn  ", "en  "),
             min_section_record_delta=10,
             mutate=lambda document: (
-                document.append_footnote("FOOTNOTE-TEXT", section_index=1),
-                document.append_endnote("ENDNOTE-TEXT", section_index=1),
+                document.append_footnote("FOOTNOTE-TEXT", section_index=0),
+                document.append_endnote("ENDNOTE-TEXT", section_index=0),
                 document.apply_section_note_settings(
-                    section_index=1,
+                    section_index=0,
                     footnote_pr={
                         "autoNumFormat": {"type": "ROMAN_SMALL", "prefixChar": "[", "suffixChar": "]", "supscript": "1"},
                         "numbering": {"type": "ON_PAGE", "newNum": "9"},
@@ -780,7 +802,7 @@ def _cases() -> list[HwpStabilityCase]:
                 ),
             ),
             validate_document=_expect_section_settings(
-                section_index=1,
+                section_index=0,
                 footnote_pr={
                     "numbering": {"type": "ON_PAGE", "newNum": "9"},
                     "noteLine": {"length": "1234", "type": "DASH", "width": "0.25 mm", "color": "#112233"},
@@ -797,10 +819,12 @@ def _cases() -> list[HwpStabilityCase]:
             "combo_19_multi_section_layout",
             expected_texts=("SECTION-ONE-LAYOUT", "SECTION-TWO-LAYOUT"),
             expected_control_ids=(),
-            min_section_record_delta=2,
+            # Multi-section normalization removes the stale single-section line
+            # segment before the new body paragraph is appended.
+            min_section_record_delta=1,
             mutate=lambda document: (
                 document.ensure_section_count(3),
-                document.append_paragraph("SECTION-ONE-LAYOUT", section_index=1),
+                document.append_paragraph("SECTION-ONE-LAYOUT", section_index=0),
                 document.append_paragraph("SECTION-TWO-LAYOUT", section_index=2),
                 document.apply_section_settings(
                     section_index=2,
@@ -817,10 +841,10 @@ def _cases() -> list[HwpStabilityCase]:
             expected_control_ids=("head", "foot", "nwno", "bokm"),
             min_section_record_delta=8,
             mutate=lambda document: (
-                document.append_header("HEAD-LINE", section_index=1),
-                document.append_footer("FOOT-LINE", section_index=1),
-                document.append_auto_number(number=7, number_type="PAGE", kind="newNum", section_index=1),
-                document.append_bookmark("marker-1", section_index=1),
+                document.append_header("HEAD-LINE", section_index=0),
+                document.append_footer("FOOT-LINE", section_index=0),
+                document.append_auto_number(number=7, number_type="PAGE", kind="newNum", section_index=0),
+                document.append_bookmark("marker-1", section_index=0),
             ),
         ),
     )

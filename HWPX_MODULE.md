@@ -78,6 +78,12 @@ Direct submodule imports still work, but the root import path is the documented 
 - `SectionSettingsXml`
 - `HwpxXmlNode`
 
+Compatibility aliases exported from `jakal_hwpx`:
+
+- `HeaderFooterBlock` (`HeaderFooterXml`)
+- `ShapeObject` (`ShapeXml`)
+- `TableCell` (`TableCellXml`)
+
 ### Native HWP wrappers
 
 - `HwpParagraphObject`

@@ -5,6 +5,7 @@ from pathlib import Path
 import jakal_hwpx._hwp_stability_lab as hwp_stability_lab
 
 from jakal_hwpx._hwp_stability_lab import run_hwp_stability_matrix
+from jakal_hwpx.exceptions import HancomInteropError
 
 
 def test_hwp_stability_lab_matrix(tmp_path: Path) -> None:
@@ -40,3 +41,23 @@ def test_hwp_stability_lab_can_record_hancom_smoke_results(tmp_path: Path, monke
     assert all(result.hancom_ok is True for result in results)
     assert all(len(result.hancom_artifacts) == 2 for result in results)
     assert conversions
+
+
+def test_hwp_stability_lab_does_not_skip_real_conversion_failures(tmp_path: Path, monkeypatch) -> None:
+    edited_path = tmp_path / "edited.hwp"
+    edited_path.write_bytes(b"fake-hwp")
+
+    def fake_convert(*_: object, **__: object) -> Path:
+        raise HancomInteropError("Hancom conversion failed: Hancom Open failed")
+
+    monkeypatch.setattr(hwp_stability_lab, "convert_document", fake_convert)
+
+    status, ok, errors, artifacts = hwp_stability_lab._validate_with_hancom(
+        tmp_path,
+        edited_path,
+    )
+
+    assert status == "failed"
+    assert ok is False
+    assert errors == ["Hancom conversion failed: Hancom Open failed"]
+    assert artifacts == []

@@ -13,7 +13,7 @@ SRC_ROOT = REPO_ROOT / "src"
 if str(SRC_ROOT) not in sys.path:
     sys.path.insert(0, str(SRC_ROOT))
 
-from jakal_hwpx import BridgeTextBlock, HwpxDocument, PdfDocument, hwpx_to_pdf, pdf_to_hwpx
+from jakal_hwpx import BridgeTextBlock, HwpxDocument, PdfDocument, hwpx_to_pdf, pdf_to_hwpx  # noqa: E402
 
 
 @dataclass

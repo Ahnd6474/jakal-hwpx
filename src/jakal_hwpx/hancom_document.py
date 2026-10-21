@@ -1431,8 +1431,10 @@ def _hwpx_line_style_kwargs(values: dict[str, object] | None) -> dict[str, objec
 
 def _extract_hwpx_shape_points(node: etree._Element) -> list[dict[str, int]]:
     points: list[dict[str, int]] = []
+    point_names = {"pt", "startPt", "endPt", "center", "ax1", "ax2", "start1", "start2", "end1", "end2"}
     for child in node:
-        if etree.QName(child).localname.startswith("pt"):
+        local_name = etree.QName(child).localname
+        if local_name.startswith("pt") or local_name in point_names:
             try:
                 points.append(
                     {
@@ -1514,13 +1516,25 @@ def _extract_hwpx_shape_direct_text(shape) -> str:
 
 
 def _set_hwpx_shape_points(node: etree._Element, points: list[dict[str, int]]) -> None:
+    kind = etree.QName(node).localname
+    point_names = {"pt", "startPt", "endPt", "center", "ax1", "ax2", "start1", "start2", "end1", "end2"}
     for child in list(node):
-        if etree.QName(child).localname.startswith("pt"):
+        local_name = etree.QName(child).localname
+        if local_name.startswith("pt") or local_name in point_names:
             node.remove(child)
     for index, point in enumerate(points):
-        child = etree.SubElement(node, qname("hc", f"pt{index}"))
+        if kind in {"line", "connectLine"}:
+            point_name = "startPt" if index == 0 else "endPt"
+        elif kind == "polygon":
+            point_name = "pt"
+        else:
+            point_name = f"pt{index}"
+        child = etree.SubElement(node, qname("hc", point_name))
         child.set("x", str(int(point.get("x", 0))))
         child.set("y", str(int(point.get("y", 0))))
+        if kind == "connectLine":
+            child.set("subjectIDRef", str(int(point.get("subjectIDRef", 0))))
+            child.set("subjectIdx", str(int(point.get("subjectIdx", 0))))
 
 
 def _apply_hwp_shape_specific_fields(shape, block: Shape) -> None:

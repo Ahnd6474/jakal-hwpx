@@ -218,7 +218,7 @@ class HwpDocument:
             default_append_section_index=profile.target_section_index,
         )
         instance._pure_profile = profile
-        instance._binary_document.reset_body_sections_to_blank()
+        instance._binary_document.set_preview_text("")
         return instance
 
     @property

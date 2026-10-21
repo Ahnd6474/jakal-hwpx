@@ -12,16 +12,16 @@ from jakal_hwpx.exceptions import HancomInteropError
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
-def test_default_security_module_install_root_prefers_local_app_data(monkeypatch) -> None:
-    monkeypatch.setenv("LOCALAPPDATA", r"C:\Users\TestUser\AppData\Local")
+def test_default_security_module_install_root_prefers_non_virtualized_user_profile(monkeypatch) -> None:
+    monkeypatch.setenv("USERPROFILE", r"C:\Users\TestUser")
 
     resolved = hancom._default_security_module_install_root()
 
-    assert resolved == Path(r"C:\Users\TestUser\AppData\Local") / "jakal-hwpx" / "hancom-security"
+    assert resolved == Path(r"C:\Users\TestUser") / "jakal-hwpx" / "hancom-security"
 
 
 def test_default_security_module_install_root_falls_back_to_repo_temp(monkeypatch) -> None:
-    monkeypatch.delenv("LOCALAPPDATA", raising=False)
+    monkeypatch.delenv("USERPROFILE", raising=False)
 
     resolved = hancom._default_security_module_install_root()
 
@@ -130,12 +130,28 @@ def test_hancom_smoke_scripts_force_security_module_setup() -> None:
     assert "Skipping Hancom security module registration is disabled." in smoke_script
     assert "[string]$SecurityModuleInstallRoot = \"\"" in smoke_script
     assert "Hancom RegisterModule(FilePathCheckDLL, $SecurityModuleName) failed." in smoke_script
+    assert "Hancom Open failed for $resolvedInput." in smoke_script
+    assert "Hancom SaveAs($OutputFormat) failed for $resolvedOutput." in smoke_script
+    assert 'New-LogEntry -Kind "open_start"' in smoke_script
+    assert 'New-LogEntry -Kind "saveas_start"' in smoke_script
+    assert "No dialog-click fallback is used." in smoke_script
+    assert "UIAutomationClient" not in smoke_script
+    assert "SendMessage" not in smoke_script
+    assert "ClickerOnly" not in smoke_script
+    assert "$existingProcessIds" in smoke_script
+    assert 'New-LogEntry -Kind "process_cleanup"' in smoke_script
 
     assert "Skipping Hancom security module setup is disabled." in corpus_script
-    assert "-SecurityModuleInstallRoot $SecurityModuleInstallRoot" in corpus_script
+    assert "-SecurityModuleInstallRoot $env:JAKAL_HANCOM_SECURITY_ROOT" in corpus_script
+    assert "Invoke-IsolatedHancomSmoke" in corpus_script
+    assert "$process.WaitForExit($OperationTimeoutSeconds * 1000)" in corpus_script
+    assert "$process.Kill()" in corpus_script
+    assert "Stop-NewHancomProcesses -ExistingProcessIds $existingProcessIds" in corpus_script
 
-    assert '[Environment]::GetFolderPath("LocalApplicationData")' in setup_script
-    assert 'return Join-Path $localAppData "jakal-hwpx\\hancom-security"' in setup_script
+    assert '[Environment]::GetFolderPath("UserProfile")' in setup_script
+    assert 'return Join-Path $userProfile "jakal-hwpx\\hancom-security"' in setup_script
+    assert "CODEX_WINDOWS_SANDBOX_PACKAGE_FAMILY" in setup_script
+    assert "schtasks.exe" in setup_script
 
 
 def test_hancom_textart_probe_scripts_cover_plain_text_selection() -> None:

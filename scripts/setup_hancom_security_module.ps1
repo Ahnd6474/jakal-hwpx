@@ -16,9 +16,11 @@ function Get-RepoRoot {
 }
 
 function Get-DefaultInstallRoot {
-    $localAppData = [Environment]::GetFolderPath("LocalApplicationData")
-    if (-not [string]::IsNullOrWhiteSpace($localAppData)) {
-        return Join-Path $localAppData "jakal-hwpx\hancom-security"
+    # Packaged hosts can virtualize LocalApplicationData. Build the ordinary
+    # user path from UserProfile so Hwp.exe can load the same DLL.
+    $userProfile = [Environment]::GetFolderPath("UserProfile")
+    if (-not [string]::IsNullOrWhiteSpace($userProfile)) {
+        return Join-Path $userProfile "jakal-hwpx\hancom-security"
     }
     return Join-Path (Get-RepoRoot) ".codex-temp\hancom-security"
 }
@@ -106,6 +108,57 @@ function Set-SecurityModuleRegistry {
         New-Item -Path $Root -Force | Out-Null
     }
     New-ItemProperty -Path $Root -Name $Name -Value $Path -PropertyType String -Force | Out-Null
+
+    # Codex Desktop is an MSIX-packaged host. Registry writes from its child
+    # processes can be redirected to the package hive, which is invisible to
+    # the unpackaged Hancom process. Run one short-lived, current-user task so
+    # Windows writes the value to the ordinary HKCU hive. No UI interaction or
+    # elevation is involved.
+    if (-not [string]::IsNullOrWhiteSpace($env:CODEX_WINDOWS_SANDBOX_PACKAGE_FAMILY)) {
+        if ($Root -notmatch '^HKCU:\\') {
+            throw "Packaged-host registry bridging supports HKCU roots only: $Root"
+        }
+        if ($Name -notmatch '^[A-Za-z0-9_.-]+$') {
+            throw "Security module name contains unsupported characters: $Name"
+        }
+
+        $nativeRoot = $Root -replace '^HKCU:\\', 'HKCU\'
+        $taskName = "JakalHwpxSecurityModule-{0}-{1}" -f $PID, ([guid]::NewGuid().ToString("N").Substring(0, 8))
+        $taskCommand = 'reg.exe add "{0}" /v "{1}" /t REG_SZ /d "{2}" /f' -f $nativeRoot, $Name, $Path
+        $startTime = (Get-Date).AddMinutes(5).ToString("HH:mm")
+        try {
+            & schtasks.exe /Create /TN $taskName /TR $taskCommand /SC ONCE /ST $startTime /RL LIMITED /F | Out-Null
+            if ($LASTEXITCODE -ne 0) {
+                throw "Unable to create the temporary registry bridge task (exit $LASTEXITCODE)."
+            }
+
+            $scheduler = New-Object -ComObject "Schedule.Service"
+            $scheduler.Connect()
+            $task = $scheduler.GetFolder("\").GetTask($taskName)
+            $previousRunTime = $task.LastRunTime
+            & schtasks.exe /Run /TN $taskName | Out-Null
+            if ($LASTEXITCODE -ne 0) {
+                throw "Unable to run the temporary registry bridge task (exit $LASTEXITCODE)."
+            }
+
+            $deadline = (Get-Date).AddSeconds(20)
+            do {
+                Start-Sleep -Milliseconds 100
+                $task = $scheduler.GetFolder("\").GetTask($taskName)
+                $hasRun = $task.LastRunTime -gt $previousRunTime
+                $hasFinished = $hasRun -and $task.State -ne 4
+            } while (-not $hasFinished -and (Get-Date) -lt $deadline)
+            if (-not $hasFinished) {
+                throw "The temporary registry bridge task did not finish within 20 seconds."
+            }
+            if ($task.LastTaskResult -ne 0) {
+                throw "The temporary registry bridge task failed with result $($task.LastTaskResult)."
+            }
+        }
+        finally {
+            & schtasks.exe /Delete /TN $taskName /F 2>$null | Out-Null
+        }
+    }
     return Get-ItemProperty -Path $Root -Name $Name
 }
 

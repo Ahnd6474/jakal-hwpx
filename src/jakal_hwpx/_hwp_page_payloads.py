@@ -23,6 +23,16 @@ _SECTION_PAGE_STARTS_ON_CODES = {
     "ODD": 2,
 }
 _SECTION_PAGE_STARTS_ON_VALUES = {value: key for key, value in _SECTION_PAGE_STARTS_ON_CODES.items()}
+_SECTION_DEFINITION_STARTS_ON_SHIFT = 20
+_SECTION_DEFINITION_STARTS_ON_MASK = 0x3 << _SECTION_DEFINITION_STARTS_ON_SHIFT
+_SECTION_DEFINITION_STARTS_ON_CODES = {
+    "BOTH": 0,
+    "ODD": 1,
+    "EVEN": 2,
+}
+_SECTION_DEFINITION_STARTS_ON_VALUES = {
+    value: key for key, value in _SECTION_DEFINITION_STARTS_ON_CODES.items()
+}
 _HEADER_FOOTER_APPLY_PAGE_TYPE_CODES = {
     "BOTH": 0,
     "EVEN": 1,
@@ -171,6 +181,11 @@ def _build_section_definition_payload(
     if numbering_shape_id is not None:
         updated[18:20] = int(numbering_shape_id).to_bytes(2, "little", signed=False)
     if start_numbers is not None:
+        if "pageStartsOn" in start_numbers and start_numbers["pageStartsOn"] is not None:
+            starts_on = str(start_numbers["pageStartsOn"]).upper()
+            starts_on_code = _SECTION_DEFINITION_STARTS_ON_CODES.get(starts_on, 0)
+            attributes &= ~_SECTION_DEFINITION_STARTS_ON_MASK
+            attributes |= starts_on_code << _SECTION_DEFINITION_STARTS_ON_SHIFT
         for key, offset in {"page": 20, "pic": 22, "tbl": 24, "equation": 26}.items():
             if key in start_numbers and start_numbers[key] is not None:
                 updated[offset : offset + 2] = int(start_numbers[key]).to_bytes(2, "little", signed=False)

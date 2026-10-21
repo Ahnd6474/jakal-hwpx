@@ -13,6 +13,7 @@ if str(SRC_ROOT) not in sys.path:
     sys.path.insert(0, str(SRC_ROOT))
 
 from jakal_hwpx import HwpDocument  # noqa: E402
+from jakal_hwpx._ole_payloads import default_ole_cfb_bytes  # noqa: E402
 
 
 def build_native_hwp_sample(output_path: Path) -> Path:
@@ -68,7 +69,7 @@ def build_native_hwp_sample(output_path: Path) -> Path:
     document.append_shape(kind="line", width=4200, height=900, line_color="#345678")
     document.append_ole(
         "native-control.ole",
-        b"NATIVE_CONTROL_OLE",
+        default_ole_cfb_bytes(),
         width=3900,
         height=2200,
         shape_comment="Generated native OLE",
@@ -87,6 +88,34 @@ def build_native_hwp_sample(output_path: Path) -> Path:
 def build_native_bridge_hwpx_sample(source_path: Path, output_path: Path) -> Path:
     document = HwpDocument.open(source_path)
     bridged = document.to_hwpx_document()
+    shape_styles = {
+        "rect": ("#ABCDEF", "#123456"),
+        "ellipse": ("#A1B2C3", "#102030"),
+        "arc": ("#C3B2A1", "#203040"),
+        "polygon": ("#DDEEFF", "#304050"),
+        "textart": ("#FFEEDD", "#405060"),
+    }
+    for shape in bridged.shapes():
+        if shape.kind in shape_styles:
+            fill_color, line_color = shape_styles[shape.kind]
+            shape.set_fill_style(face_color=fill_color, hatch_color=line_color, alpha=0)
+            shape.set_line_style(color=line_color, width=33, style="SOLID")
+        elif shape.kind == "line":
+            shape.set_line_style(color="#345678", width=33, style="SOLID")
+    ole = bridged.oles()[0]
+    ole.set_line_style(
+        color="#445566",
+        width=77,
+        style="SOLID",
+        end_cap="ROUND",
+        head_fill=False,
+        tail_fill=False,
+        head_size="SMALL_SMALL",
+        tail_size="SMALL_SMALL",
+        outline_style="OUTER",
+    )
+    ole.set_object_metadata(object_type="LINK", draw_aspect="ICON", has_moniker=True, eq_baseline=12)
+    ole.shape_comment = "Generated native OLE"
     bridged.set_metadata(
         title="Generated Native Control Authoring Bridge",
         creator="jakal_hwpx",

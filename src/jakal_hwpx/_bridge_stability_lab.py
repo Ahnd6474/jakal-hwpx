@@ -65,7 +65,7 @@ def _sample_hwp_path() -> Path:
     paths = sorted(HWP_SAMPLE_DIR.glob("*.hwp"))
     if not paths:
         raise FileNotFoundError(f"No HWP sample was found under {HWP_SAMPLE_DIR}")
-    return paths[0]
+    return next((path for path in paths if not path.name.startswith("generated_")), paths[0])
 
 
 def _sample_hwpx_path() -> Path:

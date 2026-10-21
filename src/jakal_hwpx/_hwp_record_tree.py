@@ -399,22 +399,34 @@ class DocInfoModel:
         id_record = self.id_mappings_record()
         if storage_id is None:
             storage_id = self.next_bin_data_id()
-        bindata = BinDataRecord.embedded(level=0, storage_id=storage_id, extension=extension, flags=flags)
+        bindata = BinDataRecord.embedded(
+            level=id_record.level + 1,
+            storage_id=storage_id,
+            extension=extension,
+            flags=flags,
+        )
         insert_at = 0
-        for index, root in enumerate(self.roots):
-            if isinstance(root, BinDataRecord):
+        for index, child in enumerate(id_record.children):
+            if isinstance(child, BinDataRecord):
                 insert_at = index + 1
-            elif isinstance(root, IdMappingsRecord):
-                insert_at = index + 1
-        self.roots.insert(insert_at, bindata)
+            else:
+                break
+        id_record.children.insert(insert_at, bindata)
         id_record.bin_data_count = max(id_record.bin_data_count, storage_id)
         return bindata
 
     def remove_bindata(self, storage_id: int) -> bool:
+        id_record = self.id_mappings_record()
+        for index, child in enumerate(id_record.children):
+            if isinstance(child, BinDataRecord) and child.storage_id == storage_id:
+                del id_record.children[index]
+                remaining_ids = [record.storage_id or 0 for record in self.bin_data_records()]
+                id_record.bin_data_count = max(remaining_ids, default=0)
+                return True
+        # Accept older malformed models long enough to remove and repair them.
         for index, root in enumerate(self.roots):
             if isinstance(root, BinDataRecord) and root.storage_id == storage_id:
                 del self.roots[index]
-                id_record = self.id_mappings_record()
                 remaining_ids = [record.storage_id or 0 for record in self.bin_data_records()]
                 id_record.bin_data_count = max(remaining_ids, default=0)
                 return True

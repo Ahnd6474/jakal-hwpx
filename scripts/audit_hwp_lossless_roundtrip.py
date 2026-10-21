@@ -16,7 +16,7 @@ DEFAULT_TEMP_ROOT = REPO_ROOT / ".codex-temp" / "lossless_audit"
 if str(SRC_ROOT) not in sys.path:
     sys.path.insert(0, str(SRC_ROOT))
 
-from jakal_hwpx import HwpBinaryDocument
+from jakal_hwpx import HwpBinaryDocument  # noqa: E402
 
 
 @dataclass

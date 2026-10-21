@@ -16,9 +16,9 @@ def _repo_root() -> Path:
 
 
 def _default_security_module_install_root() -> Path:
-    local_app_data = os.environ.get("LOCALAPPDATA")
-    if local_app_data:
-        return Path(local_app_data) / "jakal-hwpx" / "hancom-security"
+    user_profile = os.environ.get("USERPROFILE")
+    if user_profile:
+        return Path(user_profile) / "jakal-hwpx" / "hancom-security"
     return _repo_root() / ".codex-temp" / "hancom-security"
 
 
