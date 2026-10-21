@@ -21,6 +21,7 @@ def test_precompressed_asset_cache_variants_and_ranges(tmp_path):
     (assets / 'test-abcdefgh.js.gz').write_bytes(gzip.compress(data))
     (assets / 'uncompressed-abcdefgh.js').write_bytes(data)
     (tmp_path / 'index.html').write_text('<h1>Editor</h1>')
+    (tmp_path / '404.html').write_text('<h1>Page not found</h1>')
     app = FastAPI()
     app.mount('/', WebStaticFiles(directory=tmp_path, html=True))
     with TestClient(app) as client:
@@ -38,7 +39,13 @@ def test_precompressed_asset_cache_variants_and_ranges(tmp_path):
         assert partial.status_code == 206 and partial.content == data[:5] and 'content-encoding' not in partial.headers
         assert client.get('/assets/uncompressed-abcdefgh.js', headers={'Accept-Encoding': 'gzip'}).content == data
         assert client.get('/').headers['cache-control'] == 'no-cache'
-        assert client.get('/assets/missing-abcdefgh.js').status_code == 404
+        missing = client.get('/assets/missing-abcdefgh.js', headers={'Accept-Encoding': 'gzip'})
+        assert missing.status_code == 404
+        assert 'Page not found' in missing.text
+        assert missing.headers['content-type'].startswith('text/html')
+        assert 'content-encoding' not in missing.headers
+        assert 'immutable' not in missing.headers['cache-control']
+        assert client.get('/not-a-page').status_code == 404
 
 
 def test_public_assets_do_not_issue_session_cookies_and_private_api_is_not_cached(client, raw_document):

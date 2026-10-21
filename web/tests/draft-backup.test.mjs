@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { backupText, clearDraftBackup, decodeBackup, readDraftBackup, writeDraftBackup } from '../src/draft-backup.ts';
+import { textTargetIndex } from '../src/editing.ts';
 
 const now = Date.now();
 const doc = { id: 'test-document', revision: 3, expires: now / 1000 + 86400, sections: [{ index: 0,
@@ -11,6 +12,27 @@ const drafts = { 's0-p0': { type: 'paragraph', section: 0, index: 0, text: '한�
   's0-t0-1-2': { type: 'cell', section: 0, table: 0, row: 1, column: 2, text: '' } };
 const backup = () => ({ version: 1, documentId: doc.id, revision: doc.revision, expires: doc.expires, updatedAt: now,
   changes: [{ id: 's0-p0', original: '원문', operation: drafts['s0-p0'] }, { id: 's0-t0-1-2', original: '셀', operation: drafts['s0-t0-1-2'] }] });
+
+test('empty drafts do not traverse document content and sparse changes stay canonical', t => {
+  const saved = new Map(); storage(t, { setItem: (key, value) => saved.set(key, value), removeItem: key => saved.delete(key) });
+  assert.equal(writeDraftBackup({ id: 'empty', get sections() { throw new Error('unneeded content access'); } }, {}), true);
+  const reversed = { 'unknown': { type: 'paragraph', section: 0, index: 0, text: 'ignored' }, 's0-t0-1-2': drafts['s0-t0-1-2'], 's0-p0': { ...drafts['s0-p0'], index: 999 } };
+  assert.equal(writeDraftBackup(doc, reversed), true);
+  const record = JSON.parse(saved.get('jakal-draft:' + doc.id));
+  assert.deepEqual(record.changes.map(item => item.id), ['s0-p0', 's0-t0-1-2']);
+  assert.equal(record.changes[0].operation.index, 0);
+  assert.equal(record.changes[1].operation.text, '');
+  assert.equal(writeDraftBackup(doc, { ...drafts, 's0-p0': { ...drafts['s0-p0'], text: null } }), true);
+  assert.deepEqual(JSON.parse(saved.get('jakal-draft:' + doc.id)).changes.map(item => item.id), ['s0-t0-1-2']);
+});
+test('target index follows immutable content rather than document id or settings identity', () => {
+  const first = textTargetIndex(doc);
+  assert.equal(textTargetIndex({ ...doc, settings: { instructions: 'changed' } }), first);
+  const next = { ...doc, sections: [{ ...doc.sections[0], paragraphs: [{ ...doc.sections[0].paragraphs[0], text: 'new source' }] }] };
+  assert.notEqual(textTargetIndex(next), first);
+  assert.equal(textTargetIndex(next).get('s0-p0').original, 'new source');
+  assert.equal(first.get('s0-p0').original, '원문');
+});
 
 function storage(t, value) {
   const previous = Object.getOwnPropertyDescriptor(globalThis, 'sessionStorage');

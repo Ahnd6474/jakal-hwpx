@@ -1,3 +1,4 @@
+import { useModalFocus } from './modal-focus';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { History, LoaderCircle, RefreshCw, RotateCcw, X } from 'lucide-react';
 import { api, type Document, type RevisionPage, type RevisionSnapshot, type SavedRevision } from './api';
@@ -45,24 +46,7 @@ export function VersionHistory({ doc, dirty, onClose, onRestore }: Props) {
     return () => abort.abort();
   }, [doc.id, selected, reload]);
 
-  useEffect(() => {
-    const previous = document.activeElement as HTMLElement | null;
-    const overflow = document.body.style.overflow;
-    document.body.style.overflow = 'hidden';
-    const controls = () => [...(dialog.current?.querySelectorAll<HTMLElement>('button:not([disabled]), input') || [])];
-    controls()[0]?.focus();
-    function keyboard(event: KeyboardEvent) {
-      if (event.key === 'Escape' && !restoringRef.current) onClose();
-      if (event.key !== 'Tab') return;
-      const fields = controls();
-      if (!fields.length) { event.preventDefault(); return; }
-      if (!dialog.current?.contains(document.activeElement)) { event.preventDefault(); fields[0].focus(); }
-      else if (event.shiftKey && document.activeElement === fields[0]) { event.preventDefault(); fields.at(-1)?.focus(); }
-      else if (!event.shiftKey && document.activeElement === fields.at(-1)) { event.preventDefault(); fields[0].focus(); }
-    }
-    window.addEventListener('keydown', keyboard);
-    return () => { window.removeEventListener('keydown', keyboard); document.body.style.overflow = overflow; previous?.focus(); };
-  }, [onClose]);
+  useModalFocus(dialog, () => { if (!restoringRef.current) onClose(); });
 
   async function more() {
     if (cursor === null || listLoading) return;

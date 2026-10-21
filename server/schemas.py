@@ -3,6 +3,13 @@ from typing import Annotated, Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 
+class TemplateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    template: Literal["blank", "report", "meeting", "table", "exam", "worksheet"]
+    title: str = Field(min_length=1, max_length=100)
+    question_count: int = Field(default=3, ge=1, le=20)
+
+
 class ParagraphEdit(BaseModel):
     model_config = ConfigDict(extra="forbid")
     type: Literal["paragraph"]
@@ -30,6 +37,15 @@ class EditRequest(BaseModel):
 class RevisionRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     revision: int = Field(ge=0)
+
+
+class RenameRequest(RevisionRequest):
+    expected_name: str = Field(min_length=1, max_length=180)
+    name: str = Field(min_length=1, max_length=160)
+
+
+class CopyRequest(RevisionRequest):
+    name: str = Field(min_length=1, max_length=160)
 
 
 class RestoreRequest(RevisionRequest):

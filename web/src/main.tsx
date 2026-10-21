@@ -3,21 +3,30 @@ import { createRoot } from 'react-dom/client';
 import { ArrowDownToLine, ArrowRight, ArrowUpFromLine, BookOpen, Check, ChevronDown, ChevronRight, ChevronUp, CircleCheck, Clock3, FileCheck2, FileText, HelpCircle, LayoutPanelLeft, LoaderCircle, LockKeyhole, PanelLeftClose, Plus, RotateCcw, RotateCw, Save, Search, ShieldCheck, Table2, Trash2, TriangleAlert, Type, X } from 'lucide-react';
 import { api, post, waitForJob, type Document, type DocumentSummary, type Operation, type Paragraph, type Table } from './api';
 import './styles.css';
-import { AdvancedSettings } from './AdvancedSettings';
 import { textTargets, type Proposal } from './editing';
 import { BookOpenCheck, Images, Info, SlidersHorizontal } from 'lucide-react';
-import { DocumentReader } from './DocumentReader';
 import { PageEditor, type PageEditorHandle } from './PageEditor';
 import { WorkspaceMenu } from './WorkspaceMenu';
-import { VersionHistory } from './VersionHistory';
 import { TextFlowEditor, type TextFlowHandle } from './TextFlowEditor';
 import { draftReducer } from './draft-history';
 import { lastDocument } from './preferences';
 import { backupText, clearDraftBackup, readDraftBackup, writeDraftBackup, type DraftBackup } from './draft-backup';
 import { useDraftBackup } from './useDraftBackup';
 import { prepareDownload } from './download-workflow';
-import { ChangeReview } from './ChangeReview';
 import type { TextTarget } from './editing';
+import type { TemplateInput } from './NewDocument';
+import { ToolBoundary } from './ToolBoundary';
+import { ApplicationBoundary } from './ApplicationBoundary';
+import { ConnectionStatus } from './ConnectionStatus';
+import { trapModalFocus } from './modal-focus';
+import { requestBytes } from './request';
+const NewDocument = React.lazy(() => import('./NewDocument').then(module => ({ default: module.NewDocument })));
+const AdvancedSettings = React.lazy(() => import('./AdvancedSettings').then(module => ({ default: module.AdvancedSettings })));
+const DocumentReader = React.lazy(() => import('./DocumentReader').then(module => ({ default: module.DocumentReader })));
+const VersionHistory = React.lazy(() => import('./VersionHistory').then(module => ({ default: module.VersionHistory })));
+const ChangeReview = React.lazy(() => import('./ChangeReview').then(module => ({ default: module.ChangeReview })));
+const DocumentActions = React.lazy(() => import('./DocumentActions').then(module => ({ default: module.DocumentActions })));
+const BackupShelf = React.lazy(() => import('./BackupShelf').then(module => ({ default: module.BackupShelf })));
 
 function App() {
   const [documents, setDocuments] = useState<DocumentSummary[]>([]);
@@ -42,6 +51,12 @@ function App() {
   const [infoOpen, setInfoOpen] = useState(false);
   const [reviewOpen, setReviewOpen] = useState(false);
   const [versionsOpen, setVersionsOpen] = useState(false);
+  const [newDocumentOpen, setNewDocumentOpen] = useState(false);
+  const [fileAction, setFileAction] = useState<'rename' | 'copy' | null>(null);
+  const closeFileAction = useCallback(() => setFileAction(null), []);
+  const [backupShelf, setBackupShelf] = useState(false);
+  const closeBackupShelf = useCallback(() => setBackupShelf(false), []);
+  const closeNewDocument = useCallback(() => setNewDocumentOpen(false), []);
   const closeVersions = useCallback(() => setVersionsOpen(false), []);
   const closeReview = useCallback(() => setReviewOpen(false), []);
   const [staleBackup, setStaleBackup] = useState<DraftBackup | null>(null);
@@ -83,6 +98,7 @@ function App() {
   const inputRef = useRef<HTMLInputElement>(null);
   const dirty = Object.keys(history.present).length + (studioDirty ? 1 : 0);
   const disabled = Boolean(busy);
+  useEffect(() => { document.title = `${dirty ? '● ' : ''}${doc ? doc.name : '내 문서'} · Jakal`; }, [doc?.name, dirty]);
   const saved = doc?.validated === doc?.revision;
 
   async function refreshList() { setDocuments(await api<DocumentSummary[]>('/documents')); }
@@ -119,7 +135,7 @@ function App() {
         setDocuments(list);
         const previous = lastDocument.read();
         if (previous && list.some(d => d.id === previous && d.status === 'ready')) await load(previous);
-      } catch { setError('서버에 연결할 수 없습니다. 서버 실행 상태를 확인해 주세요.'); }
+      } catch (e) { setError(e instanceof Error ? e.message : '서버에 연결할 수 없습니다. 서버 실행 상태를 확인해 주세요.'); }
       finally { setBooting(false); }
     })();
   }, []);
@@ -135,22 +151,8 @@ function App() {
   }, [notice]);
   useEffect(() => {
     if (!reportOpen && !helpOpen) return;
-    const dialog = document.querySelector<HTMLElement>('[role="dialog"]');
-    const previous = document.activeElement as HTMLElement | null;
-    const oldOverflow = document.body.style.overflow;
-    document.body.style.overflow = 'hidden';
-    const controls = () => [...(dialog?.querySelectorAll<HTMLElement>('button:not([disabled]), a[href], input, select, textarea') || [])];
-    controls()[0]?.focus();
-    function keyboard(event: KeyboardEvent) {
-      if (event.key === 'Escape') { setReportOpen(false); setHelpOpen(false); }
-      if (event.key !== 'Tab') return;
-      const items = controls();
-      if (!items.length) return;
-      if (event.shiftKey && document.activeElement === items[0]) { event.preventDefault(); items.at(-1)?.focus(); }
-      else if (!event.shiftKey && document.activeElement === items.at(-1)) { event.preventDefault(); items[0].focus(); }
-    }
-    document.addEventListener('keydown', keyboard);
-    return () => { document.removeEventListener('keydown', keyboard); document.body.style.overflow = oldOverflow; previous?.focus(); };
+    const dialog = document.getElementById(helpOpen ? 'help-title' : 'report-title')?.closest<HTMLElement>('[role="dialog"]');
+    if (dialog) return trapModalFocus(dialog, () => { setReportOpen(false); setHelpOpen(false); });
   }, [reportOpen, helpOpen]);
   function mayLeave() {
     if (studioDirty) { setError('원문 편집 내용을 먼저 수정 저장한 뒤 다른 문서를 열어 주세요.'); return false; }
@@ -163,9 +165,11 @@ function App() {
     setTab(next);
   }
   async function upload(file?: File) {
-    if (!file || !mayLeave()) return;
+    if (!file) return;
+    if (!file.size) { setError('빈 파일은 업로드할 수 없습니다.'); return; }
     if (!/\.(hwp|hwpx)$/i.test(file.name)) { setError('.hwp 또는 .hwpx 파일을 선택해 주세요.'); return; }
     if (file.size > 20 * 1024 * 1024) { setError('파일 크기는 20MB 이하여야 합니다.'); return; }
+    if (!mayLeave()) return;
     await task('파일을 업로드하고 있습니다', async () => {
       const form = new FormData(); form.append('file', file);
       const result = await api<{ document_id: string; job_id: string }>('/documents', { method: 'POST', body: form });
@@ -179,12 +183,20 @@ function App() {
   async function sample(format: 'hwp' | 'hwpx' = 'hwpx') {
     if (!mayLeave()) return;
     await task('샘플 문서를 준비하고 있습니다', async () => {
-      const response = await fetch(`/sample.${format}`);
-      if (!response.ok) throw new Error('샘플 문서를 불러오지 못했습니다.');
-      const form = new FormData(); form.append('file', new File([await response.blob()], `워크스페이스_시작하기.${format}`));
+      const bytes = await requestBytes(`/sample.${format}`);
+      const form = new FormData(); form.append('file', new File([bytes], `워크스페이스_시작하기.${format}`));
       const result = await api<{ document_id: string; job_id: string }>('/documents', { method: 'POST', body: form });
       await waitForJob(result.job_id, () => setBusy('샘플 문서를 분석하고 있습니다'));
       await load(result.document_id); setTab('studio'); setNotice('샘플을 자유롭게 수정해 보세요.');
+    });
+  }
+  async function createDocument(value: TemplateInput) {
+    if (!mayLeave()) return;
+    await task('새 문서를 만들고 있습니다', async () => {
+      const result = await post<{ document_id: string; job_id: string }>('/documents/from-template', value);
+      await waitForJob(result.job_id, () => setBusy('문서 양식을 준비하고 검사하고 있습니다'));
+      await load(result.document_id); setNewDocumentOpen(false);
+      setNotice('새 문서를 만들었습니다. 문서 위에서 내용을 입력하거나 작업 도구를 사용하세요.');
     });
   }
   async function saveRevision(current: Document, operations: Operation[]) {
@@ -250,6 +262,47 @@ function App() {
       setNotice('검증한 수정 버전의 다운로드를 시작했습니다.');
     });
   }
+  async function recoverBackup(file: File) {
+    if (!mayLeave()) throw new Error('현재 편집 내용을 저장한 뒤 다시 열어 주세요.');
+    if (taskRunning.current) throw new Error('진행 중인 작업이 끝난 뒤 다시 시도해 주세요.');
+    if (!file.size || file.size > 20 * 1024 * 1024) throw new Error('복구할 파일은 0바이트보다 크고 20MB 이하여야 합니다. 임시본을 내려받아 확인해 주세요.');
+    taskRunning.current = true; setBusy('임시본을 새 문서로 가져오고 있습니다'); setError('');
+    try {
+      const form = new FormData(); form.append('file', file);
+      const result = await api<{ document_id: string; job_id: string }>('/documents', { method: 'POST', body: form });
+      await waitForJob(result.job_id, () => setBusy('임시본의 문서 구조를 분석하고 있습니다'));
+      await load(result.document_id); setBackupShelf(false); setNotice('임시본을 별도의 새 문서로 열었습니다. 보관함의 임시본도 유지됩니다.');
+    } finally { taskRunning.current = false; setBusy(''); }
+  }
+  async function manageDocument(mode: 'rename' | 'copy', name: string) {
+    if (!doc || taskRunning.current) throw new Error('진행 중인 작업이 끝난 뒤 다시 시도해 주세요.');
+    taskRunning.current = true; setError(''); setNotice('');
+    setBusy(mode === 'rename' ? '문서 이름을 변경하고 있습니다' : '복사본을 만들고 있습니다');
+    try {
+      if (mode === 'rename') {
+        const fresh = await api<Document>(`/documents/${doc.id}/name`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ revision: doc.revision, expected_name: doc.name, name }) });
+        setDoc(fresh); await refreshList(); setNotice('파일 이름을 변경했습니다. 편집 내용은 유지됩니다.');
+      } else {
+        const source = studioDirty ? await saveStudioRevision(doc) : dirty ? await saveRevision(doc, Object.values(history.present)) : doc;
+        const result = await post<{ document_id: string; job_id: string }>(`/documents/${source.id}/copies`, { revision: source.revision, name });
+        await waitForJob(result.job_id, () => setBusy('복사본을 분석하고 문서 구조를 검사하고 있습니다'));
+        await load(result.document_id); setNotice('독립된 복사본을 열었습니다. 이전 문서와 저장 기록은 내 문서에 남아 있습니다.');
+      }
+      setFileAction(null);
+    } finally { taskRunning.current = false; setBusy(''); }
+  }
+  const hostAction = useRef((action: string) => {});
+  hostAction.current = action => {
+    if (taskRunning.current) return;
+    if (action === 'new') setNewDocumentOpen(true);
+    else if (action === 'open') inputRef.current?.click();
+    else if (action === 'documents') setSidebarOpen(true);
+    else if (action === 'save') void save();
+    else if (action === 'copy') setFileAction('copy');
+    else if (action === 'download') void download();
+    else if (action === 'history') setVersionsOpen(true);
+  };
+  const onHostFileAction = useCallback((action: string) => hostAction.current(action), []);
   async function deleteDocument(item: DocumentSummary) {
     if (!window.confirm(`“${item.name}”의 원본과 모든 수정본을 삭제할까요?`)) return;
     await task('문서를 삭제하고 있습니다', async () => {
@@ -274,9 +327,11 @@ function App() {
   const paragraphCount = doc?.sections.reduce((n, s) => n + s.paragraphs.length, 0) || 0;
   const tableCount = doc?.sections.reduce((n, s) => n + s.tables.length, 0) || 0;
   const value = (key: string, original: string) => history.present[key]?.text ?? original;
-  const visibleTables = visibleSections.flatMap(s => s.tables).filter(t => !search || t.cells.some(c => value(`${t.id}-${c.row}-${c.column}`, c.text).toLocaleLowerCase().includes(search.toLocaleLowerCase())));
+  const normalizedSearch = search.toLocaleLowerCase();
+  const visibleTables = useMemo(() => visibleSections.flatMap(s => s.tables).filter(t => !normalizedSearch || t.cells.some(c => value(`${t.id}-${c.row}-${c.column}`, c.text).toLocaleLowerCase().includes(normalizedSearch))), [visibleSections, normalizedSearch, history.present]);
   const activeTable = visibleTables.find(t => t.id === tableId) || visibleTables[0];
-  const visibleParagraphs = visibleSections.flatMap(s => s.paragraphs).filter(p => (showEmpty || !!value(p.id, p.text).trim() || !!history.present[p.id]) && (showReadonly || p.editable) && (!search || value(p.id, p.text).toLocaleLowerCase().includes(search.toLocaleLowerCase())));
+  const visibleParagraphs = useMemo(() => visibleSections.flatMap(s => s.paragraphs).filter(p => (showEmpty || !!value(p.id, p.text).trim() || !!history.present[p.id]) && (showReadonly || p.editable) && (!normalizedSearch || value(p.id, p.text).toLocaleLowerCase().includes(normalizedSearch))), [visibleSections, showEmpty, showReadonly, normalizedSearch, history.present]);
+  const visibleParagraphIds = useMemo(() => new Set(visibleParagraphs.map(p => p.id)), [visibleParagraphs]);
   function openHome() {
     if (!mayLeave()) return;
     if (doc && dirty && !staleBackup) clearDraftBackup(doc.id);
@@ -314,7 +369,9 @@ function App() {
     function keyboard(event: KeyboardEvent) {
       if (!(event.ctrlKey || event.metaKey) || event.key.toLowerCase() !== 's' || !doc) return;
       event.preventDefault();
-      if (!disabled && dirty && !document.querySelector('[role="dialog"]')) void save();
+      if (disabled || document.querySelector('[role="dialog"]')) return;
+      if (event.shiftKey) { setFileAction('copy'); return; }
+      if (dirty) void save();
     }
     window.addEventListener('keydown', keyboard);
     return () => window.removeEventListener('keydown', keyboard);
@@ -359,25 +416,28 @@ function App() {
       })}</tr>)}</tbody></table></div></article>;
   }
 
-  return <div className={`app ${doc ? 'editing editor-workspace' : ''} ${doc && tab === 'original' ? 'reading-document' : ''} ${continuousText ? 'text-flow-document' : ''} ${doc && (tab === 'original' || continuousText) && toolsCollapsed ? 'reading-tools-collapsed' : ''}`} onDragOver={e => { if (!e.dataTransfer.types.includes('Files')) return; e.preventDefault(); if (!disabled) setDragging(true); }} onDragLeave={e => { if (!e.relatedTarget) setDragging(false); }} onDrop={e => { if (!e.dataTransfer.files.length) return; e.preventDefault(); setDragging(false); if (!disabled) void upload(e.dataTransfer.files[0]); }}>
+  return <div className={`app ${doc ? 'editing editor-workspace' : ''} ${doc && tab === 'original' ? 'reading-document' : ''} ${continuousText ? 'text-flow-document' : ''} ${doc && (tab === 'original' || continuousText) && toolsCollapsed ? 'reading-tools-collapsed' : ''}`} onDragOver={e => { if (!e.dataTransfer.types.includes('Files')) return; e.preventDefault(); if (!disabled) setDragging(true); }} onDragLeave={e => { if (!e.relatedTarget) setDragging(false); }} onDrop={e => { if (!e.dataTransfer.files.length) return; e.preventDefault(); setDragging(false); if (e.dataTransfer.files.length > 1) { setError('한 번에 한 파일씩 열어 주세요.'); return; } if (!disabled) void upload(e.dataTransfer.files[0]); }}>
+    <a className="skip-link" href="#main-content">본문으로 건너뛰기</a>
     <input ref={inputRef} type="file" accept=".hwp,.hwpx" hidden aria-label="HWP 또는 HWPX 파일 선택" onChange={e => { void upload(e.target.files?.[0]); e.target.value = ''; }} />
     <aside className={`sidebar ${sidebarOpen ? 'open' : ''}`} inert={!!doc && !sidebarOpen} aria-hidden={!!doc && !sidebarOpen}>
       <button className="brand" disabled={disabled} onClick={openHome} aria-label="Jakal 내 문서"><span className="brand-mark">j</span><strong>jakal</strong><span className="brand-caption">문서 도구</span></button>
       <button className="new-button" disabled={disabled} onClick={() => inputRef.current?.click()}><Plus size={17} />파일 열기</button>
+      <button className="nav-item" disabled={disabled} onClick={() => { setError(''); setNewDocumentOpen(true); }}><FileText size={17} />새 문서 만들기</button>
       <nav aria-label="문서 탐색"><button className={`nav-item ${!doc ? 'active' : ''}`} disabled={disabled} onClick={openHome}><LayoutPanelLeft size={17} />내 문서</button></nav>
       <div className="nav-heading recent-heading">최근에 연 문서<span>{documents.length}</span></div>
       <div className="document-list">{documents.length ? documents.map(item => <div key={item.id} className={`document-item ${doc?.id === item.id ? 'active' : ''}`}><button disabled={disabled} title={item.name} onClick={() => { if (mayLeave()) void task('문서를 여는 중', () => load(item.id)); }}><FileText size={16} /><span><b>{item.name}</b><small>{item.status === 'failed' ? '분석 실패' : item.status === 'processing' ? '분석 중' : `버전 ${item.revision + 1}`}</small></span></button><button className="delete-button" disabled={disabled} aria-label={`${item.name} 삭제`} onClick={() => void deleteDocument(item)}><Trash2 size={14} /></button></div>) : <p className="no-documents">최근 문서가 없습니다.</p>}</div>
-      <div className="sidebar-bottom"><button onClick={() => setHelpOpen(true)}><HelpCircle size={17} />도움말</button><div className="session-note"><LockKeyhole size={13} /><span>이 브라우저에 연결된 문서<br />업로드 후 24시간 보관</span></div></div>
+      <div className="sidebar-bottom"><button disabled={disabled} onClick={() => setBackupShelf(true)}><RotateCcw size={17} />임시 편집 보관함</button><button onClick={() => setHelpOpen(true)}><HelpCircle size={17} />도움말</button><div className="session-note"><LockKeyhole size={13} /><span>이 브라우저에 연결된 문서<br />업로드 후 24시간 보관</span></div></div>
     </aside>
     {sidebarOpen && <button className="sidebar-scrim" aria-label="메뉴 닫기" onClick={() => setSidebarOpen(false)} />}
-    <main className="main">
+    <main className="main" id="main-content" tabIndex={-1}>
+      <ConnectionStatus />
       <header className="topbar"><div className="breadcrumb"><button className="menu-toggle icon-button" aria-label="메뉴 열기" onClick={() => setSidebarOpen(true)}><PanelLeftClose size={19} /></button><button disabled={disabled} onClick={openHome}>내 문서</button>{doc && <><ChevronRight size={13} /><span title={doc.name}>{doc.name}</span></>}</div><button className="help-button" aria-label="사용 안내" onClick={() => setHelpOpen(true)}><BookOpen size={16} /><span>사용 안내</span></button></header>
-      {error && <div className="message error" role="alert"><TriangleAlert size={17} /><span>{error}</span><button aria-label="오류 닫기" onClick={() => setError('')}><X size={17} /></button></div>}
+      {error && <div className="message error" role="alert"><TriangleAlert size={17} /><span>{error}</span>{!doc && <button className="text-button" disabled={disabled || booting} onClick={() => void task('문서 목록을 확인하고 있습니다', refreshList)}>목록 다시 확인</button>}<button aria-label="오류 닫기" onClick={() => setError('')}><X size={17} /></button></div>}
       {notice && <div className="message success" role="status"><CircleCheck size={17} /><span>{notice}</span><button aria-label="알림 닫기" onClick={() => setNotice('')}><X size={17} /></button></div>}
       {busy && <div className="busy-bar" role="status"><LoaderCircle size={16} className="spin" />{busy}</div>}
       {staleBackup && doc && <div className="draft-conflict" role="status"><div><strong>다른 버전의 임시 편집이 있습니다.</strong><span>덮어쓰지 않고 보관했습니다. 이전 임시본을 정리하면 현재 편집의 임시보관을 다시 시작합니다.</span></div><div><button className="text-button" onClick={downloadOldBackup}>임시본문 받기</button>{confirmDropBackup ? <><span>이전 임시 편집을 버릴까요?</span><button className="text-button" onClick={() => { if (clearDraftBackup(doc.id)) { setStaleBackup(null); setConfirmDropBackup(false); } else setError('브라우저 임시보관함에 접근할 수 없습니다.'); }}>버리기 확인</button><button className="text-button" onClick={() => setConfirmDropBackup(false)}>취소</button></> : <button className="text-button" onClick={() => setConfirmDropBackup(true)}>이전 임시본 버리기</button>}</div></div>}
       {!doc && booting ? <div className="workspace-loading" role="status"><LoaderCircle className="spin" size={22} /><p>최근 문서를 불러오고 있습니다</p></div> : !doc ? <div className="library">
-        <section className="library-heading"><div><h1>내 문서</h1><p>HWP · HWPX 문서를 열어 문단과 표를 수정합니다.</p></div><button className="primary-button" disabled={disabled} onClick={() => inputRef.current?.click()}><Plus size={16} />파일 열기</button></section>
+        <section className="library-heading"><div><h1>내 문서</h1><p>HWP · HWPX 문서를 열어 문단과 표를 수정합니다.</p></div><div className="library-heading-actions"><button className="outline-button" disabled={disabled} onClick={() => { setError(''); setNewDocumentOpen(true); }}><FileText size={16} />새 문서</button><button className="primary-button" disabled={disabled} onClick={() => inputRef.current?.click()}><Plus size={16} />파일 열기</button></div></section>
         <section className={`upload-zone ${dragging ? 'dragging' : ''}`} onDragLeave={() => setDragging(false)} aria-label="파일 업로드">
           <ArrowUpFromLine size={24} strokeWidth={1.4} /><div><h2>HWP 또는 HWPX 파일을 끌어 놓으세요</h2><p>HWP는 HWPX로 변환 · 최대 20MB</p></div><button className="outline-button" disabled={disabled} onClick={() => inputRef.current?.click()}>파일 선택</button>
         </section>
@@ -386,17 +446,17 @@ function App() {
           {!listedDocuments.length && <div className="library-empty"><FileText size={31} strokeWidth={1.1} /><h3>{fileSearch ? '일치하는 문서가 없습니다' : '아직 열어 본 문서가 없습니다'}</h3><p>{fileSearch ? '다른 파일 이름으로 검색하세요.' : '파일을 열면 이 목록에서 작업을 이어갈 수 있습니다.'}</p>{!fileSearch && <button className="text-button" disabled={disabled} onClick={() => void sample()}>예제 문서로 시작하기<ArrowRight size={15} /></button>}</div>}
         </section>
         <div className="library-footer"><span><Clock3 size={14} />문서는 업로드 후 24시간이 지나면 삭제됩니다.</span><div className="sample-links"><button className="text-button" disabled={disabled} onClick={() => void sample('hwp')}>HWP 예제<ArrowRight size={14} /></button><button className="text-button" disabled={disabled} onClick={() => void sample()}>HWPX 예제<ArrowRight size={14} /></button></div></div>
-        <section className="library-guide"><h2>처음 사용하시나요?</h2><p>파일을 열면 원문 서식으로 편집기가 표시됩니다.<br />문서 위를 클릭해 수정하거나 상단 메뉴에서 글자·문단·표·쪽 설정을 바꾸세요.<br /><b>검증하기</b>로 저장 결과를 확인하면 수정본을 다운로드할 수 있습니다.</p><button className="text-button" onClick={() => setHelpOpen(true)}>사용 안내<ArrowRight size={14} /></button></section>
+        <section className="library-guide"><h2>처음 사용하시나요?</h2><p>파일을 열면 원문 서식으로 편집기가 표시됩니다.<br />문서 위를 클릭해 수정하거나 상단 메뉴에서 글자·문단·표·쪽 설정을 바꾸세요. 하단 작업 도구(Ctrl+Shift+K)에서 찾기·바꾸기·서식·표·쪽 설정을 검색하고 실행할 수 있습니다.<br /><b>검증하기</b>로 저장 결과를 확인하면 수정본을 다운로드할 수 있습니다.</p><button className="text-button" onClick={() => setHelpOpen(true)}>사용 안내<ArrowRight size={14} /></button></section>
       </div> : <>
-        <section className="document-header"><button className="icon-button document-menu-toggle" aria-label="문서 목록 열기" title="문서 목록 열기" onClick={() => setSidebarOpen(true)}><LayoutPanelLeft size={19} /></button><div className="file-heading"><FileText size={24} strokeWidth={1.4} /><div><h1 title={doc.name}>{doc.name}</h1><p>{doc.conversion ? 'HWP → HWPX' : doc.format.toUpperCase()}<span>·</span>버전 {doc.revision + 1}<span>·</span><span className={dirty ? 'unsaved-label' : ''}>{studioDirty ? '편집 중 · 저장 전' : dirty ? `${dirty}개 변경 · 저장 전` : '저장됨'}</span></p></div></div><WorkspaceMenu view={tab} disabled={disabled} dirty={dirty} studioDirty={studioDirty} tableCount={tableCount} onView={next => { changeView(next); if (next === 'tables') setTableEditing(false); }} onValidate={() => void validate()} onInfo={() => setInfoOpen(!infoOpen)} onSettings={() => setAdvancedOpen(true)} onHelp={() => setHelpOpen(true)} onReview={() => setReviewOpen(true)} onHistory={() => setVersionsOpen(true)} /><div className="document-actions"><button className="outline-button header-save" disabled={disabled || !dirty} onClick={() => void save()} title="수정 저장 (Ctrl S)"><Save size={15} />수정 저장</button><button className="primary-button" disabled={disabled} onClick={() => void download()} aria-label={dirty ? '저장·검증 후 다운로드' : saved ? '다운로드' : '검증 후 다운로드'} title="필요한 수정 저장과 현재 버전 검증을 마친 뒤 다운로드합니다"><ArrowDownToLine size={16} /><span className="download-label">{dirty ? '저장·검증 후 다운로드' : saved ? '다운로드' : '검증 후 다운로드'}</span><span className="download-label-short">{dirty ? '저장 후 받기' : saved ? '다운로드' : '검증 후 받기'}</span></button></div></section>
+        <section className="document-header"><button className="icon-button document-menu-toggle" aria-label="문서 목록 열기" title="문서 목록 열기" onClick={() => setSidebarOpen(true)}><LayoutPanelLeft size={19} /></button><div className="file-heading"><FileText size={24} strokeWidth={1.4} /><div><h1 title={doc.name}><button className="file-name-trigger" disabled={disabled} aria-label="문서 이름 변경" title="문서 이름 변경" onClick={() => setFileAction('rename')}>{doc.name}</button></h1><p>{doc.conversion ? 'HWP → HWPX' : doc.format.toUpperCase()}<span>·</span>버전 {doc.revision + 1}<span>·</span><span className={dirty ? 'unsaved-label' : ''}>{studioDirty ? '편집 중 · 저장 전' : dirty ? `${dirty}개 변경 · 저장 전` : '저장됨'}</span></p></div></div><WorkspaceMenu view={tab} disabled={disabled} dirty={dirty} studioDirty={studioDirty} tableCount={tableCount} onView={next => { changeView(next); if (next === 'tables') setTableEditing(false); }} onValidate={() => void validate()} onInfo={() => setInfoOpen(!infoOpen)} onSettings={() => setAdvancedOpen(true)} onHelp={() => setHelpOpen(true)} onReview={() => setReviewOpen(true)} onHistory={() => setVersionsOpen(true)} onFiles={() => setFileAction('rename')} /><div className="document-actions"><button className="outline-button header-save" disabled={disabled || !dirty} onClick={() => void save()} title="수정 저장 (Ctrl S)"><Save size={15} />수정 저장</button><button className="primary-button" disabled={disabled} onClick={() => void download()} aria-label={dirty ? '저장·검증 후 다운로드' : saved ? '다운로드' : '검증 후 다운로드'} title="필요한 수정 저장과 현재 버전 검증을 마친 뒤 다운로드합니다"><ArrowDownToLine size={16} /><span className="download-label">{dirty ? '저장·검증 후 다운로드' : saved ? '다운로드' : '검증 후 다운로드'}</span><span className="download-label-short">{dirty ? '저장 후 받기' : saved ? '다운로드' : '검증 후 받기'}</span></button></div></section>
         <div className={`editor-layout ${!infoOpen ? 'wide-layout' : ''}`}><section className="editor">
-          <PageEditor key={`editor-${doc.id}-${editorEpoch}`} ref={pageEditor} doc={doc} active={tab === 'studio'} disabled={disabled || versionsOpen} onDirty={setStudioDirty} onSave={onPageSave} />{(readerOpened || tab === 'original' || tab === 'figures' || tab === 'tables') && <DocumentReader key={doc.id} doc={doc} active={tab === 'original' || tab === 'figures' || (tab === 'tables' && !tableEditing)} mode={tab === 'figures' ? 'figures' : tab === 'tables' ? 'tables' : 'original'} dirty={dirty} onMode={setTab} onEdit={() => setTab('paragraphs')} onEditTable={() => setTableEditing(true)} toolsCollapsed={toolsCollapsed} onToggleTools={toggleReaderTools} onReadingScroll={() => { if (!toolsPinned) setToolsCollapsed(true); }} />}
+          <PageEditor key={`editor-${doc.id}-${editorEpoch}`} ref={pageEditor} doc={doc} active={tab === 'studio'} disabled={disabled || versionsOpen} onDirty={setStudioDirty} onSave={onPageSave} onFileAction={onHostFileAction} />{(readerOpened || tab === 'original' || tab === 'figures' || tab === 'tables') && <ToolBoundary onClose={() => { setReaderOpened(false); setTab('studio'); }}><React.Suspense fallback={<div role="status">원문 보기 도구를 불러오고 있습니다.</div>}><DocumentReader key={doc.id} doc={doc} active={tab === 'original' || tab === 'figures' || (tab === 'tables' && !tableEditing)} mode={tab === 'figures' ? 'figures' : tab === 'tables' ? 'tables' : 'original'} dirty={dirty} onMode={setTab} onEdit={() => setTab('paragraphs')} onEditTable={() => setTableEditing(true)} toolsCollapsed={toolsCollapsed} onToggleTools={toggleReaderTools} onReadingScroll={() => { if (!toolsPinned) setToolsCollapsed(true); }} /></React.Suspense></ToolBoundary>}
           {(tab === 'paragraphs' || (tab === 'tables' && tableEditing)) && <>
           <div className={`edit-actions-bar ${continuousText ? 'flow-actions-bar' : ''}`}>{continuousText && <span className="flow-compact-label">본문 편집</span>}<div className="edit-view-controls">{tab === 'paragraphs' ? <><div className="text-view-switch" role="group" aria-label="텍스트 보기 방식"><button aria-pressed={textView === 'flow'} onClick={() => setTextView('flow')}>본문 이어 보기</button><button aria-pressed={textView === 'list'} onClick={() => setTextView('list')}>문단 목록</button></div>{textView === 'list' && <><label><input type="checkbox" checked={showEmpty} onChange={e => setShowEmpty(e.target.checked)} />빈 문단 표시</label><label><input type="checkbox" checked={showReadonly} onChange={e => setShowReadonly(e.target.checked)} />읽기 전용 문단 표시</label></>}</> : <label className="table-picker-label"><button className="text-button" onClick={() => setTableEditing(false)}>원문 표 보기</button><select aria-label="표 선택" value={activeTable?.id || ''} onChange={e => setTableId(e.target.value)}>{visibleTables.map(t => <option key={t.id} value={t.id}>섹션 {t.section + 1} · 표 {t.index + 1} ({t.rows}행 × {t.columns}열)</option>)}</select></label>}</div><div className="history-actions"><button className="icon-button" aria-label="실행 취소" title="실행 취소" disabled={disabled || !history.past.length} onClick={() => dispatch({ type: 'undo' })}><RotateCcw size={16} /></button><button className="icon-button" aria-label="다시 실행" title="다시 실행" disabled={disabled || !history.future.length} onClick={() => dispatch({ type: 'redo' })}><RotateCw size={16} /></button><span /><button className="save-button" disabled={disabled || !dirty} onClick={() => void save()} title="수정 저장 (Ctrl/Cmd S)"><Save size={15} />수정 저장{dirty > 0 && <b>{dirty}</b>}</button>{continuousText && <button className="icon-button flow-tools-toggle" aria-label={toolsCollapsed ? '편집 도구 펼치기' : '편집 도구 접기'} aria-expanded={!toolsCollapsed} title={toolsCollapsed ? '편집 도구 펼치기' : '편집 도구 접기'} onClick={toggleReaderTools}>{toolsCollapsed ? <ChevronDown size={17} /> : <ChevronUp size={17} />}<span>도구</span></button>}</div></div>
           <div className="filter-bar"><label className="search-field"><Search size={15} /><input ref={textSearch} placeholder="문서에서 찾기" aria-label="문서 내용 검색" value={search} onChange={e => setSearch(e.target.value)} onKeyDown={e => { if (continuousText && e.key === 'Enter') { e.preventDefault(); flowEditor.current?.find(e.shiftKey ? -1 : 1); } }} />{search && <button aria-label="검색 초기화" onClick={() => setSearch('')}><X size={14} /></button>}</label><select aria-label="섹션 선택" value={section} onChange={e => setSection(Number(e.target.value))}><option value={-1}>전체 섹션</option>{doc.sections.map(s => <option key={s.index} value={s.index}>섹션 {s.index + 1}</option>)}</select></div>
           {continuousText ? <TextFlowEditor key={doc.id} ref={flowEditor} sections={visibleSections} drafts={history.present} search={search} disabled={disabled} onChange={update} onSelect={selectFlowParagraph} onOriginal={showOriginal} /> : <>
           {doc.format_note && <div className="format-note"><span className="format-badge">{doc.conversion ? 'HWPX 변환' : 'HWP 5'}</span><p>{doc.format_note}</p></div>}<div className="document-canvas"><div className="canvas-note"><span>내용 편집</span><span>인쇄 배치는 한글 프로그램에서 확인하세요.</span></div><div className={`document-paper ${tab === 'tables' ? 'table-paper' : ''}`}>
-          {tab === 'paragraphs' ? visibleSections.map(s => <section className="document-section" key={s.index}>{s.paragraphs.some(p => visibleParagraphs.includes(p)) && <div className="section-label"><span>섹션 {s.index + 1}</span><span>텍스트 편집</span></div>}{s.paragraphs.map(paragraph)}</section>) : activeTable ? <><div className="section-label"><span>섹션 {activeTable.section + 1} · 표 {activeTable.index + 1}</span><span>병합 구조 유지</span></div>{tableView(activeTable)}</> : null}
+          {tab === 'paragraphs' ? visibleSections.map(s => <section className="document-section" key={s.index}>{s.paragraphs.some(p => visibleParagraphIds.has(p.id)) && <div className="section-label"><span>섹션 {s.index + 1}</span><span>텍스트 편집</span></div>}{s.paragraphs.map(paragraph)}</section>) : activeTable ? <><div className="section-label"><span>섹션 {activeTable.section + 1} · 표 {activeTable.index + 1}</span><span>병합 구조 유지</span></div>{tableView(activeTable)}</> : null}
           {(tab === 'paragraphs' ? !visibleParagraphs.length : !activeTable) && <div className="empty-state"><FileText size={27} /><p>{search ? '검색 결과가 없습니다.' : tab === 'tables' ? '이 범위에는 표가 없습니다.' : '이 범위에는 편집 가능한 텍스트가 없습니다.'}</p>{tab === 'paragraphs' && <button className="text-button" onClick={() => setTab('original')}>수식·그림은 원문에서 보기<ArrowRight size={14} /></button>}</div>}
           </div></div></>}
           <div className="editor-bottom"><button disabled={!dirty || disabled} onClick={() => setReviewOpen(true)} title="변경 전후를 확인하고 항목별로 되돌리기"><span className={`status-dot ${dirty ? 'unsaved' : ''}`} />{dirty ? `${dirty}개 변경 · 검토` : '저장됨'}</button><span className={`draft-backup-state ${backupStatus === 'unavailable' ? 'unavailable' : ''}`} title="임시보관은 이 탭에서만 유지됩니다. 실제 파일은 수정 저장을 눌러 반영하세요.">{dirty ? backupStatus === 'stored' ? '이 탭에 임시보관됨' : backupStatus === 'pending' ? '임시보관 중' : backupStatus === 'paused' ? '임시보관 일시 중지' : '임시보관 불가 · 수정 저장 필요' : ''}{!!dirty && backupStatus === 'stored' && <button className="draft-reopen" aria-label="임시보관 후 문서 다시 불러오기" title="임시 편집을 보관하고 최신 문서를 다시 엽니다" disabled={disabled} onClick={reopenWithBackup}><RotateCw size={12} /></button>}</span><button onClick={() => setReportOpen(true)}>{saved && !dirty ? <><CircleCheck size={13} />현재 버전 검증 완료</> : '검사 결과'}<ChevronRight size={12} /></button></div>
@@ -404,13 +464,16 @@ function App() {
         </section>{infoOpen && <aside className="inspector" aria-label="문서 정보 패널"><div className="inspector-title"><span>문서 정보</span><button className="icon-button" aria-label="문서 정보 닫기" onClick={() => setInfoOpen(false)}><X size={16} /></button></div><div className="inspector-body"><h2>{doc.title}</h2><dl className="document-details"><div><dt>형식</dt><dd>{doc.conversion ? 'HWP → HWPX' : doc.format.toUpperCase()}</dd></div><div><dt>버전</dt><dd>{doc.revision + 1}</dd></div><div><dt>문단</dt><dd>{paragraphCount}</dd></div><div><dt>표</dt><dd>{tableCount}</dd></div><div><dt>섹션</dt><dd>{doc.sections.length}</dd></div></dl><hr /><h3 className="inspector-label">선택한 요소</h3>{selected ? <div className="selection-info"><h3>{selected.label}</h3><p>{selected.text}</p></div> : <p className="selection-placeholder">문단 또는 표의 셀을 선택하세요.</p>}<hr /><h3 className="inspector-label">검증</h3><div className="validation-state"><span className={`status-dot ${saved && !dirty ? '' : 'pending'}`} /><strong>{saved && !dirty ? '현재 버전 검증 완료' : dirty ? '저장 후 검증 필요' : '검증 필요'}</strong></div><p className="inspector-description">저장 결과를 검사한 뒤 다운로드할 수 있습니다.</p><button className="text-button" disabled={disabled || !!dirty} onClick={() => saved ? setReportOpen(true) : void validate()}>{saved ? '검사 결과 보기' : '검증하기'}<ChevronRight size={14} /></button><hr /><a className="text-download" href={`/api/documents/${doc.id}/text`} download><ArrowDownToLine size={14} />본문 텍스트 다운로드</a><div className="retention"><Clock3 size={14} /><p>{formatDate(doc.expires)} 자동 삭제</p></div></div></aside>}</div>
       </>}
     </main>
-    {advancedOpen && doc && <AdvancedSettings doc={doc} drafts={history.present} onClose={() => setAdvancedOpen(false)} onApply={applyProposals} onSettings={setDoc} />}
-    {reviewOpen && doc && <ChangeReview doc={doc} drafts={history.present} onClose={closeReview} onRevert={revertChanges} onGo={goToChange} />}
-    {versionsOpen && doc && <VersionHistory doc={doc} dirty={!!dirty} onClose={closeVersions} onRestore={restoreVersion} />}
+    {advancedOpen && doc && <ToolBoundary onClose={() => setAdvancedOpen(false)}><React.Suspense fallback={<div className="workbench-loading" role="status">도구를 불러오고 있습니다.</div>}><AdvancedSettings doc={doc} drafts={history.present} onClose={() => setAdvancedOpen(false)} onApply={applyProposals} onSettings={setDoc} /></React.Suspense></ToolBoundary>}
+    {newDocumentOpen && <ToolBoundary onClose={closeNewDocument}><React.Suspense fallback={<div className="workbench-loading" role="status">문서 양식을 열고 있습니다.</div>}><NewDocument busy={disabled} error={error} onClose={closeNewDocument} onCreate={value => void createDocument(value)} /></React.Suspense></ToolBoundary>}
+    {reviewOpen && doc && <ToolBoundary onClose={closeReview}><React.Suspense fallback={<div className="workbench-loading" role="status">도구를 불러오고 있습니다.</div>}><ChangeReview doc={doc} drafts={history.present} onClose={closeReview} onRevert={revertChanges} onGo={goToChange} /></React.Suspense></ToolBoundary>}
+    {versionsOpen && doc && <ToolBoundary onClose={closeVersions}><React.Suspense fallback={<div className="workbench-loading" role="status">도구를 불러오고 있습니다.</div>}><VersionHistory doc={doc} dirty={!!dirty} onClose={closeVersions} onRestore={restoreVersion} /></React.Suspense></ToolBoundary>}
+    {backupShelf && <ToolBoundary onClose={closeBackupShelf}><React.Suspense fallback={<div className="workbench-loading" role="status">임시보관함을 열고 있습니다.</div>}><BackupShelf activeId={doc?.id} names={Object.fromEntries(documents.map(item => [item.id, item.name]))} onOpen={recoverBackup} onClose={closeBackupShelf} /></React.Suspense></ToolBoundary>}
+    {fileAction && doc && <ToolBoundary onClose={closeFileAction}><React.Suspense fallback={<div className="workbench-loading" role="status">파일 작업을 열고 있습니다.</div>}><DocumentActions doc={doc} initialMode={fileAction} dirty={!!dirty} onClose={closeFileAction} onSubmit={manageDocument} /></React.Suspense></ToolBoundary>}
     {dragging && <div className="drop-overlay" onDragLeave={() => setDragging(false)}><ArrowUpFromLine size={32} strokeWidth={1.4} /><h2>파일을 놓아 열기</h2><p>HWP · HWPX · 최대 20MB</p></div>}
     {reportOpen && doc && <div className="modal-backdrop" onClick={() => setReportOpen(false)}><section className="modal report-modal" role="dialog" aria-modal="true" aria-labelledby="report-title" onClick={e => e.stopPropagation()}><div className="modal-heading"><div><h2 id="report-title">검증 결과</h2><p>버전 {doc.revision + 1} · {saved ? '검증 완료' : '자동 검사 결과'}</p></div><button className="icon-button" aria-label="검증 결과 닫기" onClick={() => setReportOpen(false)}><X size={20} /></button></div><div className={`report-summary ${doc.report.issues.length ? 'warning' : ''}`}><FileCheck2 size={23} /><div><h3>{doc.report.issues.length ? '원본의 기존 오류가 남아 있습니다' : '새로 발생한 오류가 없습니다'}</h3><p>{saved ? '현재 버전을 다운로드할 수 있습니다.' : '다운로드하려면 검증하기를 실행하세요.'}</p></div></div><div className="check-list">{doc.report.checks.map(check => <div key={check}><CircleCheck size={16} /><span>{check}</span><b>완료</b></div>)}</div><p className="report-explanation">이 검사는 문서 구조를 확인합니다. 인쇄 배치는 한글 프로그램에서 확인하세요.</p>{doc.report.issues.length > 0 && <div className="issue-list"><h3>원본의 기존 오류 {doc.report.issues.length}개</h3>{doc.report.issues.map((issue, i) => <div key={i}><b>{issue.code || issue.kind}</b><p>{issue.message}</p><small>{issue.location}</small></div>)}</div>}{doc.report.repairs.length > 0 && <p className="repair-note">오래된 줄 배치 정보 {doc.report.repairs.length}건을 정리했습니다.</p>}<div className="modal-actions"><a className="outline-button" href={`/api/documents/${doc.id}/report`} download><ArrowDownToLine size={15} />검사 기록 JSON</a><button className="primary-button" onClick={() => setReportOpen(false)}>확인</button></div></section></div>}
-    {helpOpen && <div className="modal-backdrop" onClick={() => setHelpOpen(false)}><section className="modal help-modal" role="dialog" aria-modal="true" aria-labelledby="help-title" onClick={e => e.stopPropagation()}><div className="modal-heading"><h2 id="help-title">사용 안내</h2><button className="icon-button" aria-label="사용 안내 닫기" onClick={() => setHelpOpen(false)}><X size={20} /></button></div><ol className="guide-steps"><li><b>파일 열기</b><p>HWP 5 또는 HWPX 파일을 선택하거나 화면으로 끌어 놓으세요. 최대 20MB까지 지원합니다.</p></li><li><b>내용 수정 및 저장</b><p>문서 편집에서 원문 위를 클릭해 입력하고 글자·문단·표·그림·쪽 도구를 사용하세요. 서식 도구를 접거나 전체 화면을 켜면 문서를 더 넓게 볼 수 있습니다. 문서 목록은 왼쪽 위 버튼으로 엽니다. 텍스트 편집은 본문 이어 보기가 기본입니다. 문단 목록에서 번호별로 확인할 수도 있습니다. 내용을 바꾼 뒤 수정 저장(Ctrl/Cmd S)을 누르세요. 수정 내용에서 전후를 비교하거나 항목별로 되돌릴 수 있습니다. 미저장 편집은 이 탭에 임시보관하며 같은 버전에서 새로고침하면 복원합니다. 그래프·그림 탭에서는 삽입된 개체를 따로 볼 수 있습니다. 복합 개체가 있는 문단과 셀은 읽기 전용입니다.</p></li><li><b>검증 및 다운로드</b><p>저장·검증 후 다운로드로 한 번에 완료하거나, 수정 저장과 검증을 각각 실행할 수 있습니다. 검증에 실패하면 다운로드를 중단합니다.</p></li><li><b>이전 버전 비교 및 복원</b><p>보기 및 도구의 버전 기록에서 저장한 내용을 비교하고 검색할 수 있습니다. 이전 버전을 복원하면 현재 내용과 기록을 유지하면서 새 버전으로 저장합니다. 미저장 편집을 먼저 저장하고, 복원한 버전은 검증 후 다운로드하세요.</p></li></ol><p className="help-note">문서는 이 브라우저 세션에서만 접근할 수 있으며 업로드 후 24시간이 지나면 삭제됩니다. 원본과 수정본은 별도로 보관합니다.</p><button className="primary-button" onClick={() => setHelpOpen(false)}>확인</button></section></div>}
+    {helpOpen && <div className="modal-backdrop" onClick={() => setHelpOpen(false)}><section className="modal help-modal" role="dialog" aria-modal="true" aria-labelledby="help-title" onClick={e => e.stopPropagation()}><div className="modal-heading"><h2 id="help-title">사용 안내</h2><button className="icon-button" aria-label="사용 안내 닫기" onClick={() => setHelpOpen(false)}><X size={20} /></button></div><ol className="guide-steps"><li><b>문서 시작하기</b><p>내 문서의 새 문서에서 빈 문서·보고서·회의록·표 문서를 만들 수 있습니다. HWP 5 또는 HWPX 파일을 선택하거나 화면으로 끌어 놓으세요. 최대 20MB까지 지원합니다.</p></li><li><b>내용 수정 및 저장</b><p>문서 편집에서 원문 위를 클릭해 입력하고 글자·문단·표·그림·쪽 도구를 사용하세요. 서식 도구를 접거나 전체 화면을 켜면 문서를 더 넓게 볼 수 있습니다. 문서 목록은 왼쪽 위 버튼으로 엽니다. 텍스트 편집은 본문 이어 보기가 기본입니다. 문단 목록에서 번호별로 확인할 수도 있습니다. 내용을 바꾼 뒤 수정 저장(Ctrl/Cmd S)을 누르세요. 수정 내용에서 전후를 비교하거나 항목별로 되돌릴 수 있습니다. 미저장 텍스트 편집은 이 탭에, 원문 편집 임시본은 이 브라우저에 보관합니다. 같은 문서 버전을 다시 열면 복원할 수 있습니다. 임시보관은 파일 다운로드를 대신하지 않습니다. 그래프·그림 탭에서는 삽입된 개체를 따로 볼 수 있습니다. 복합 개체가 있는 문단과 셀은 읽기 전용입니다.</p></li><li><b>검증 및 다운로드</b><p>저장·검증 후 다운로드로 한 번에 완료하거나, 수정 저장과 검증을 각각 실행할 수 있습니다. 검증에 실패하면 다운로드를 중단합니다.</p></li><li><b>이전 버전 비교 및 복원</b><p>보기 및 도구의 버전 기록에서 저장한 내용을 비교하고 검색할 수 있습니다. 문서 이름을 클릭하거나 보기 및 도구의 이름 변경·복사에서 파일 이름을 바꾸고 독립된 복사본을 만들 수 있습니다. 작업 도구의 검토·출력에서 인쇄·PDF 저장을 열 수 있습니다. PDF는 브라우저 인쇄 창에서 PDF로 저장을 선택하세요. 이전 버전을 복원하면 현재 내용과 기록을 유지하면서 새 버전으로 저장합니다. 미저장 편집을 먼저 저장하고, 복원한 버전은 검증 후 다운로드하세요.</p></li></ol><p className="help-note">파일은 업로드 시 이 사이트의 서버로 전송됩니다. 서버의 원본·수정본·작업 메모는 업로드 후 24시간 동안 보관하며, 내 문서에서 삭제할 수 있습니다. 접근 권한은 이 브라우저의 세션 쿠키로 구분합니다. 브라우저에 저장된 원문 편집 임시본은 서버 보관 기간과 별개로 남을 수 있습니다. 문서 목록 메뉴의 임시 편집 보관함에서 내려받거나 새 문서로 복구·삭제할 수 있습니다. 공용 기기에서는 작업 후 다운로드하고 사이트 데이터를 지워 주세요. AI 수정이나 외부 AI 서비스 전송은 사용하지 않습니다.</p><button className="primary-button" onClick={() => setHelpOpen(false)}>확인</button></section></div>}
   </div>;
 }
 
-createRoot(document.getElementById('root')!).render(<React.StrictMode><App /></React.StrictMode>);
+createRoot(document.getElementById('root')!).render(<React.StrictMode><ApplicationBoundary><App /></ApplicationBoundary></React.StrictMode>);

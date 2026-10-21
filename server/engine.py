@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import hashlib
-import io
 import json
 import zipfile
 from collections import Counter
@@ -20,6 +19,19 @@ MAX_UPLOAD = 20 * 1024 * 1024
 MAX_EXPANDED = 128 * 1024 * 1024
 MAX_PART = 24 * 1024 * 1024
 MAX_ELEMENTS = 20_000
+_PARAGRAPH_TEXTS = etree.XPath(".//hp:t[ancestor::hp:p and count(ancestor::hp:p[1] | $paragraph) = 1]", namespaces={"hp": NS["hp"]})
+_PARAGRAPHS = etree.XPath("descendant-or-self::hp:p", namespaces={"hp": NS["hp"]})
+_RUNS = etree.XPath("./hp:run", namespaces={"hp": NS["hp"]})
+_CELL_PARAGRAPHS = etree.XPath("./hp:subList/hp:p", namespaces={"hp": NS["hp"]})
+_HP = "{" + NS["hp"] + "}"
+_INLINE_TEXT = {_HP + "lineBreak": "\n", _HP + "tab": "\t", _HP + "nbSpace": "\u00a0", _HP + "fwSpace": "\u3000", _HP + "hyphen": "\u00ad"}
+
+
+def _text_content(element) -> str:
+    parts = [element.text or ""]
+    for child in element:
+        parts.extend((_INLINE_TEXT[child.tag] if child.tag in _INLINE_TEXT else _text_content(child), child.tail or ""))
+    return "".join(parts)
 
 
 def inspect_archive(path: Path) -> None:
@@ -44,12 +56,17 @@ def inspect_archive(path: Path) -> None:
             raise ValueError("올바른 HWPX 문서가 아닙니다.")
         # Validate all XML before the engine's permissive large-document parser.
         for item in entries:
-            raw = archive.read(item)
-            if item.filename.endswith((".xml", ".hpf", ".rels", ".rdf")):
-                parser = etree.XMLParser(resolve_entities=False, load_dtd=False, no_network=True, huge_tree=False)
-                tree = etree.parse(io.BytesIO(raw), parser)
-                if tree.docinfo.doctype:
-                    raise ValueError("DTD가 포함된 XML은 지원하지 않습니다.")
+            with archive.open(item) as stream:
+                if item.filename.endswith((".xml", ".hpf", ".rels", ".rdf")):
+                    parser = etree.XMLParser(resolve_entities=False, load_dtd=False, no_network=True, huge_tree=False)
+                    tree = etree.parse(stream, parser)
+                    if tree.docinfo.doctype:
+                        raise ValueError("DTD가 포함된 XML은 지원하지 않습니다.")
+                else:
+                    # Drain every member to retain ZIP/CRC checks, without
+                    # allocating a whole image/attachment just to discard it.
+                    while stream.read(1024 * 1024):
+                        pass
 
 
 def fingerprint(issue: dict) -> str:
@@ -79,32 +96,24 @@ def new_issues(current: list[dict], baseline: list[dict]) -> list[dict]:
 
 def paragraph_text(node) -> str:
     # Exclude text in table cells, headers, notes and other nested paragraphs.
-    inline = {f"{{{NS['hp']}}}lineBreak": "\n", f"{{{NS['hp']}}}tab": "\t", f"{{{NS['hp']}}}nbSpace": "\u00a0", f"{{{NS['hp']}}}fwSpace": "\u3000", f"{{{NS['hp']}}}hyphen": "\u00ad"}
-
-    def text_content(element) -> str:
-        parts = [element.text or ""]
-        for child in element:
-            parts.extend((inline[child.tag] if child.tag in inline else text_content(child), child.tail or ""))
-        return "".join(parts)
-
-    return "".join(text_content(t) for t in node.xpath(".//hp:t", namespaces=NS) if t.xpath("ancestor::hp:p[1]", namespaces=NS) == [node])
+    return "".join(_text_content(t) for t in _PARAGRAPH_TEXTS(node, paragraph=node))
 
 
 def cell_text(cell) -> str:
-    paragraphs = cell.element.xpath("./hp:subList/hp:p", namespaces=NS)
+    paragraphs = _CELL_PARAGRAPHS(cell.element)
     return "\n".join(paragraph_text(p) for p in paragraphs) if paragraphs else cell.text
 
 
 def editable(node) -> bool:
     # An allowlist also protects controls unknown to this engine version. Section
     # and column definitions are preserved by the engine's paragraph setter.
-    paragraphs = node.xpath("descendant-or-self::hp:p", namespaces=NS)
+    paragraphs = _PARAGRAPHS(node)
     if not paragraphs:
         return False
     for paragraph in paragraphs:
-        if any(child.tag not in {f"{{{NS['hp']}}}run", f"{{{NS['hp']}}}linesegarray"} for child in paragraph):
+        if any(child.tag not in {_HP + "run", _HP + "linesegarray"} for child in paragraph):
             return False
-        for run in paragraph.xpath("./hp:run", namespaces=NS):
+        for run in _RUNS(paragraph):
             for child in run:
                 if child.tag == f"{{{NS['hp']}}}t" and len(child) == 0:
                     continue
@@ -141,9 +150,9 @@ def snapshot(document: HwpxDocument, revision: int, report: dict, name: str) -> 
             paragraphs.append({"id": f"s{s}-p{index}", "section": s, "index": index, "text": paragraph_text(node), "editable": editable(node)})
         tables = []
         for index, table in enumerate(document.tables(s)):
-            cells = [{"row": c.row, "column": c.column, "row_span": c.row_span, "col_span": c.col_span, "text": cell_text(c), "editable": editable(c.element)} for c in table.cells()]
             if table.row_count > 1000 or table.column_count > 1000 or table.row_count * table.column_count > MAX_ELEMENTS:
                 raise ValueError("표 크기가 웹 편집 한도를 초과했습니다.")
+            cells = [{"row": c.row, "column": c.column, "row_span": c.row_span, "col_span": c.col_span, "text": cell_text(c), "editable": editable(c.element)} for c in table.cells()]
             occupied = set()
             for c in cells:
                 if c["row"] < 0 or c["column"] < 0 or c["row_span"] < 1 or c["col_span"] < 1 or c["row"] + c["row_span"] > table.row_count or c["column"] + c["col_span"] > table.column_count:
@@ -161,7 +170,7 @@ def snapshot(document: HwpxDocument, revision: int, report: dict, name: str) -> 
     return {"revision": revision, "name": name, "title": document.metadata().title or Path(name).stem, "sections": sections, "report": report}
 
 
-def structure_signature(document: HwpxDocument) -> dict:
+def structure_signature(document: HwpxDocument, *, include_binaries: bool = True) -> dict:
     """Editing text must preserve every XML element and embedded binary."""
     tags = Counter()
     binaries = {}
@@ -169,9 +178,12 @@ def structure_signature(document: HwpxDocument) -> dict:
         part = document.get_part(path)
         if isinstance(part, XmlPart):
             # Layout caches are deliberately invalidated by text editing.
-            tags.update(node.tag for node in part._root.iter() if isinstance(node.tag, str) and etree.QName(node).localname not in {"lineseg", "linesegarray"})
-        elif path.startswith("BinData/"):
+            tags.update(node.tag for node in part._root.iter() if isinstance(node.tag, str))
+        elif include_binaries and path.startswith("BinData/"):
             binaries[path] = hashlib.sha256(part.to_bytes()).hexdigest()
+    for tag in list(tags):
+        if etree.QName(tag).localname in {"lineseg", "linesegarray"}:
+            del tags[tag]
     return {"tags": dict(tags), "binaries": binaries}
 
 
@@ -231,7 +243,9 @@ def process(directory: Path, kind: str, payload: dict, name: str) -> dict:
     # Parent controls must not disappear. Run/text nodes may change as the
     # documented text setter flattens multi-run content within the target.
     control_tags = {tag: count for tag, count in before_structure["tags"].items() if etree.QName(tag).localname in {"tbl", "pic", "equation", "ole", "ctrl", "rect", "ellipse", "bookmark", "fieldBegin", "fieldEnd"}}
-    after_tags = structure_signature(document)["tags"]
+    # Only edit mutates the in-memory document before serialization. Keep the
+    # independent reopened-document signature for every operation below.
+    after_tags = structure_signature(document, include_binaries=False)["tags"] if kind == "edit" else before_structure["tags"]
     if any(after_tags.get(tag, 0) != count for tag, count in control_tags.items()):
         raise ValueError("문서 개체 보존 검사에 실패했습니다.")
     compiled = document.compile(validate=False, auto_repair=False) if kind == "edit" else path.read_bytes()

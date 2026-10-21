@@ -127,6 +127,44 @@ class Store:
             db.execute("UPDATE documents SET settings=?,settings_version=settings_version+1,validated=CASE WHEN ? THEN NULL ELSE validated END WHERE id=?", (json.dumps(settings, ensure_ascii=False), settings.get("strict_validation", False) != json.loads(row["settings"]).get("strict_validation", False), document))
         return version + 1
 
+    def rename_document(self, document: str, owner: str, revision: int, expected_name: str, name: str):
+        with self.connect() as db:
+            db.execute('BEGIN IMMEDIATE')
+            row = db.execute('SELECT * FROM documents WHERE id=? AND owner=? AND created>?', (document, owner, time.time() - self.ttl)).fetchone()
+            if not row or row['revision'] != revision or row['name'] != expected_name or row['status'] != 'ready':
+                raise ValueError('문서 이름이나 버전이 변경되었습니다. 최신 문서를 다시 확인해 주세요.')
+            if db.execute("SELECT 1 FROM jobs WHERE document=? AND status IN ('queued','running')", (document,)).fetchone():
+                raise ValueError('문서 작업이 끝난 뒤 이름을 변경해 주세요.')
+            db.execute('UPDATE documents SET name=? WHERE id=?', (name, document))
+
+    def copy_document(self, document: str, owner: str, revision: int, identifier: str, name: str):
+        destination = self.directory(identifier)
+        created = False
+        try:
+            with self.connect() as db:
+                # Keep source deletion, revision changes and the session quota
+                # fenced until the immutable revision has been copied.
+                db.execute('BEGIN IMMEDIATE')
+                source = db.execute('SELECT * FROM documents WHERE id=? AND owner=? AND created>?', (document, owner, time.time() - self.ttl)).fetchone()
+                if not source or source['revision'] != revision or source['status'] != 'ready':
+                    raise ValueError('문서 버전이 변경되었습니다. 최신 문서를 다시 확인해 주세요.')
+                if db.execute("SELECT 1 FROM jobs WHERE document=? AND status IN ('queued','running')", (document,)).fetchone():
+                    raise ValueError('문서 작업이 끝난 뒤 복사해 주세요.')
+                if db.execute('SELECT count(*) FROM documents WHERE owner=? AND created>?', (owner, time.time() - self.ttl)).fetchone()[0] >= 20:
+                    raise ValueError('한 세션에는 최대 20개 문서를 보관할 수 있습니다.')
+                destination.mkdir()
+                created = True
+                shutil.copyfile(self.directory(document) / f'revision-{revision}.hwpx', destination / 'revision-0.hwpx')
+                now = time.time()
+                db.execute('INSERT INTO documents(id,owner,name,created,settings) VALUES(?,?,?,?,?)', (identifier, owner, name, now, source['settings']))
+                job = secrets.token_hex(16)
+                db.execute("INSERT INTO jobs(id,document,owner,kind,created,payload) VALUES(?,?,?,'analyze',?,?)", (job, identifier, owner, now, json.dumps({'settings': json.loads(source['settings'])})))
+            return job
+        except Exception:
+            if created:
+                shutil.rmtree(destination, ignore_errors=True)
+            raise
+
     def job(self, identifier: str, owner: str):
         with self.connect() as db:
             row = db.execute("SELECT jobs.* FROM jobs JOIN documents ON documents.id=jobs.document WHERE jobs.id=? AND jobs.owner=? AND documents.created>?", (identifier, owner, time.time() - self.ttl)).fetchone()

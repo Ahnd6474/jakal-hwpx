@@ -1,6 +1,7 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { ArrowDownToLine, ArrowLeft, ArrowRight, ChevronDown, ChevronLeft, ChevronRight, ChevronUp, FileText, Images, LoaderCircle, Maximize2, Minus, Plus, Search, X } from 'lucide-react';
 import type { Document } from './api';
+import { requestBytes } from './request';
 import type { Figure, PageInfo, VisualTable, ViewerResult } from './viewer-types';
 import { cropPng, highlightSvg, safeSvg } from './viewer-svg';
 import { clampZoom, stepZoom, type Zoom } from './viewer-zoom';
@@ -9,10 +10,10 @@ import { pageWindow, readingPage, sheetLayout } from './reader-layout';
 type Props = { doc: Document; active: boolean; mode: 'original' | 'figures' | 'tables'; dirty: number; onMode: (mode: 'original' | 'figures') => void; onEdit: () => void; onEditTable: () => void; toolsCollapsed: boolean; onToggleTools: () => void; onReadingScroll: () => void };
 const figureKind = (type: string) => type === 'table' ? '표' : type === 'chart' ? '차트' : type === 'image' ? '그림' : type === 'ole' ? '삽입 개체' : '도형';
 
-function PageArtwork({ svg, query, info, scale }: { svg: string; query: string; info: PageInfo; scale: number }) {
+const PageArtwork = memo(function PageArtwork({ svg, query, info, scale }: { svg: string; query: string; info: PageInfo; scale: number }) {
   const content = useMemo(() => highlightSvg(svg, query), [svg, query]);
   return <div className="page-svg" role="document" aria-label={`${info.pageIndex + 1}쪽 원문`} style={{ width: info.width, height: info.height, transform: `scale(${scale})`, transformOrigin: 'top left' }} dangerouslySetInnerHTML={{ __html: content }} />;
-}
+});
 
 function FigureImage({ svg, figure, label }: { svg?: string; figure: Figure; label: string }) {
   const [url, setUrl] = useState('');
@@ -58,6 +59,9 @@ export function DocumentReader({ doc, active, mode, dirty, onMode, onEdit, onEdi
   const [loading, setLoading] = useState('원문 보기를 준비하고 있습니다');
   const [error, setError] = useState('');
   const [retry, setRetry] = useState(0);
+  const loadedSource = useRef('');
+  const sourceKey = `${doc.id}:${revision}:${retry}`;
+  const loadAllowed = active || loadedSource.current === sourceKey;
   const [figureFilter, setFigureFilter] = useState('all');
   const [figureSection, setFigureSection] = useState(-1);
   const [visibleCount, setVisibleCount] = useState(12);
@@ -167,6 +171,9 @@ export function DocumentReader({ doc, active, mode, dirty, onMode, onEdit, onEdi
   useEffect(() => () => cancelAnimationFrame(scrollFrame.current), []);
 
   useEffect(() => {
+    if (!loadAllowed) return;
+    loadedSource.current = sourceKey;
+    let cancelled = false;
     const abort = new AbortController();
     const worker = new Worker(new URL('./document.worker.ts', import.meta.url), { type: 'module' });
     workerRef.current = worker;
@@ -175,6 +182,7 @@ export function DocumentReader({ doc, active, mode, dirty, onMode, onEdit, onEdi
     setPages([]); setFigures([]); setTables([]); setTableId(''); setRendered({}); setPage(0); setPageInput('1'); setQuery(''); setSelectedFigure(null); setError(''); setLoading('원문 보기를 준비하고 있습니다');
     const loadTimeout = setTimeout(() => { worker.terminate(); setLoading(''); setError('원문을 여는 데 시간이 오래 걸립니다. 다시 시도하거나 텍스트·표 보기로 이동해 주세요.'); }, 60_000);
     worker.onmessage = (event: MessageEvent<ViewerResult>) => {
+      if (cancelled) return;
       const message = event.data;
       if (message.type === 'progress') setLoading(message.message);
       else if (message.type === 'ready') { clearTimeout(loadTimeout); setPages(message.pages); setFigures(message.figures); setTables(message.tables); setLoading(''); }
@@ -191,20 +199,24 @@ export function DocumentReader({ doc, active, mode, dirty, onMode, onEdit, onEdi
           setRendered(Object.fromEntries(cache));
         }
         catch { setError('이 페이지를 안전하게 표시하지 못했습니다. 원본 파일에서 확인해 주세요.'); }
-      } else if (message.type === 'indexed') {
-        setPageTexts(previous => ({ ...previous, [message.page]: message.text }));
-        setIndexedCount(n => n + 1);
-        if (message.limited) setSearchLimited(true);
+      } else if (message.type === 'indexed-batch') {
+        setPageTexts(previous => ({ ...previous, ...Object.fromEntries(message.entries.map(entry => [entry.page, entry.text])) }));
+        setIndexedCount(n => n + message.entries.length);
+        if (message.entries.some(entry => entry.limited)) setSearchLimited(true);
       } else if (message.type === 'error') { clearTimeout(loadTimeout); setError(message.message); setLoading(''); }
     };
-    worker.onerror = () => { clearTimeout(loadTimeout); setLoading(''); setError('원문 뷰어를 시작하지 못했습니다. 다시 시도하거나 텍스트·표 보기로 이동해 주세요.'); };
-    void fetch(`/api/documents/${doc.id}/source?revision=${revision}`, { signal: abort.signal }).then(async response => {
-      if (!response.ok) throw new Error('원문 파일을 불러오지 못했습니다. 문서를 다시 열어 주세요.');
-      const bytes = await response.arrayBuffer();
+    worker.onerror = () => { if (cancelled) return; clearTimeout(loadTimeout); setLoading(''); setError('원문 뷰어를 시작하지 못했습니다. 다시 시도하거나 텍스트·표 보기로 이동해 주세요.'); };
+    void requestBytes(`/api/documents/${doc.id}/source?revision=${revision}`, { signal: abort.signal }).then(bytes => {
       if (!abort.signal.aborted) worker.postMessage({ type: 'load', bytes }, [bytes]);
     }).catch(e => { if (!abort.signal.aborted) { clearTimeout(loadTimeout); setLoading(''); setError(e.message); } });
-    return () => { abort.abort(); clearTimeout(loadTimeout); worker.terminate(); workerRef.current = null; timers.current.forEach(clearTimeout); timers.current.clear(); };
-  }, [doc.id, revision, retry]);
+    return () => { cancelled = true; abort.abort(); clearTimeout(loadTimeout); worker.terminate(); if (workerRef.current === worker) workerRef.current = null; timers.current.forEach(clearTimeout); timers.current.clear(); };
+  }, [doc.id, revision, retry, loadAllowed]);
+
+  useEffect(() => {
+    const synchronize = () => workerRef.current?.postMessage({ type: 'activity', active: active && !document.hidden });
+    synchronize(); document.addEventListener('visibilitychange', synchronize);
+    return () => document.removeEventListener('visibilitychange', synchronize);
+  }, [active, revision, retry, loadAllowed]);
 
   const requestPage = useCallback((index: number) => {
     if (requested.current.has(index) || !workerRef.current) return;
@@ -212,7 +224,10 @@ export function DocumentReader({ doc, active, mode, dirty, onMode, onEdit, onEdi
     workerRef.current.postMessage({ type: 'render', page: index });
     timers.current.set(index, setTimeout(() => { setError('페이지 표시 시간이 초과되었습니다. 범위를 줄이거나 다시 시도해 주세요.'); }, 45_000));
   }, []);
-  const matchingPages = useMemo(() => query.trim() ? pages.filter(p => (pageTexts[p.pageIndex] || '').toLocaleLowerCase().includes(query.replace(/\s/g, '').toLocaleLowerCase())).map(p => p.pageIndex) : [], [pages, pageTexts, query]);
+  const matchingPages = useMemo(() => {
+    const needle = query.replace(/\s/g, '').toLocaleLowerCase();
+    return needle ? pages.filter(p => (pageTexts[p.pageIndex] || '').toLocaleLowerCase().includes(needle)).map(p => p.pageIndex) : [];
+  }, [pages, pageTexts, query]);
   const filteredFigures = useMemo(() => figures.filter(f => (figureSection === -1 || f.section === figureSection) && (figureFilter === 'all' || (figureFilter === 'chart' ? f.type === 'chart' : f.type !== 'chart'))), [figures, figureFilter, figureSection]);
   const currentTable = tables.find(t => t.id === tableId) || tables[0];
 

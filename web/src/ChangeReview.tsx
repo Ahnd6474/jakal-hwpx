@@ -1,4 +1,5 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useModalFocus } from './modal-focus';
+import { useMemo, useRef, useState } from 'react';
 import { ArrowRight, RotateCcw, X } from 'lucide-react';
 import type { Document, Operation } from './api';
 import type { Drafts } from './draft-history';
@@ -15,23 +16,7 @@ export function ChangeReview({ doc, drafts, onClose, onRevert, onGo }: {
     const needle = search.trim().toLocaleLowerCase();
     return items.filter(item => !needle || `${item.label}\n${item.original}\n${item.text}`.toLocaleLowerCase().includes(needle));
   }, [items, search]);
-  useEffect(() => {
-    const previous = document.activeElement as HTMLElement | null;
-    const overflow = document.body.style.overflow;
-    document.body.style.overflow = 'hidden';
-    const controls = () => [...(dialog.current?.querySelectorAll<HTMLElement>('button:not([disabled]), input') || [])];
-    controls()[0]?.focus();
-    function keyboard(event: KeyboardEvent) {
-      if (event.key === 'Escape') onClose();
-      if (event.key !== 'Tab') return;
-      const fields = controls();
-      if (!dialog.current?.contains(document.activeElement)) { event.preventDefault(); (event.shiftKey ? fields.at(-1) : fields[0])?.focus(); }
-      else if (event.shiftKey && document.activeElement === fields[0]) { event.preventDefault(); fields.at(-1)?.focus(); }
-      else if (!event.shiftKey && document.activeElement === fields.at(-1)) { event.preventDefault(); fields[0]?.focus(); }
-    }
-    window.addEventListener('keydown', keyboard);
-    return () => { document.body.style.overflow = overflow; window.removeEventListener('keydown', keyboard); previous?.focus(); };
-  }, [onClose]);
+  useModalFocus(dialog, onClose);
   return <div className="modal-backdrop" onClick={onClose}><section className="modal changes-modal" ref={dialog} role="dialog" aria-modal="true" aria-labelledby="changes-title" onClick={event => event.stopPropagation()}>
     <div className="modal-heading"><div><h2 id="changes-title">수정 내용 <small>{items.length}</small></h2><p>아직 문서에 저장하지 않은 변경입니다.</p></div><button className="icon-button" aria-label="수정 내용 닫기" onClick={onClose}><X size={20} /></button></div>
     <label className="changes-search"><span className="sr-only">수정 내용 검색</span><input aria-label="수정 내용 검색" value={search} onChange={event => { setSearch(event.target.value); setLimit(30); }} placeholder="변경 전후의 내용에서 찾기" /></label>

@@ -18,6 +18,7 @@ export class IdleBackup {
   private version = 0;
   private pending = false;
   private running = false;
+  private composing = false;
   private lastInput = 0;
   private lastRun = -Infinity;
   private timer: number | undefined;
@@ -31,6 +32,13 @@ export class IdleBackup {
   cancel() {
     this.version++; this.pending = false; this.clear();
   }
+  setComposing(composing: boolean) {
+    if (this.composing === composing) return;
+    this.composing = composing; this.version++; this.clear();
+    // Start a fresh quiet interval after the IME commits, even when there is
+    // no additional document-mutated notification for compositionend.
+    if (!composing) { this.lastInput = this.clock.now(); this.arm(); }
+  }
   private clear() {
     if (this.timer !== undefined) this.clock.cancel(this.timer);
     if (this.idle !== undefined) this.clock.cancelIdle(this.idle);
@@ -38,7 +46,7 @@ export class IdleBackup {
   }
   private arm() {
     this.clear();
-    if (this.running || !this.pending) return;
+    if (this.running || !this.pending || this.composing) return;
     const wait = Math.max(0, this.lastInput + 2500 - this.clock.now(), this.lastRun + 10_000 - this.clock.now());
     this.timer = this.clock.delay(() => {
       this.timer = undefined;
@@ -47,11 +55,11 @@ export class IdleBackup {
   }
   async flush() {
     this.clear();
-    if (this.running || !this.pending) return;
+    if (this.running || !this.pending || this.composing) return;
     await this.run();
   }
   private async run() {
-    if (this.running || !this.pending) return;
+    if (this.running || !this.pending || this.composing) return;
     this.pending = false; this.running = true;
     const at = this.version;
     try { await this.task(() => at === this.version); }

@@ -1,6 +1,6 @@
 import type { Document, Operation } from './api';
 import type { Drafts } from './draft-history';
-import { textTargets } from './editing.ts';
+import { textTargetIndex } from './editing.ts';
 
 const PREFIX = 'jakal-draft:';
 const MAX_BACKUP = 2_000_000;
@@ -19,7 +19,7 @@ export function decodeBackup(raw: string | null, doc: Document, now = Date.now()
     if (!value || value.version !== 1 || value.documentId !== doc.id || !Number.isInteger(value.revision) || value.revision < 0
       || !Number.isFinite(value.expires) || value.expires * 1000 <= now || !Number.isFinite(value.updatedAt)
       || !Array.isArray(value.changes) || !value.changes.length || value.changes.length > 20000) return { kind: 'none' };
-    const known = new Map(textTargets(doc, {}).map(item => [item.id, item]));
+    const known = textTargetIndex(doc);
     const drafts: Drafts = {};
     const seen = new Set<string>();
     let compatible = value.revision === doc.revision;
@@ -46,8 +46,15 @@ export function clearDraftBackup(id: string): boolean {
 }
 
 export function writeDraftBackup(doc: Document, drafts: Drafts): boolean {
-  const changes = textTargets(doc, drafts).filter(item => item.editable && item.text !== item.original)
-    .map(item => ({ id: item.id, original: item.original, operation: { ...item.operation, text: item.text } }));
+  const entries = Object.entries(drafts);
+  if (!entries.length) return clearDraftBackup(doc.id);
+  const index = textTargetIndex(doc);
+  const changes = entries.flatMap(([id, operation]) => {
+    const target = index.get(id);
+    const text = operation?.text ?? target?.original;
+    return target?.editable && text !== undefined && text !== target.original ? [{ target, text }] : [];
+  }).sort((a, b) => a.target.order - b.target.order)
+    .map(({ target, text }) => ({ id: target.id, original: target.original, operation: { ...target.operation, text } }));
   if (!changes.length) return clearDraftBackup(doc.id);
   const backup: DraftBackup = { version: 1, documentId: doc.id, revision: doc.revision, expires: doc.expires, updatedAt: Date.now(), changes };
   try {

@@ -46,3 +46,21 @@ test('manual save cancels pending backup and invalidates an in-flight result; ba
   queue.cancel(); assert.equal(valid(), false); finish(); await flush;
   await clock.tick(20000); await clock.idle(); assert.equal(calls, 1);
 });
+test('IME composition never exports a document, including long pauses and background flush', async () => {
+  const clock = fakeClock(); let calls = 0;
+  const queue = new IdleBackup(async () => { calls++; }, clock.clock);
+  queue.schedule(); await clock.tick(1000);
+  queue.setComposing(true);
+  queue.schedule(); await clock.tick(15000); await clock.idle(); await queue.flush();
+  assert.equal(calls, 0);
+  queue.setComposing(false);
+  await clock.tick(2499); await clock.idle(); assert.equal(calls, 0);
+  await clock.tick(1); await clock.idle(); assert.equal(calls, 1);
+});
+test('starting composition cancels an idle export queued immediately before it', async () => {
+  const clock = fakeClock(); let calls = 0;
+  const queue = new IdleBackup(async () => { calls++; }, clock.clock);
+  queue.schedule(); await clock.tick(2500);
+  queue.setComposing(true); await clock.idle(); assert.equal(calls, 0);
+  queue.setComposing(false); await clock.tick(2500); await clock.idle(); assert.equal(calls, 1);
+});

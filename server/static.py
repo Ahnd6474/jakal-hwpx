@@ -29,9 +29,11 @@ class WebStaticFiles(StaticFiles):
         response = None
         if content_type and b'range' not in headers and accepts_gzip(headers.get(b'accept-encoding', b'').decode('latin-1')):
             try:
-                response = await super().get_response(path + '.gz', scope)
-                response.headers['Content-Encoding'] = 'gzip'
-                response.headers['Content-Type'] = content_type
+                candidate = await super().get_response(path + '.gz', scope)
+                if candidate.status_code in {200, 304}:
+                    response = candidate
+                    response.headers['Content-Encoding'] = 'gzip'
+                    response.headers['Content-Type'] = content_type
             except HTTPException as exc:
                 if exc.status_code != 404:
                     raise
@@ -39,7 +41,9 @@ class WebStaticFiles(StaticFiles):
             response = await super().get_response(path, scope)
         if content_type:
             response.headers['Vary'] = 'Accept-Encoding'
-        if re.fullmatch(r'(?:studio/)?assets/[^/]+-[A-Za-z0-9_-]{8,}\.(?:js|css|wasm)', path):
+        if response.status_code >= 400:
+            response.headers['Cache-Control'] = 'no-cache'
+        elif re.fullmatch(r'(?:studio/)?assets/[^/]+-[A-Za-z0-9_-]{8,}\.(?:js|css|wasm)', path):
             response.headers['Cache-Control'] = 'public, max-age=31536000, immutable'
         elif path.startswith(('fonts/', 'studio/fonts/')):
             response.headers['Cache-Control'] = 'public, max-age=86400'

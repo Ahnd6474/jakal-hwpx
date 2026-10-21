@@ -2,9 +2,11 @@ import init, { HwpDocument } from '@rhwp/core';
 import wasmUrl from '@rhwp/core/rhwp_bg.wasm?url';
 import type { Figure, PageInfo, VisualTable, ViewerMessage, ViewerResult } from './viewer-types';
 import { renderedText } from './viewer-text';
+import { ActivityGate, IndexBatch } from './viewer-index';
 
 let document: HwpDocument | null = null;
 let initialize: Promise<unknown> | null = null;
+const activity = new ActivityGate();
 const canvas = new OffscreenCanvas(1, 1);
 const context = canvas.getContext('2d')!;
 (globalThis as unknown as { measureTextWidth: (font: string, text: string) => number }).measureTextWidth = (font, text) => {
@@ -17,7 +19,7 @@ const cache = new Map<number, string>();
 let cacheSize = 0;
 function pageSvg(page: number): string {
   const cached = cache.get(page);
-  if (cached) return cached;
+  if (cached) { cache.delete(page); cache.set(page, cached); return cached; }
   const svg = document!.renderPageSvg(page);
   if (svg.length > 12_000_000) throw new Error('페이지 렌더링 크기 제한');
   cache.set(page, svg); cacheSize += svg.length;
@@ -26,6 +28,7 @@ function pageSvg(page: number): string {
 }
 
 onmessage = async (event: MessageEvent<ViewerMessage>) => {
+  if (event.data.type === 'activity') { activity.setActive(event.data.active); return; }
   try {
     if (event.data.type === 'load') {
       if (!initialize) initialize = init({ module_or_path: wasmUrl });
@@ -61,16 +64,23 @@ onmessage = async (event: MessageEvent<ViewerMessage>) => {
       // Build search from the text actually painted on each page. Paragraph-
       // based extraction can include text that flows onto an adjacent page.
       let textBudget = 2_000_000;
+      const batch = new IndexBatch(entries => send({ type: 'indexed-batch', entries }));
       for (let page = 0; page < count; page++) {
         await yieldTask();
+        if (!activity.active) batch.flush();
+        await activity.wait();
+        // Search is explicitly bounded; do not render pages whose text cannot
+        // be retained. They remain available for normal on-demand viewing.
+        if (textBudget <= 0) { batch.add({ page, text: '', limited: true }); continue; }
         try {
           const text = renderedText(pageSvg(page));
           const limit = Math.min(100_000, textBudget);
           const indexed = text.slice(0, limit);
           textBudget -= indexed.length;
-          send({ type: 'indexed', page, text: indexed, limited: indexed.length < text.length });
-        } catch { send({ type: 'indexed', page, text: '', limited: true }); }
+          batch.add({ page, text: indexed, limited: indexed.length < text.length });
+        } catch { batch.add({ page, text: '', limited: true }); }
       }
+      batch.flush();
     } else if (document) {
       const page = event.data.page;
       if (!Number.isInteger(page) || page < 0 || page >= document.pageCount()) return;

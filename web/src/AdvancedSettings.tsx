@@ -1,3 +1,4 @@
+import { useModalFocus } from './modal-focus';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { ArrowRight, Check, LockKeyhole, Save, X } from 'lucide-react';
 import { api, type Document, type Operation, type Settings } from './api';
@@ -20,11 +21,11 @@ export function AdvancedSettings({ doc, drafts, onClose, onApply, onSettings }: 
   const [excluded, setExcluded] = useState<string[]>([]);
   const excludedIds = useMemo(() => new Set(excluded), [excluded]);
   const dialogRef = useRef<HTMLElement>(null);
-  const settingsValue = { ...settings, protected_terms: [...new Set(terms.split('\n').map(t => t.trim()).filter(Boolean))] };
+  const settingsValue = useMemo(() => ({ ...settings, protected_terms: [...new Set(terms.split('\n').map(t => t.trim()).filter(Boolean))] }), [settings, terms]);
   const settingsDirty = JSON.stringify(settingsValue) !== JSON.stringify(doc.settings);
   const targets = useMemo(() => textTargets(doc, drafts), [doc, drafts]);
-  const ranged = targets.filter(t => (section === -1 || t.operation.section === section) && (scope === 'all' || (scope === 'paragraphs') === (t.operation.type === 'paragraph')));
-  const replacements = useMemo(() => replaceProposals(ranged, find, replacement, caseSensitive, settingsValue), [ranged, find, replacement, caseSensitive, settingsValue]);
+  const ranged = useMemo(() => targets.filter(t => (section === -1 || t.operation.section === section) && (scope === 'all' || (scope === 'paragraphs') === (t.operation.type === 'paragraph'))), [targets, section, scope]);
+  const replacements = useMemo(() => tab === 'replace' ? replaceProposals(ranged, find, replacement, caseSensitive, settingsValue) : [], [tab, ranged, find, replacement, caseSensitive, settingsValue]);
   const proposals = tab === 'replace' ? replacements : [];
   const selected = proposals.filter(p => !p.blocked && !excludedIds.has(p.id));
   const closeRef = useRef(() => {});
@@ -33,22 +34,7 @@ export function AdvancedSettings({ doc, drafts, onClose, onApply, onSettings }: 
     if (settingsDirty && !window.confirm('저장하지 않은 설정을 버리고 닫을까요?')) return;
     onClose();
   };
-  useEffect(() => {
-    const previous = document.activeElement as HTMLElement | null;
-    const overflow = document.body.style.overflow;
-    document.body.style.overflow = 'hidden';
-    const controls = () => [...(dialogRef.current?.querySelectorAll<HTMLElement>('button:not([disabled]), a[href], input:not([disabled]), textarea:not([disabled]), select:not([disabled])') || [])];
-    controls()[0]?.focus();
-    function keyboard(e: KeyboardEvent) {
-      if (e.key === 'Escape') closeRef.current();
-      if (e.key !== 'Tab') return;
-      const items = controls();
-      if (e.shiftKey && document.activeElement === items[0]) { e.preventDefault(); items.at(-1)?.focus(); }
-      else if (!e.shiftKey && document.activeElement === items.at(-1)) { e.preventDefault(); items[0]?.focus(); }
-    }
-    document.addEventListener('keydown', keyboard);
-    return () => { document.body.style.overflow = overflow; document.removeEventListener('keydown', keyboard); previous?.focus(); };
-  }, []);
+  useModalFocus(dialogRef, () => closeRef.current());
   useEffect(() => { setExcluded([]); }, [scope, section, doc.revision, doc.settings_version]);
   useEffect(() => { setExcluded([]); }, [find, replacement, caseSensitive]);
   useEffect(() => {
@@ -74,8 +60,14 @@ export function AdvancedSettings({ doc, drafts, onClose, onApply, onSettings }: 
   const scopeControls = <div className="advanced-scope"><label>대상<select aria-label="수정 대상" value={scope} onChange={e => setScope(e.target.value)} disabled={!!busy}><option value="all">문단과 표</option><option value="paragraphs">문단만</option><option value="tables">표만</option></select></label><label>범위<select aria-label="수정 섹션" value={section} onChange={e => setSection(Number(e.target.value))} disabled={!!busy}><option value={-1}>전체 섹션</option>{doc.sections.map(s => <option key={s.index} value={s.index}>섹션 {s.index + 1}</option>)}</select></label></div>;
   return <div className="advanced-backdrop" onClick={() => closeRef.current()}><section ref={dialogRef} className="advanced-panel" role="dialog" aria-modal="true" aria-labelledby="advanced-title" onClick={e => e.stopPropagation()}>
     <header className="advanced-heading"><div><span className="eyebrow">문서별 작업 도구</span><h2 id="advanced-title">고급 설정</h2><p title={doc.name}>{doc.name}</p></div><button className="icon-button" aria-label="고급 설정 닫기" disabled={!!busy} onClick={() => closeRef.current()}><X size={20} /></button></header>
-    <div className="advanced-tabs" role="tablist" aria-label="고급 기능">{([['rules', '편집 규칙'], ['replace', '찾기·바꾸기']] as const).map(([id, label]) => <button key={id} role="tab" aria-selected={tab === id} aria-controls={`advanced-${id}`} id={`advanced-tab-${id}`} disabled={!!busy} onClick={() => { setTab(id); setError(''); setNotice(''); }} className={tab === id ? 'active' : ''}>{label}</button>)}</div>
-    <div className="advanced-body" role="tabpanel" id={`advanced-${tab}`} aria-labelledby={`advanced-tab-${tab}`}>
+    <div className="advanced-tabs" role="tablist" aria-label="고급 기능">{([['rules', '편집 규칙'], ['replace', '찾기·바꾸기']] as const).map(([id, label]) => <button key={id} role="tab" tabIndex={tab === id ? 0 : -1} aria-selected={tab === id} aria-controls={`advanced-${id}`} id={`advanced-tab-${id}`} onKeyDown={event => {
+      if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
+      event.preventDefault();
+      const next = event.key === 'Home' ? 'rules' : event.key === 'End' ? 'replace' : id === 'rules' ? 'replace' : 'rules';
+      setTab(next); setError(''); setNotice('');
+      document.getElementById(`advanced-tab-${next}`)?.focus();
+    }} disabled={!!busy} onClick={() => { setTab(id); setError(''); setNotice(''); }} className={tab === id ? 'active' : ''}>{label}</button>)}</div>
+    <div className="advanced-body" role="tabpanel" tabIndex={0} id={`advanced-${tab}`} aria-labelledby={`advanced-tab-${tab}`}>
       {error && <div className="advanced-message error" role="alert">{error}</div>}{notice && <div className="advanced-message" role="status"><Check size={15} />{notice}</div>}
       {tab === 'rules' ? <>
         <section className="setting-section"><h3>작업 메모</h3><p>문서의 목적, 문체, 유지할 내용 등을 적어 두세요.<br />작업 중 참고할 수 있도록 이 문서에 함께 저장합니다.</p><label className="sr-only" htmlFor="task-instructions">작업 메모</label><textarea id="task-instructions" rows={6} maxLength={8000} value={settings.instructions} onChange={e => setSettings({ ...settings, instructions: e.target.value })} placeholder={'예: 외부 고객에게 보내는 제안서입니다.\n합니다체로 통일하고, 제품명과 금액은 유지하세요.'} /><span className="field-counter">{settings.instructions.length.toLocaleString()} / 8,000</span></section>

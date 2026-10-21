@@ -13,14 +13,9 @@ export type RevisionSnapshot = Pick<Document, 'revision' | 'sections' | 'report'
 export type Operation = { type: 'paragraph'; section: number; index: number; text: string } | { type: 'cell'; section: number; table: number; row: number; column: number; text: string };
 export type Job = { id: string; document_id: string; kind: string; status: 'queued' | 'running' | 'completed' | 'failed'; error: string | null };
 
-export async function api<T>(path: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(`/api${path}`, init);
-  if (!response.ok) {
-    const data = await response.json().catch(() => ({}));
-    throw new Error(typeof data.detail === 'string' ? data.detail : '요청을 처리하지 못했습니다. 입력 내용을 확인해 주세요.');
-  }
-  return response.json();
-}
+export { type RequestOptions } from './request';
+import { requestJson, type RequestOptions } from './request';
+export const api = <T>(path: string, init?: RequestOptions): Promise<T> => requestJson<T>(`/api${path}`, init);
 
 export function post<T>(path: string, data: unknown): Promise<T> {
   return api<T>(path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data) });
