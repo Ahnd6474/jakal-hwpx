@@ -1,3 +1,4 @@
+import { privateStorageKey, privacyLocked } from './privacy-context.ts';
 import type { Document, Operation } from './api';
 import type { Drafts } from './draft-history';
 import { textTargetIndex } from './editing.ts';
@@ -36,16 +37,17 @@ export function decodeBackup(raw: string | null, doc: Document, now = Date.now()
 }
 
 export function readDraftBackup(doc: Document): BackupResult {
-  try { return decodeBackup(sessionStorage.getItem(PREFIX + doc.id), doc); }
+  try { return decodeBackup(sessionStorage.getItem(privateStorageKey(PREFIX) + doc.id), doc); }
   catch { return { kind: 'unavailable' }; }
 }
 
 export function clearDraftBackup(id: string): boolean {
-  try { sessionStorage.removeItem(PREFIX + id); return true; }
+  try { sessionStorage.removeItem(privateStorageKey(PREFIX) + id); return true; }
   catch { return false; }
 }
 
 export function writeDraftBackup(doc: Document, drafts: Drafts): boolean {
+  if (privacyLocked()) return false;
   const entries = Object.entries(drafts);
   if (!entries.length) return clearDraftBackup(doc.id);
   const index = textTargetIndex(doc);
@@ -60,7 +62,7 @@ export function writeDraftBackup(doc: Document, drafts: Drafts): boolean {
   try {
     const raw = JSON.stringify(backup);
     if (raw.length > MAX_BACKUP) return false;
-    sessionStorage.setItem(PREFIX + doc.id, raw);
+    sessionStorage.setItem(privateStorageKey(PREFIX) + doc.id, raw);
     return true;
   } catch { return false; }
 }

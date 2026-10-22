@@ -1,9 +1,11 @@
+import { privateStorageKey, privacyLocked } from './privacy-context.ts';
 export type StudioBackup = { id: string; revision: number; bytes: Uint8Array; saved: number; name?: string };
 export type StudioBackupInfo = { id: string; revision: number; saved: number; size: number; name?: string };
 const database = 'jakal-document-editor';
 async function access<T>(mode: IDBTransactionMode, stores: string[], action: (transaction: IDBTransaction) => () => T): Promise<T> {
+  if (privacyLocked()) return Promise.reject(new Error('사용 세션이 종료되었습니다.'));
   return new Promise((resolve, reject) => {
-    const open = indexedDB.open(database, 2);
+    const open = indexedDB.open(privateStorageKey(database), 2);
     let abandoned = false;
     open.onupgradeneeded = () => {
       if (!open.result.objectStoreNames.contains('drafts')) open.result.createObjectStore('drafts', { keyPath: 'id' });

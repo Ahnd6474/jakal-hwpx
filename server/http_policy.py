@@ -5,7 +5,9 @@ def response_headers(path: str) -> dict[str, str]:
     studio = path.startswith('/studio/')
     headers = {
         'X-Content-Type-Options': 'nosniff',
-        'Referrer-Policy': 'same-origin',
+        'Referrer-Policy': 'no-referrer',
+        'Cross-Origin-Resource-Policy': 'same-origin',
+        'X-Permitted-Cross-Domain-Policies': 'none',
         'Permissions-Policy': 'camera=(), microphone=(), geolocation=()',
         'Content-Security-Policy': (
             "default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; worker-src 'self' blob:; style-src 'self' 'unsafe-inline'; font-src 'self' data:; img-src 'self' data: blob:; connect-src 'self'; frame-src 'self' blob:; object-src 'none'; frame-ancestors 'self'; base-uri 'self'; form-action 'self'"
@@ -15,4 +17,7 @@ def response_headers(path: str) -> dict[str, str]:
     }
     if path == '/api' or path.startswith('/api/'):
         headers['Cache-Control'] = 'no-store'
+        headers['Pragma'] = 'no-cache'
+        headers['Expires'] = '0'
+        headers['Vary'] = 'Cookie'
     return headers

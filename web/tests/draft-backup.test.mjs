@@ -18,12 +18,12 @@ test('empty drafts do not traverse document content and sparse changes stay cano
   assert.equal(writeDraftBackup({ id: 'empty', get sections() { throw new Error('unneeded content access'); } }, {}), true);
   const reversed = { 'unknown': { type: 'paragraph', section: 0, index: 0, text: 'ignored' }, 's0-t0-1-2': drafts['s0-t0-1-2'], 's0-p0': { ...drafts['s0-p0'], index: 999 } };
   assert.equal(writeDraftBackup(doc, reversed), true);
-  const record = JSON.parse(saved.get('jakal-draft:' + doc.id));
+  const record = JSON.parse(saved.get('jakal-draft::locked' + doc.id));
   assert.deepEqual(record.changes.map(item => item.id), ['s0-p0', 's0-t0-1-2']);
   assert.equal(record.changes[0].operation.index, 0);
   assert.equal(record.changes[1].operation.text, '');
   assert.equal(writeDraftBackup(doc, { ...drafts, 's0-p0': { ...drafts['s0-p0'], text: null } }), true);
-  assert.deepEqual(JSON.parse(saved.get('jakal-draft:' + doc.id)).changes.map(item => item.id), ['s0-t0-1-2']);
+  assert.deepEqual(JSON.parse(saved.get('jakal-draft::locked' + doc.id)).changes.map(item => item.id), ['s0-t0-1-2']);
 });
 test('target index follows immutable content rather than document id or settings identity', () => {
   const first = textTargetIndex(doc);

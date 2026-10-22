@@ -11,6 +11,19 @@ const job = { id: 'job', document_id: base.id, kind: 'edit', status: 'completed'
 const fresh = { ...base, revision: 4, status: 'ready', validated: null };
 const immediate = async (_ms, signal) => signal?.throwIfAborted();
 
+test('page layout shares versioned command receipts and carries the selected section', async () => {
+  const { defaultLayout } = await import('../src/page-layout.ts');
+  const client = new DocumentCommands(async (url, options) => {
+    if (options?.method === 'POST') {
+      assert.equal(url, '/api/documents/document/page-layout');
+      assert.deepEqual(JSON.parse(options.body), { revision: 3, settings_version: 2, layout: defaultLayout, section: 1 });
+      return { ...receipt, kind: 'layout' };
+    }
+    return url.includes('/jobs/') ? { ...job, kind: 'layout' } : fresh;
+  }, immediate);
+  assert.equal(await client.execute(base, { kind: 'layout', layout: defaultLayout, section: 1 }), fresh);
+});
+
 test('lost command response retries the identical payload and key, then verifies job and saved state', async () => {
   const writes = [];
   let reconnects = 0;

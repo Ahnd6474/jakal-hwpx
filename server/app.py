@@ -8,25 +8,28 @@ import re
 import secrets
 import shutil
 import time
+import tempfile
+import threading
 from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI, File, Header, HTTPException, Query, Request, UploadFile
 from fastapi.responses import FileResponse, JSONResponse
+from fastapi.exceptions import RequestValidationError
 from starlette.concurrency import run_in_threadpool
 from .static import WebStaticFiles
 from .http_policy import response_headers
 
-from .schemas import CommandRevisionRequest, CopyRequest, RenameRequest, EditRequest, RevisionRequest, RestoreRequest, SettingsRequest, TemplateRequest
+from .schemas import CommandRevisionRequest, CopyRequest, RenameRequest, EditRequest, RevisionRequest, RestoreRequest, SettingsRequest, TemplateRequest, PageLayoutRequest, PageLayoutDocumentRequest
 from .document_names import document_name
 from .document_service import DocumentService
 from .errors import WorkspaceError
 from .storage import Store
 from .worker import Worker
+from .privacy import COOKIE, SECURE_COOKIE, DeploymentPolicy, Sessions, SessionRateLimited, protect_storage
 
 REPO = Path(__file__).resolve().parents[1]
 MAX_UPLOAD = 20 * 1024 * 1024
-COOKIE = "jakal_session"
 
 
 class BodyTooLarge(HTTPException):
@@ -67,9 +70,14 @@ class BodyLimit:
 
 
 def create_app(data_dir: Path | None = None, *, run_worker: bool = True) -> FastAPI:
-    store = Store(data_dir or Path(os.environ.get("JAKAL_DATA_DIR", REPO / ".web-data")))
+    private_root = data_dir or Path(os.environ.get("JAKAL_DATA_DIR", REPO / ".web-data"))
+    policy = DeploymentPolicy(REPO, private_root)
+    store = Store(private_root)
+    protect_storage(store.root, production=policy.production)
+    sessions = Sessions(store, allow_legacy=not policy.production)
     worker = Worker(store)
     service = DocumentService(store)
+    template_imports = threading.BoundedSemaphore(2)
 
     @asynccontextmanager
     async def lifespan(app):
@@ -81,46 +89,103 @@ def create_app(data_dir: Path | None = None, *, run_worker: bool = True) -> Fast
             if run_worker:
                 worker.close()
 
-    app = FastAPI(title="Jakal Document Workspace", lifespan=lifespan, docs_url="/api/docs", redoc_url=None, openapi_url="/api/openapi.json")
+    app = FastAPI(title="Jakal Document Workspace", lifespan=lifespan, docs_url=None if policy.production else "/api/docs", redoc_url=None, openapi_url=None if policy.production else "/api/openapi.json")
     app.state.store = store
     app.state.worker = worker
     app.state.documents = service
+    app.state.sessions = sessions
     app.add_middleware(BodyLimit)
+
+    def security_headers(path):
+        headers = response_headers(path)
+        if policy.production:
+            headers['Strict-Transport-Security'] = 'max-age=31536000'
+        return headers
+
+    @app.exception_handler(RequestValidationError)
+    async def invalid_input(request: Request, exc: RequestValidationError):
+        # Never echo document text or invalid non-finite numbers into JSON.
+        detail = [{key: error[key] for key in ('loc', 'msg', 'type')} for error in exc.errors()]
+        return JSONResponse({'detail': detail, 'code': 'invalid_input'}, status_code=422,
+            headers=security_headers(request.url.path))
 
     @app.exception_handler(WorkspaceError)
     async def workspace_error(request: Request, exc: WorkspaceError):
         return JSONResponse({"detail": str(exc), "code": exc.code}, status_code=exc.status,
-            headers=response_headers(request.url.path))
+            headers=security_headers(request.url.path))
 
     @app.exception_handler(Exception)
     async def unexpected_error(request: Request, exc: Exception):
         # Never expose server paths, document contents or tracebacks to the client.
-        return JSONResponse({"detail": "서버에서 요청을 처리하지 못했습니다. 잠시 후 다시 확인해 주세요."}, status_code=500, headers=response_headers(request.url.path))
+        return JSONResponse({"detail": "서버에서 요청을 처리하지 못했습니다. 잠시 후 다시 확인해 주세요."}, status_code=500, headers=security_headers(request.url.path))
 
     @app.middleware("http")
     async def session_and_headers(request: Request, call_next):
-        if request.method in {"POST", "PUT", "PATCH", "DELETE"}:
+        headers = security_headers(request.scope.get('path', '/'))
+        critical = {'host', 'origin', 'sec-fetch-site', 'x-jakal-workspace', 'content-length', 'transfer-encoding'}
+        if any(len(request.headers.getlist(name)) > 1 for name in critical) or (request.headers.get('content-length') and request.headers.get('transfer-encoding')):
+            return JSONResponse({'detail': '중복되거나 모호한 요청 헤더입니다.'}, status_code=400, headers=headers)
+        if not policy.allowed(request):
+            return JSONResponse({'detail': '허용되지 않은 도메인 또는 HTTPS 설정입니다.'}, status_code=400, headers=headers)
+        private = request.url.path == '/api' or request.url.path.startswith('/api/')
+        if private or request.method in {"POST", "PUT", "PATCH", "DELETE"}:
             origin = request.headers.get("origin")
             expected = f"{request.url.scheme}://{request.headers.get('host', '')}"
-            if request.headers.get("sec-fetch-site") == "cross-site" or (origin and origin != expected):
-                return JSONResponse({"detail": "다른 사이트에서 보낸 요청은 허용하지 않습니다."}, status_code=403, headers=response_headers(request.url.path))
-        token = request.cookies.get(COOKIE, "")
-        fresh = not re.fullmatch(r"[a-f0-9]{64}", token)
-        if fresh:
-            token = secrets.token_hex(32)
-        request.state.owner = hashlib.sha256(token.encode()).hexdigest()
+            if request.headers.get("sec-fetch-site") in {"cross-site", "same-site"} or (origin and origin != expected):
+                return JSONResponse({"detail": "다른 사이트에서 보낸 요청은 허용하지 않습니다."}, status_code=403, headers=headers)
+        secure = policy.production or request.url.scheme == 'https' or os.environ.get('JAKAL_COOKIE_SECURE') == '1'
+        cookie_name = SECURE_COOKIE if secure else COOKIE
+        public_asset = not private or request.url.path in {'/api/health', '/api/templates'}
+        if public_asset:
+            response = await call_next(request)
+            response.headers.update(headers)
+            return response
+        credentials = [part.strip().split('=', 1)[1].strip() for value in request.headers.getlist('cookie')
+            for part in value.split(';') if '=' in part and part.strip().split('=', 1)[0].strip() == cookie_name]
+        if len(credentials) > 1:
+            return JSONResponse({'detail': '중복된 세션 쿠키입니다.'}, status_code=400, headers=headers)
+        fence = request.headers.get('x-jakal-workspace')
+        if fence is not None and not re.fullmatch('[a-f0-9]{32}', fence):
+            return JSONResponse({'detail': '올바르지 않은 세션 확인 값입니다.'}, status_code=400, headers=headers)
+        try:
+            identity = await run_in_threadpool(sessions.resolve, credentials[0] if credentials else '', fence, request.client.host if request.client else '')
+        except SessionRateLimited as error:
+            return JSONResponse({'detail': '새 세션 요청이 너무 많습니다. 잠시 후 다시 시도해 주세요.', 'code': 'session_rate_limit'}, status_code=429,
+                headers={**headers, 'Retry-After': str(error.retry_after)})
+        if identity is None:
+            return JSONResponse({'detail': '사용 세션이 변경되거나 종료되었습니다. 문서 화면을 다시 열어 주세요.', 'code': 'session_changed'},
+                status_code=401, headers=headers)
+        token, owner, workspace = identity
+        request.state.owner = owner
+        request.state.workspace = workspace
         response = await call_next(request)
         # Keep active sessions alive so a file uploaded near the end of an old
         # cookie's lifetime remains accessible for its own 24-hour retention.
-        if not request.url.path.startswith(("/assets/", "/studio/assets/", "/fonts/", "/studio/fonts/")):
-            response.set_cookie(COOKIE, token, httponly=True, samesite="strict", secure=request.url.scheme == "https" or os.environ.get("JAKAL_COOKIE_SECURE") == "1", max_age=store.ttl)
-        response.headers.update(response_headers(request.url.path))
+        if not getattr(request.state, 'ended_session', False):
+            response.set_cookie(cookie_name, token, httponly=True, samesite="strict", secure=secure, max_age=store.ttl, path='/')
+        response.headers['X-Jakal-Workspace'] = workspace
+        response.headers.update(headers)
         return response
 
     def owned(identifier: str, request: Request):
         return service.owned(identifier, request.state.owner)
 
     view = service.view
+
+    @app.get('/api/session')
+    def session_info(request: Request):
+        return {'workspace': request.state.workspace, 'retention_hours': 24}
+
+    @app.delete('/api/session')
+    def end_session(request: Request):
+        sessions.revoke(request.state.owner)
+        request.state.ended_session = True
+        response = JSONResponse({'ended': True})
+        response.delete_cookie(COOKIE, path='/', httponly=True, samesite='strict')
+        response.delete_cookie(SECURE_COOKIE, path='/', secure=True, httponly=True, samesite='strict')
+        if request.url.scheme == 'https':
+            response.headers['Clear-Site-Data'] = '"cache", "storage"'
+        return response
 
     @app.get("/api/health")
     def health():
@@ -135,26 +200,80 @@ def create_app(data_dir: Path | None = None, *, run_worker: bool = True) -> Fast
         from .templates import TEMPLATES
         return TEMPLATES
 
-    @app.post("/api/documents/from-template", status_code=202)
-    def from_template(body: TemplateRequest, request: Request):
-        from .templates import make_template
+    @app.post('/api/page-templates/extract')
+    def extract_page_template(request: Request, files: list[UploadFile] = File(...)):
+        from .template_extract import ExtractionError, run_extraction
+        try:
+            if not 1 <= len(files) <= 10:
+                raise HTTPException(422, '파일은 한 번에 최대 10개까지 가져올 수 있습니다.')
+            if not template_imports.acquire(blocking=False):
+                raise HTTPException(429, '다른 양식 추출이 진행 중입니다. 잠시 후 다시 가져와 주세요.')
+            try:
+                with tempfile.TemporaryDirectory(prefix='layout-import-', dir=store.root) as temporary:
+                    directory = Path(temporary)
+                    inputs, total = [], 0
+                    for index, upload_file in enumerate(files):
+                        name = (upload_file.filename or '').replace('\\', '/').split('/')[-1]
+                        extension = Path(name).suffix.lower()
+                        if extension not in {'.hwpx', '.pdf', '.jpg', '.jpeg', '.png', '.json'}:
+                            raise HTTPException(415, 'HWPX·PDF·JPG·PNG·쪽 양식 JSON 파일을 선택해 주세요.')
+                        filename = f'input-{index:02d}{extension}'
+                        size = 0
+                        with (directory / filename).open('xb') as output:
+                            while chunk := upload_file.file.read(256 * 1024):
+                                total += len(chunk); size += len(chunk)
+                                if total > MAX_UPLOAD:
+                                    raise BodyTooLarge()
+                                output.write(chunk)
+                        if not size:
+                            raise HTTPException(422, '빈 양식 파일은 가져올 수 없습니다.')
+                        inputs.append({'file': filename, 'name': ''.join(c for c in name if c.isprintable())[:180]})
+                    try:
+                        return run_extraction(directory, inputs)
+                    except ExtractionError as error:
+                        raise HTTPException(422, str(error)) from None
+            finally:
+                template_imports.release()
+        finally:
+            for upload_file in files:
+                upload_file.file.close()
+
+    def generated_document(title: str, request: Request, generate=None, *, analysis_payload=None):
         from .files import atomic_write
-        title = "".join(c for c in body.title.strip() if c.isprintable() and c not in '/\\:*?"<>|').strip('. ')
+        title = "".join(c for c in title.strip() if c.isprintable() and c not in '/\\:*?"<>|').strip('. ')
         if not title:
             raise HTTPException(422, "문서 제목을 입력해 주세요.")
-        raw = make_template(body.template, title, body.question_count)
+        raw = generate(title) if generate else None
         identifier = secrets.token_hex(16)
         directory = store.directory(identifier)
         directory.mkdir()
         try:
-            atomic_write(directory / "revision-0.hwpx", raw)
-            job = store.create_document(request.state.owner, title + ".hwpx", identifier, enqueue_analysis=True)
+            if raw is not None:
+                atomic_write(directory / "revision-0.hwpx", raw)
+            job = store.create_document(request.state.owner, title + ".hwpx", identifier, enqueue_analysis=True, analysis_payload=analysis_payload)
         except Exception as exc:
             shutil.rmtree(directory, ignore_errors=True)
             if isinstance(exc, ValueError):
                 raise HTTPException(429, str(exc)) from exc
             raise
         return {"document_id": identifier, "job_id": job}
+
+    @app.post("/api/documents/from-template", status_code=202)
+    def from_template(body: TemplateRequest, request: Request):
+        from .templates import make_template
+        return generated_document(body.title, request, lambda title: make_template(body.template, title, body.question_count))
+
+    @app.post('/api/documents/from-page-layout', status_code=202)
+    def from_page_layout(body: PageLayoutDocumentRequest, request: Request):
+        from jakal_hwpx import HwpxDocument
+        from .page_layout import apply_layout
+        if body.background_pages:
+            return generated_document(body.title, request, analysis_payload={'page_template': body.model_dump()})
+        def generate(title):
+            document = HwpxDocument.blank()
+            apply_layout(document, body.layout)
+            return document.compile(validate=False, auto_repair=False)
+        return generated_document(body.title, request, generate)
 
     @app.post("/api/documents", status_code=202)
     def upload(request: Request, file: UploadFile = File(...)):
@@ -201,6 +320,22 @@ def create_app(data_dir: Path | None = None, *, run_worker: bool = True) -> Fast
     @app.get("/api/documents/{identifier}/state")
     def document_state(identifier: str, request: Request):
         return service.state(identifier, request.state.owner)
+
+    @app.get('/api/documents/{identifier}/page-layout')
+    def get_page_layout(identifier: str, request: Request, revision: int = Query(ge=0)):
+        document = owned(identifier, request)
+        if document['revision'] != revision:
+            raise WorkspaceError('revision_conflict', '문서 버전이 변경되었습니다. 최신 문서를 다시 열어 주세요.')
+        if view(document)['format'] != 'hwpx':
+            raise WorkspaceError('conversion_required', 'HWPX로 변환한 문서를 다시 열어 주세요.')
+        from jakal_hwpx import HwpxDocument
+        from .page_layout import read_layouts
+        return {'revision': revision, 'sections': read_layouts(HwpxDocument.open(store.directory(identifier) / f'revision-{revision}.hwpx', validate=False))}
+
+    @app.post('/api/documents/{identifier}/page-layout', status_code=202)
+    def set_page_layout(identifier: str, body: PageLayoutRequest, request: Request,
+                        request_key: str | None = Header(default=None, alias='Idempotency-Key')):
+        return service.layout(identifier, request.state.owner, body, request_key)
 
     @app.patch('/api/documents/{identifier}/name')
     def rename_document(identifier: str, body: RenameRequest, request: Request):
@@ -268,6 +403,8 @@ def create_app(data_dir: Path | None = None, *, run_worker: bool = True) -> Fast
     def original(identifier: str, request: Request):
         document = owned(identifier, request)
         extension = Path(document["name"]).suffix.lower()
+        if not (store.directory(identifier) / f'revision-0{extension}').is_file():
+            raise HTTPException(404, '문서 생성이 완료되지 않아 원본 파일이 없습니다. 업로드한 파일은 로컬에서 그대로 사용할 수 있습니다.')
         return FileResponse(store.directory(identifier) / f"revision-0{extension}", media_type="application/octet-stream", filename=document["name"])
 
     @app.post("/api/documents/{identifier}/operations", status_code=202)

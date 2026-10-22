@@ -7,13 +7,13 @@
 | 위치 | 역할 |
 | --- | --- |
 | `server/app.py` | 세션 쿠키에서 소유자 확인, HTTP 입력 검사, 파일 크기 제한·스트리밍, 임시 업로드 파일 정리 |
-| `server/document_service.py` | 문서 소유권 조회, 저장 정보·상태 조회, 본문/표 편집·원문 저장·검증·버전 복원 접수 |
+| `server/document_service.py` | 문서 소유권 조회, 저장 정보·상태 조회, 본문/표 편집·원문 저장·검증·버전 복원·쪽 양식 적용 접수 |
 | `server/storage.py` | 한 트랜잭션 안에서 소유권·만료·문서 버전·설정 버전·진행 중 작업·중복 요청 확인, 영속 작업 큐 |
 | `server/worker.py`, `server/process_job.py` | 실제 파일 처리, 구조·첨부 참조·보호 문구 검사, 실패 시 현재 저장본 유지 |
 | `web/src/document-commands.ts` | 타입이 있는 사이트 작업 클라이언트. 접수 → 작업 대기 → 결과 버전 확인 → 저장 문서 조회 |
 | `web/src/DocumentSyncNotice.tsx` | 다른 작업의 변경을 가벼운 상태 조회로 알림. 열린 편집기를 자동 교체하지 않음 |
 
-이름 변경·복사·새 문서 생성·최초 업로드는 기존 HTTP 절차를 사용한다. 위 네 가지 문서 명령과 달리 자동 재전송하지 않는다. 다운로드는 기존 `download-workflow.ts`가 수정 저장 → 해당 버전 검증 → 다운로드 준비 순서를 확인한다.
+이름 변경·복사·새 문서 생성·최초 업로드는 기존 HTTP 절차를 사용한다. 위 다섯 가지 문서 명령과 달리 자동 재전송하지 않는다. 다운로드는 기존 `download-workflow.ts`가 수정 저장 → 해당 버전 검증 → 다운로드 준비 순서를 확인한다.
 
 ## 사이트의 변경 사항
 
@@ -34,11 +34,14 @@
 | `POST /api/documents/{id}/operations` | `revision`, 선택적 `settings_version`, `operations` |
 | `POST /api/documents/{id}/validations` | `revision`, 선택적 `settings_version` |
 | `POST /api/documents/{id}/restorations` | `revision`, 선택적 `settings_version`, `source_revision` |
+| `POST /api/documents/{id}/page-layout` | `revision`, 선택적 `settings_version`, `section`, `layout`, 선택적 `background_pages` |
 | `POST /api/documents/{id}/studio?revision=N&settings_version=M` | multipart `file` |
 
-이 네 요청은 선택적 `Idempotency-Key` 헤더를 받는다. 새 사이트 클라이언트는 문서 버전·설정 버전과 식별자를 모두 전송한다. 헤더는 영문·숫자·밑줄·하이픈으로 구성한 16~128자다. 같은 소유자·문서·식별자의 명령 종류, 입력 또는 기준 버전이 달라지면 `409 request_key_conflict`로 거절한다. 이미 완료된 동일 요청은 문서 버전이 올라갔어도 원래 작업을 반환한다. 파일 저장은 임시 파일명이 아닌 서버가 계산한 파일 SHA-256으로 비교한다. 재업로드된 불필요한 임시 파일은 삭제하고 원래 작업의 입력은 유지한다.
+이 다섯 요청은 선택적 `Idempotency-Key` 헤더를 받는다. 새 사이트 클라이언트는 문서 버전·설정 버전과 식별자를 모두 전송한다. 헤더는 영문·숫자·밑줄·하이픈으로 구성한 16~128자다. 같은 소유자·문서·식별자의 명령 종류, 입력 또는 기준 버전이 달라지면 `409 request_key_conflict`로 거절한다. 이미 완료된 동일 요청은 문서 버전이 올라갔어도 원래 작업을 반환한다. 파일 저장은 임시 파일명이 아닌 서버가 계산한 파일 SHA-256으로 비교한다. 재업로드된 불필요한 임시 파일은 삭제하고 원래 작업의 입력은 유지한다.
 
-접수 응답은 `{job_id, document_id, kind, base_revision}`이다. 작업 조회의 `result.revision`이 실제 완료 버전이다. 편집·원문 저장·복원은 기준 버전 + 1, 검증은 같은 버전에서 완료되어야 한다. 이전 클라이언트와의 호환을 위해 설정 버전과 헤더는 선택적이지만, 향후 어댑터는 둘 다 명시해야 한다.
+접수 응답은 `{job_id, document_id, kind, base_revision}`이다. 작업 조회의 `result.revision`이 실제 완료 버전이다. 편집·원문 저장·복원·쪽 양식 적용은 기준 버전 + 1, 검증은 같은 버전에서 완료되어야 한다. 이전 클라이언트와의 호환을 위해 설정 버전과 헤더는 선택적이지만, 향후 어댑터는 둘 다 명시해야 한다.
+
+쪽 양식의 `background_pages`는 생략하면 기존 배경 유지, `[]`는 가져온 배경 제거, 한 항목은 배경 교체다. 현재 문서에는 한 배경만 적용할 수 있다. 배경 항목은 `width_mm`, `height_mm`, JPEG 데이터 URL `image`로 구성하고 실제 이미지 검증·재인코딩은 워커에서 수행한다. 여러 배경의 새 문서는 `POST /api/documents/from-page-layout`으로 만들며 분석 큐를 사용한다. `POST /api/page-templates/extract`는 양식/미리보기만 반환하는 독립 읽기 작업이고 문서나 버전을 생성하지 않는다.
 
 읽기 전용 `GET /api/documents/{id}/state`는 `id`, `name`, `revision`, `status`, `validated`, `settings_version`, `expires`를 반환한다. 전체 문서 내용·설정 문구·첨부는 포함하지 않고 스냅숏 파일을 읽지 않는다. 전체 문서 조회와 동일한 소유권·만료 정책 및 `Cache-Control: no-store`를 적용한다. 이 조회를 변경 권한이나 잠금으로 해석해서는 안 된다. 변경 시점의 트랜잭션 검사가 최종 기준이다.
 

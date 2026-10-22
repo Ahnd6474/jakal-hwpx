@@ -23,10 +23,49 @@ jobs:
           cache: npm
           cache-dependency-path: web/package-lock.json
       - run: python -m pip install -e '.[web,web-test]'
-      - run: python -m pytest web_tests -q
+      - run: python scripts/check_private_artifacts.py
       - run: npm ci
         working-directory: web
       - run: npm run build
         working-directory: web
+      - run: python -m pytest web_tests -q
       - run: npm test
         working-directory: web
+
+  container:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate HTTPS gateway
+        run: >-
+          docker run --rm --network none
+          -e JAKAL_DOMAIN=editor.example.com
+          -v "$PWD/deploy/Caddyfile:/etc/caddy/Caddyfile:ro"
+          caddy:2-alpine caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile
+      - name: Build complete application image
+        run: docker build -t jakal-workspace:test .
+      - name: Verify isolated production container
+        shell: bash
+        run: |
+          set -euo pipefail
+          trap 'docker rm -f jakal-container-check >/dev/null 2>&1 || true; docker volume rm jakal-container-check-data >/dev/null 2>&1 || true' EXIT
+          docker volume create jakal-container-check-data
+          docker run -d --name jakal-container-check --network none --read-only \
+            --cap-drop ALL --security-opt no-new-privileges:true \
+            --tmpfs /tmp:rw,noexec,nosuid,size=268435456,uid=10001,gid=10001,mode=1770 \
+            --mount type=volume,source=jakal-container-check-data,target=/var/lib/jakal \
+            -e JAKAL_PUBLIC_ORIGIN=https://deployment.invalid \
+            -e JAKAL_TRUSTED_PROXIES=127.0.0.1 jakal-workspace:test
+          ready=false
+          for attempt in $(seq 1 30); do
+            if docker exec jakal-container-check python -m server.healthcheck; then
+              ready=true
+              break
+            fi
+            sleep 1
+          done
+          if [ "$ready" != true ]; then
+            docker logs jakal-container-check
+            exit 1
+          fi
+          docker exec -i jakal-container-check python - < scripts/check_deployment.py

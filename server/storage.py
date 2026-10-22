@@ -63,13 +63,14 @@ class Store:
                 SELECT jobs.document,json_extract(jobs.result,'$.revision'),jobs.created,jobs.kind,
                     CASE WHEN jobs.kind='restore' THEN json_extract(jobs.payload,'$.source_revision') END
                 FROM jobs JOIN documents ON documents.id=jobs.document
-                WHERE jobs.status='completed' AND jobs.kind IN ('edit','studio','restore')
+                WHERE jobs.status='completed' AND jobs.kind IN ('edit','studio','restore','layout')
                     AND json_valid(jobs.result) AND json_type(jobs.result,'$.revision')='integer'
                     AND json_extract(jobs.result,'$.revision')<=documents.revision""")
 
     @contextmanager
     def connect(self):
         db = sqlite3.connect(self.db, timeout=15)
+        db.execute('PRAGMA secure_delete=ON')
         db.row_factory = sqlite3.Row
         try:
             with db:
@@ -94,7 +95,7 @@ class Store:
         with self.connect() as db:
             return [dict(row) for row in db.execute("SELECT * FROM documents WHERE owner=? AND created>? ORDER BY created DESC", (owner, time.time() - self.ttl))]
 
-    def create_document(self, owner: str, name: str, identifier: str, *, enqueue_analysis: bool = False):
+    def create_document(self, owner: str, name: str, identifier: str, *, enqueue_analysis: bool = False, analysis_payload: dict | None = None):
         with self.connect() as db:
             db.execute("BEGIN IMMEDIATE")
             if db.execute("SELECT count(*) FROM documents WHERE owner=? AND created>?", (owner, time.time() - self.ttl)).fetchone()[0] >= 20:
@@ -104,7 +105,7 @@ class Store:
                 # Publish the upload and its first job in one transaction. An
                 # insertion failure must not leave an unprocessable document.
                 job = secrets.token_hex(16)
-                db.execute("INSERT INTO jobs(id,document,owner,kind,created,payload) VALUES(?,?,?,'analyze',?,?)", (job, identifier, owner, time.time(), '{"settings": {}}'))
+                db.execute("INSERT INTO jobs(id,document,owner,kind,created,payload) VALUES(?,?,?,'analyze',?,?)", (job, identifier, owner, time.time(), json.dumps({'settings': {}, **(analysis_payload or {})}, ensure_ascii=False)))
                 return job
 
     def enqueue(self, document: str, owner: str, kind: str, payload: dict, revision: int | None = None,
@@ -192,7 +193,7 @@ class Store:
 
     def job(self, identifier: str, owner: str):
         with self.connect() as db:
-            row = db.execute("SELECT jobs.* FROM jobs JOIN documents ON documents.id=jobs.document WHERE jobs.id=? AND jobs.owner=? AND documents.created>?", (identifier, owner, time.time() - self.ttl)).fetchone()
+            row = db.execute("SELECT jobs.* FROM jobs JOIN documents ON documents.id=jobs.document WHERE jobs.id=? AND jobs.owner=? AND documents.owner=? AND documents.created>?", (identifier, owner, owner, time.time() - self.ttl)).fetchone()
         return dict(row) if row else None
 
     def revision_history(self, document: str, owner: str, before: int | None = None, limit: int = 20):
@@ -223,7 +224,7 @@ class Store:
             return "문서 보관 기간이 만료되었습니다."
         try:
             base = json.loads(job["payload"]).get("revision", 0)
-            expected = base + (job["kind"] in {"edit", "studio", "restore"})
+            expected = base + (job["kind"] in {"edit", "studio", "restore", "layout"})
             if document["revision"] != base or (job["kind"] != "analyze" and document["status"] != "ready"):
                 return "문서 버전이 변경되어 작업 결과를 반영하지 않았습니다."
             if not isinstance(result, dict) or type(result.get("revision")) is not int or result["revision"] != expected:
@@ -261,9 +262,9 @@ class Store:
                 db.execute("UPDATE documents SET status='ready', revision=?,error=NULL WHERE id=?", (result["revision"], job["document"]))
                 if job["kind"] == "validate":
                     db.execute("UPDATE documents SET validated=? WHERE id=?", (result["revision"], job["document"]))
-                elif job["kind"] in {"edit", "studio", "restore"}:
+                elif job["kind"] in {"edit", "studio", "restore", "layout"}:
                     db.execute("UPDATE documents SET validated=NULL WHERE id=?", (job["document"],))
-                if job["kind"] in {"analyze", "edit", "studio", "restore"}:
+                if job["kind"] in {"analyze", "edit", "studio", "restore", "layout"}:
                     source = json.loads(job["payload"]).get("source_revision") if job["kind"] == "restore" else None
                     db.execute("INSERT INTO revisions(document,revision,created,kind,source_revision) VALUES(?,?,?,?,?)", (job["document"], result["revision"], time.time(), job["kind"], source))
         return True
@@ -307,6 +308,10 @@ class Store:
     def cleanup(self):
         with self.connect() as db:
             expired = db.execute("SELECT id,owner FROM documents WHERE created<?", (time.time() - self.ttl,)).fetchall()
+            # Keep expired/revoked records until all their possible documents
+            # have expired, so an old credential can never be migrated again.
+            if db.execute("SELECT 1 FROM sqlite_master WHERE name='sessions'").fetchone():
+                db.execute('DELETE FROM sessions WHERE expires<?', (time.time() - self.ttl,))
         for row in expired:
             self.delete(row["id"], row["owner"])
         for path in self.root.glob("trash-*"):

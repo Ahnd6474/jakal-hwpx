@@ -87,9 +87,8 @@ class Worker:
             request_path = directory / f"job-{job['id']}.json"
             result_path = directory / f"result-{job['id']}.json"
             request_path.write_text(json.dumps({"directory": str(directory), "kind": job["kind"], "payload": json.loads(job["payload"]), "name": document["name"]}, ensure_ascii=False), encoding="utf-8")
-            env = os.environ.copy()
-            env["PYTHONPATH"] = str(REPO / "src") + os.pathsep + str(REPO)
-            env["PYTHONIOENCODING"] = "utf-8"
+            from .process_environment import parser_environment
+            env = parser_environment(REPO)
             self.process = subprocess.Popen([sys.executable, "-m", "server.process_job", str(request_path), str(result_path)], cwd=REPO, env=env, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0)
             import psutil
             started = time.monotonic()
@@ -144,9 +143,11 @@ class Worker:
             candidate = payload.get("candidate", "")
             if job["kind"] == "studio" and isinstance(candidate, str) and re.fullmatch(r"studio-[a-f0-9]{32}\.hwpx", candidate):
                 paths.append(directory / candidate)
+            if job['kind'] == 'layout':
+                paths.extend(path for path in directory.glob('layout-*.hwpx*') if re.fullmatch(r'layout-[a-f0-9]{32}\.hwpx(?:\.tmp)?', path.name))
             revision = payload.get("revision", 0)
             if type(revision) is int and revision >= 0:
-                revision += job["kind"] in {"edit", "studio", "restore"}
+                revision += job["kind"] in {"edit", "studio", "restore", "layout"}
                 paths.extend(directory / name for name in (f"snapshot-{revision}.json.tmp", f"snapshot-{revision}.tmp", f"revision-{revision}.hwpx.tmp", f"revision-{revision}.hwp.tmp"))
         except (ValueError, AttributeError):
             pass

@@ -12,7 +12,7 @@ from pathlib import Path
 
 from .errors import WorkspaceError
 from .policies import DEFAULT_SETTINGS, operation_key
-from .schemas import CommandRevisionRequest, EditRequest, RestoreRequest
+from .schemas import CommandRevisionRequest, EditRequest, RestoreRequest, PageLayoutRequest
 from .storage import Store
 
 
@@ -51,6 +51,8 @@ class DocumentService:
     def _submit(self, identifier, owner, kind, body, request_key=None):
         self.owned(identifier, owner)
         payload = body.model_dump(exclude={"settings_version"})
+        if kind == 'layout' and payload.get('background_pages') is None:
+            payload.pop('background_pages', None)
         job = self.store.enqueue(identifier, owner, kind, payload, body.revision,
             request_key=request_key, settings_version=body.settings_version)
         return {"job_id": job, "document_id": identifier, "kind": kind, "base_revision": body.revision}
@@ -63,6 +65,13 @@ class DocumentService:
 
     def validate(self, identifier: str, owner: str, body: CommandRevisionRequest, request_key: str | None = None):
         return self._submit(identifier, owner, "validate", body, request_key)
+
+    def layout(self, identifier: str, owner: str, body: PageLayoutRequest, request_key: str | None = None):
+        if body.background_pages and len(body.background_pages) > 1:
+            raise WorkspaceError('multiple_backgrounds', '현재 문서에는 배경 한 쪽을 선택해 적용해 주세요. 여러 쪽 양식은 새 문서로 만들 수 있습니다.', 422)
+        if self.view(self.owned(identifier, owner))["format"] != 'hwpx':
+            raise WorkspaceError('conversion_required', 'HWPX로 변환한 문서를 다시 열어 주세요.')
+        return self._submit(identifier, owner, 'layout', body, request_key)
 
     def restore(self, identifier: str, owner: str, body: RestoreRequest, request_key: str | None = None):
         document = self.owned(identifier, owner)

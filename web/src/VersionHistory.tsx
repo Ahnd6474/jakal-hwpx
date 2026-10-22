@@ -5,7 +5,7 @@ import { api, type Document, type RevisionPage, type RevisionSnapshot, type Save
 import { compareRevisions } from './revision-comparison';
 
 type Props = { doc: Document; dirty: boolean; onClose: () => void; onRestore: (source: number) => Promise<void> };
-const labels = { analyze: '업로드 원본', edit: '텍스트 수정', studio: '문서 편집', restore: '이전 버전 복원' };
+const labels = { analyze: '업로드 원본', edit: '텍스트 수정', studio: '문서 편집', restore: '이전 버전 복원', layout: '쪽 양식 적용' };
 const date = (value: number) => new Date(value * 1000).toLocaleString('ko-KR', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false });
 
 export function VersionHistory({ doc, dirty, onClose, onRestore }: Props) {

@@ -35,6 +35,10 @@ const DocumentActions = await component('DocumentActions');
 const BackupShelf = await component('BackupShelf');
 const PageEditor = await component('PageEditor');
 const DocumentSyncNotice = await component('DocumentSyncNotice');
+const PageLayoutTemplates = await component('PageLayoutTemplates');
+const ImportPageTemplate = await component('ImportPageTemplate');
+const PrivacyGate = await component('PrivacyGate');
+const PrivacyPanel = await component('PrivacyPanel');
 function fixture(t) {
   const dom = new JSDOM('<button id="previous">Previous</button><div id="root"></div>', { url: 'https://unit.test/' });
   const errors = []; dom.window.addEventListener('error', event => errors.push(event.error));
@@ -50,6 +54,154 @@ function fixture(t) {
 }
 const click = async element => { assert.ok(element); await act(async () => element.click()); };
 const button = name => [...document.querySelectorAll('button')].find(e => e.textContent.includes(name));
+
+test('private workspace hides document UI until session confirmation and closes it on session loss', async t => {
+  const { root, dom } = fixture(t);
+  const oldFetch = globalThis.fetch, oldChannel = globalThis.BroadcastChannel;
+  t.after(() => { globalThis.fetch = oldFetch; globalThis.BroadcastChannel = oldChannel; });
+  globalThis.BroadcastChannel = class { close() {} };
+  let release, requests = 0;
+  globalThis.fetch = () => { requests++; return new Promise(resolve => { release = resolve; }); };
+  await act(async () => root.render(React.createElement(React.StrictMode, null, React.createElement(PrivacyGate, null, React.createElement('p', { id: 'secret' }, 'private contents')))));
+  assert.equal(document.querySelector('#secret'), null); assert.equal(requests, 1);
+  await act(async () => release(new Response(JSON.stringify({ workspace: 'a'.repeat(32) }))));
+  assert.ok(document.querySelector('#secret'));
+  await act(async () => window.dispatchEvent(new dom.window.Event('jakal-session-ended')));
+  assert.equal(document.querySelector('#secret'), null);
+  assert.match(document.querySelector('h1').textContent, /종료/);
+});
+
+test('shared-device exit requires an explicit acknowledgement and shows an unsaved-edit warning', async t => {
+  const { root, dom } = fixture(t);
+  await act(async () => root.render(React.createElement(PrivacyPanel, { dirty: true, onClose() {} })));
+  assert.equal(button('문서 접근 종료·보관 데이터 삭제').disabled, true);
+  assert.match(document.querySelector('.tool-error').textContent, /미저장 편집/);
+  await act(async () => document.querySelector('input[type=checkbox]').dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true })));
+  assert.equal(button('문서 접근 종료·보관 데이터 삭제').disabled, false);
+});
+
+test('JPG collection import submits the displayed order and never changes a document before extraction succeeds', async t => {
+  const { root, dom } = fixture(t);
+  const oldFetch = globalThis.fetch; t.after(() => { globalThis.fetch = oldFetch; });
+  let result, closed = 0, order;
+  globalThis.fetch = async (url, options) => {
+    assert.equal(url, '/api/page-templates/extract');
+    order = options.body.getAll('files').map(file => file.name);
+    return new Response(JSON.stringify({ name: '양식', source: 'images', choices: [], background_pages: [], thumbnails: [], notes: [] }));
+  };
+  await act(async () => root.render(React.createElement(ImportPageTemplate, { onClose: () => closed++, onImport: value => { result = value; } })));
+  const input = document.querySelector('[aria-label="가져올 양식 파일 선택"]');
+  Object.defineProperty(input, 'files', { configurable: true, value: [new File(['a'], '2.jpg'), new File(['b'], '1.jpg')] });
+  await act(async () => input.dispatchEvent(new dom.window.Event('change', { bubbles: true })));
+  assert.equal(result, undefined); assert.equal(closed, 0);
+  await click(document.querySelector('[aria-label="1.jpg 위로"]'));
+  assert.match(document.querySelector('.template-import-files li').textContent, /1.jpg/);
+  await click(button('양식 추출'));
+  assert.deepEqual(order, ['1.jpg', '2.jpg']); assert.equal(result.source, 'images'); assert.equal(closed, 1);
+});
+
+test('failed import preserves selected files and cancellation aborts a pending parser response', async t => {
+  const { root, dom } = fixture(t);
+  const oldFetch = globalThis.fetch; t.after(() => { globalThis.fetch = oldFetch; });
+  let signal, closed = 0;
+  globalThis.fetch = async () => new Response(JSON.stringify({ detail: '손상된 PDF입니다.' }), { status: 422 });
+  await act(async () => root.render(React.createElement(ImportPageTemplate, { onClose: () => closed++, onImport: () => assert.fail('Do not apply rejected input') })));
+  const input = document.querySelector('[aria-label="가져올 양식 파일 선택"]');
+  Object.defineProperty(input, 'files', { configurable: true, value: [new File(['bad'], '원본.pdf')] });
+  await act(async () => input.dispatchEvent(new dom.window.Event('change', { bubbles: true })));
+  await click(button('양식 추출'));
+  assert.match(document.querySelector('[role=alert]').textContent, /손상된 PDF/);
+  assert.match(document.querySelector('.template-import-files').textContent, /원본.pdf/);
+  globalThis.fetch = async (_url, options) => { signal = options.signal; return new Promise((_, reject) => signal.addEventListener('abort', () => reject(signal.reason), { once: true })); };
+  await click(button('양식 추출'));
+  await click(button('가져오기 취소'));
+  assert.equal(signal.aborted, true); assert.equal(closed, 1);
+});
+
+test('page templates apply geometry without body content and save reusable local presets', async t => {
+  const { root, dom } = fixture(t);
+  let applied, closed = 0;
+  await act(async () => root.render(React.createElement(PageLayoutTemplates, { doc: null, dirty: false, busy: false, onClose: () => closed++, onApply: async value => { applied = value; } })));
+  await click(button('2단 · 가운데 구분선'));
+  assert.equal(document.querySelector('[aria-label="단 수"]').value, '2');
+  assert.equal(document.querySelector('input[type=checkbox]').checked, true);
+  assert.equal(document.querySelectorAll('.page-preview-column').length, 2);
+  assert.equal(document.querySelectorAll('.page-preview-divider').length, 1);
+  await click(button('내 양식으로 보관'));
+  const stored = JSON.parse(localStorage.getItem('jakal-page-presets-v1:locked'));
+  assert.equal(stored.length, 1); assert.equal(stored[0].layout.columns, 2);
+  assert.equal('paragraphs' in stored[0].layout, false);
+  const left = document.querySelector('[aria-label="왼쪽 여백"]');
+  await act(async () => { Object.getOwnPropertyDescriptor(dom.window.HTMLInputElement.prototype, 'value').set.call(left, '100'); left.dispatchEvent(new dom.window.Event('input', { bubbles: true })); });
+  const right = document.querySelector('[aria-label="오른쪽 여백"]');
+  await act(async () => { Object.getOwnPropertyDescriptor(dom.window.HTMLInputElement.prototype, 'value').set.call(right, '100'); right.dispatchEvent(new dom.window.Event('input', { bubbles: true })); });
+  assert.equal(button('이 양식으로 새 문서').disabled, true);
+  await click([...document.querySelectorAll('.page-preset-list button')].find(item => item.textContent === '2단 · 가운데 구분선'));
+  await click(button('이 양식으로 새 문서'));
+  assert.equal(applied.create, true); assert.equal(applied.section, null);
+  assert.equal(applied.layout.columns, 2); assert.equal(applied.layout.separator, true);
+  assert.equal(applied.layout.header_text, null); assert.equal(closed, 1);
+});
+
+test('page template scope, header preservation and apply failure keep entered settings', async t => {
+  const { root, dom } = fixture(t);
+  const old = globalThis.fetch; t.after(() => { globalThis.fetch = old; });
+  const { defaultLayout } = await import('../src/page-layout.ts');
+  globalThis.fetch = async url => {
+    assert.equal(url, '/api/documents/doc/page-layout?revision=2');
+    return new Response(JSON.stringify({ revision: 2, sections: [0, 1].map(section => ({ section, layout: { ...defaultLayout, columns: section + 1 }, header_text: '기존 머리말', footer_text: '', column_regions: 1 })) }));
+  };
+  let applied, closed = 0;
+  await act(async () => root.render(React.createElement(PageLayoutTemplates, { doc: { id: 'doc', revision: 2 }, dirty: true, busy: false, onClose: () => closed++, onApply: async value => { applied = value; throw new Error('다른 탭에서 변경했습니다.'); } })));
+  assert.match(document.querySelector('.page-layout-note:last-of-type')?.textContent || document.querySelector('.page-layout-form').textContent, /현재 미저장 편집/);
+  const scope = document.querySelector('[aria-label="쪽 양식 적용 범위"]');
+  await act(async () => { scope.value = '1'; scope.dispatchEvent(new dom.window.Event('change', { bubbles: true })); });
+  assert.equal(document.querySelector('[aria-label="단 수"]').value, '2');
+  await click(button('문서 저장 후 양식 적용'));
+  assert.equal(applied.section, 1); assert.equal(applied.layout.header_text, null);
+  assert.equal(closed, 0); assert.match(document.querySelector('[role=alert]').textContent, /다른 탭/);
+  assert.equal(document.querySelector('[aria-label="단 수"]').value, '2');
+});
+
+test('imported page collection previews and saves all pages but applies only the selected page to an existing document', async t => {
+  const { root, dom } = fixture(t);
+  const oldFetch = globalThis.fetch, oldIDB = Object.getOwnPropertyDescriptor(globalThis, 'indexedDB');
+  const { IDBFactory } = await import('fake-indexeddb');
+  globalThis.indexedDB = new IDBFactory();
+  t.after(() => { globalThis.fetch = oldFetch; if (oldIDB) Object.defineProperty(globalThis, 'indexedDB', oldIDB); else delete globalThis.indexedDB; });
+  const { defaultLayout } = await import('../src/page-layout.ts');
+  const pages = [210, 297].map(width_mm => ({ width_mm, height_mm: width_mm === 210 ? 297 : 210, image: 'data:image/jpeg;base64,YWJjZA==' }));
+  const extraction = { name: '가져온 양식', source: 'images', background_pages: pages, thumbnails: [], notes: ['배경 글자는 개별 편집되지 않습니다.'], choices: pages.map((page, i) => ({ label: `${i + 1}쪽`, layout: { ...defaultLayout, width_mm: page.width_mm, height_mm: page.height_mm }, notes: [] })) };
+  globalThis.fetch = async url => new Response(JSON.stringify(url === '/api/page-templates/extract' ? extraction : { sections: [{ section: 0, layout: defaultLayout, column_regions: 1, header_text: '', footer_text: '' }] }));
+  let applied;
+  await act(async () => root.render(React.createElement(PageLayoutTemplates, { doc: { id: 'doc', revision: 0 }, dirty: false, busy: false, onClose() {}, onApply: async value => { applied = value; } })));
+  await click(button('양식 파일 가져오기'));
+  await settleUntil(() => !!document.querySelector('[aria-label="가져올 양식 파일 선택"]'));
+  const input = document.querySelector('[aria-label="가져올 양식 파일 선택"]');
+  Object.defineProperty(input, 'files', { configurable: true, value: [new File(['a'], '1.jpg'), new File(['b'], '2.jpg')] });
+  await act(async () => input.dispatchEvent(new dom.window.Event('change', { bubbles: true })));
+  await click(button('양식 추출'));
+  assert.equal(document.querySelector('[aria-label="쪽 양식 적용 대상"]').value, 'new');
+  assert.equal(document.querySelector('[value=current]').disabled, true);
+  assert.equal(document.querySelectorAll('.imported-page-thumbnails img').length, 2);
+  assert.equal(document.querySelector('.page-preview-image').src, pages[0].image);
+  assert.equal(document.querySelector('[aria-label="용지 너비"]').disabled, true);
+  assert.equal(applied, undefined);
+  await click(button('내 양식으로 보관'));
+  await settleUntil(() => document.querySelector('.page-preset-list').textContent.includes('가져온 양식'));
+  assert.match(document.querySelector('.page-preset-list').textContent, /가져온 양식/);
+  const { pageTemplateAssets } = await import('../src/page-template-assets.ts');
+  const saved = await pageTemplateAssets.list();
+  assert.equal(saved[0].page_count, 2);
+  const choice = document.querySelector('[aria-label="가져온 양식 구역·쪽 선택"]');
+  await act(async () => { choice.value = '1'; choice.dispatchEvent(new dom.window.Event('change', { bubbles: true })); });
+  const target = document.querySelector('[aria-label="쪽 양식 적용 대상"]');
+  assert.equal(document.querySelector('[value=current]').disabled, false);
+  await act(async () => { target.value = 'current'; target.dispatchEvent(new dom.window.Event('change', { bubbles: true })); });
+  await click(button('현재 문서에 적용'));
+  assert.equal(applied.create, false); assert.deepEqual(applied.background_pages, [pages[1]]);
+  assert.equal(applied.layout.width_mm, 297);
+});
 
 test('general editing tools respect context, pin commands and close with Escape', async t => {
   const { root, dom } = fixture(t);

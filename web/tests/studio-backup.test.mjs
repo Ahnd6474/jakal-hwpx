@@ -4,7 +4,7 @@ import { indexedDB } from 'fake-indexeddb';
 import { studioBackup } from '../src/studio-backup.ts';
 
 globalThis.indexedDB = indexedDB;
-const name = 'jakal-document-editor';
+const name = 'jakal-document-editor:locked';
 afterEach(() => new Promise((resolve, reject) => { const request = indexedDB.deleteDatabase(name); request.onsuccess = resolve; request.onerror = () => reject(request.error); }));
 
 test('draft metadata and bytes commit together, list newest first and clear together', async () => {

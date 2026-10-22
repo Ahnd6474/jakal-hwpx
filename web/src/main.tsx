@@ -23,6 +23,9 @@ import { requestBytes } from './request';
 import { documentCommands } from './document-commands';
 import { DocumentSyncNotice } from './DocumentSyncNotice';
 import { studioBackup } from './studio-backup';
+import type { LayoutApplication } from './PageLayoutTemplates';
+import { PrivacyGate } from './PrivacyGate';
+const PrivacyPanel = React.lazy(() => import('./PrivacyPanel').then(module => ({ default: module.PrivacyPanel })));
 const NewDocument = React.lazy(() => import('./NewDocument').then(module => ({ default: module.NewDocument })));
 const AdvancedSettings = React.lazy(() => import('./AdvancedSettings').then(module => ({ default: module.AdvancedSettings })));
 const DocumentReader = React.lazy(() => import('./DocumentReader').then(module => ({ default: module.DocumentReader })));
@@ -30,6 +33,7 @@ const VersionHistory = React.lazy(() => import('./VersionHistory').then(module =
 const ChangeReview = React.lazy(() => import('./ChangeReview').then(module => ({ default: module.ChangeReview })));
 const DocumentActions = React.lazy(() => import('./DocumentActions').then(module => ({ default: module.DocumentActions })));
 const BackupShelf = React.lazy(() => import('./BackupShelf').then(module => ({ default: module.BackupShelf })));
+const PageLayoutTemplates = React.lazy(() => import('./PageLayoutTemplates').then(module => ({ default: module.PageLayoutTemplates })));
 
 function App() {
   const [documents, setDocuments] = useState<DocumentSummary[]>([]);
@@ -49,12 +53,16 @@ function App() {
   const [dragging, setDragging] = useState(false);
   const [reportOpen, setReportOpen] = useState(false);
   const [helpOpen, setHelpOpen] = useState(false);
+  const [privacyOpen, setPrivacyOpen] = useState(false);
+  const closePrivacy = useCallback(() => setPrivacyOpen(false), []);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [advancedOpen, setAdvancedOpen] = useState(false);
   const [infoOpen, setInfoOpen] = useState(false);
   const [reviewOpen, setReviewOpen] = useState(false);
   const [versionsOpen, setVersionsOpen] = useState(false);
   const [newDocumentOpen, setNewDocumentOpen] = useState(false);
+  const [pageLayoutOpen, setPageLayoutOpen] = useState(false);
+  const closePageLayout = useCallback(() => setPageLayoutOpen(false), []);
   const [fileAction, setFileAction] = useState<'rename' | 'copy' | null>(null);
   const closeFileAction = useCallback(() => setFileAction(null), []);
   const [backupShelf, setBackupShelf] = useState(false);
@@ -212,6 +220,28 @@ function App() {
       setDoc(fresh); setEditorEpoch(n => n + 1); dispatch({ type: 'reset' }); await refreshList();
       return fresh;
   }
+  async function applyPageLayout(value: LayoutApplication) {
+    if (taskRunning.current) throw new Error('진행 중인 작업이 끝난 뒤 다시 시도해 주세요.');
+    taskRunning.current = true; setBusy('쪽 양식을 준비하고 있습니다'); setError('');
+    try {
+      let source = doc;
+      if (source && dirty) source = studioDirty ? await saveStudioRevision(source) : await saveRevision(source, Object.values(history.present));
+      let fresh: Document;
+      if (value.create) {
+        const created = await post<{ document_id: string; job_id: string }>('/documents/from-page-layout', { title: value.title, layout: value.layout, ...(value.background_pages !== undefined ? { background_pages: value.background_pages } : {}) });
+        await waitForJob(created.job_id, () => setBusy('쪽 양식으로 빈 문서를 준비하고 검사하고 있습니다'));
+        fresh = await api<Document>(`/documents/${created.document_id}`);
+      } else {
+        if (!source) throw new Error('쪽 양식을 적용할 문서를 먼저 열어 주세요.');
+        fresh = await documentCommands.execute(source, { kind: 'layout', section: value.section, layout: value.layout, ...(value.background_pages !== undefined ? { background_pages: value.background_pages } : {}) }, {
+          onStage: () => setBusy('쪽 양식을 적용하고 본문·표·그림 보존을 검사하고 있습니다'),
+          onReconnect: () => setBusy('연결을 다시 확인하고 기존 쪽 양식 작업을 찾고 있습니다'),
+        });
+      }
+      await load(fresh.id);
+      setNotice('쪽 양식을 적용했습니다. 단 나누기와 머리말·꼬리말을 확인하세요. 이전 버전은 기록에 보관했습니다.');
+    } finally { taskRunning.current = false; setBusy(''); }
+  }
   async function checkRevision(current: Document) {
       setBusy('문서 검증을 시작하고 있습니다');
       const fresh = await documentCommands.execute(current, { kind: 'validate' }, {
@@ -313,6 +343,7 @@ function App() {
     await task('문서를 삭제하고 있습니다', async () => {
       await api(`/documents/${item.id}`, { method: 'DELETE' });
       clearDraftBackup(item.id);
+      await studioBackup.clear(item.id);
       if (doc?.id === item.id) { setDoc(null); dispatch({ type: 'reset' }); lastDocument.write(null); }
       await refreshList(); setNotice('문서와 저장된 파일을 삭제했습니다.');
     });
@@ -475,10 +506,11 @@ function App() {
       <button className="brand" disabled={disabled} onClick={openHome} aria-label="Jakal 내 문서"><span className="brand-mark">j</span><strong>jakal</strong><span className="brand-caption">문서 도구</span></button>
       <button className="new-button" disabled={disabled} onClick={() => inputRef.current?.click()}><Plus size={17} />파일 열기</button>
       <button className="nav-item" disabled={disabled} onClick={() => { setError(''); setNewDocumentOpen(true); }}><FileText size={17} />새 문서 만들기</button>
+      <button className="nav-item" disabled={disabled} onClick={() => setPageLayoutOpen(true)}><LayoutPanelLeft size={17} />쪽 양식·템플릿</button>
       <nav aria-label="문서 탐색"><button className={`nav-item ${!doc ? 'active' : ''}`} disabled={disabled} onClick={openHome}><LayoutPanelLeft size={17} />내 문서</button></nav>
       <div className="nav-heading recent-heading">최근에 연 문서<span>{documents.length}</span></div>
       <div className="document-list">{documents.length ? documents.map(item => <div key={item.id} className={`document-item ${doc?.id === item.id ? 'active' : ''}`}><button disabled={disabled} title={item.name} onClick={() => { if (mayLeave()) void task('문서를 여는 중', () => load(item.id)); }}><FileText size={16} /><span><b>{item.name}</b><small>{item.status === 'failed' ? '분석 실패' : item.status === 'processing' ? '분석 중' : `버전 ${item.revision + 1}`}</small></span></button><button className="delete-button" disabled={disabled} aria-label={`${item.name} 삭제`} onClick={() => void deleteDocument(item)}><Trash2 size={14} /></button></div>) : <p className="no-documents">최근 문서가 없습니다.</p>}</div>
-      <div className="sidebar-bottom"><button disabled={disabled} onClick={() => setBackupShelf(true)}><RotateCcw size={17} />임시 편집 보관함</button><button onClick={() => setHelpOpen(true)}><HelpCircle size={17} />도움말</button><div className="session-note"><LockKeyhole size={13} /><span>이 브라우저에 연결된 문서<br />업로드 후 24시간 보관</span></div></div>
+      <div className="sidebar-bottom"><button disabled={disabled} onClick={() => setBackupShelf(true)}><RotateCcw size={17} />임시 편집 보관함</button><button disabled={disabled} onClick={() => setPrivacyOpen(true)}><ShieldCheck size={17} />보안·사용 종료</button><button onClick={() => setHelpOpen(true)}><HelpCircle size={17} />도움말</button><div className="session-note"><LockKeyhole size={13} /><span>이 브라우저에 연결된 문서<br />업로드 후 24시간 보관</span></div></div>
     </aside>
     {sidebarOpen && <button className="sidebar-scrim" aria-label="메뉴 닫기" onClick={() => setSidebarOpen(false)} />}
     <main className="main" id="main-content" tabIndex={-1}>
@@ -501,7 +533,7 @@ function App() {
         <div className="library-footer"><span><Clock3 size={14} />문서는 업로드 후 24시간이 지나면 삭제됩니다.</span><div className="sample-links"><button className="text-button" disabled={disabled} onClick={() => void sample('hwp')}>HWP 예제<ArrowRight size={14} /></button><button className="text-button" disabled={disabled} onClick={() => void sample()}>HWPX 예제<ArrowRight size={14} /></button></div></div>
         <section className="library-guide"><h2>처음 사용하시나요?</h2><p>파일을 열면 원문 서식으로 편집기가 표시됩니다.<br />문서 위를 클릭해 수정하거나 상단 메뉴에서 글자·문단·표·쪽 설정을 바꾸세요. 하단 작업 도구(Ctrl+Shift+K)에서 찾기·바꾸기·서식·표·쪽 설정을 검색하고 실행할 수 있습니다.<br /><b>검증하기</b>로 저장 결과를 확인하면 수정본을 다운로드할 수 있습니다.</p><button className="text-button" onClick={() => setHelpOpen(true)}>사용 안내<ArrowRight size={14} /></button></section>
       </div> : <>
-        <section className="document-header"><button className="icon-button document-menu-toggle" aria-label="문서 목록 열기" title="문서 목록 열기" onClick={() => setSidebarOpen(true)}><LayoutPanelLeft size={19} /></button><div className="file-heading"><FileText size={24} strokeWidth={1.4} /><div><h1 title={doc.name}><button className="file-name-trigger" disabled={disabled} aria-label="문서 이름 변경" title="문서 이름 변경" onClick={() => setFileAction('rename')}>{doc.name}</button></h1><p>{doc.conversion ? 'HWP → HWPX' : doc.format.toUpperCase()}<span>·</span>버전 {doc.revision + 1}<span>·</span><span className={dirty ? 'unsaved-label' : ''}>{studioDirty ? '편집 중 · 저장 전' : dirty ? `${dirty}개 변경 · 저장 전` : '저장됨'}</span></p></div></div><WorkspaceMenu view={tab} disabled={disabled} dirty={dirty} studioDirty={studioDirty} tableCount={tableCount} onView={next => { changeView(next); if (next === 'tables') setTableEditing(false); }} onValidate={() => void validate()} onInfo={() => setInfoOpen(!infoOpen)} onSettings={() => setAdvancedOpen(true)} onHelp={() => setHelpOpen(true)} onReview={() => setReviewOpen(true)} onHistory={() => setVersionsOpen(true)} onFiles={() => setFileAction('rename')} /><div className="document-actions"><button className="outline-button header-save" disabled={disabled || !dirty} onClick={() => void save()} title="수정 저장 (Ctrl S)"><Save size={15} />수정 저장</button><button className="primary-button" disabled={disabled} onClick={() => void download()} aria-label={dirty ? '저장·검증 후 다운로드' : saved ? '다운로드' : '검증 후 다운로드'} title="필요한 수정 저장과 현재 버전 검증을 마친 뒤 다운로드합니다"><ArrowDownToLine size={16} /><span className="download-label">{dirty ? '저장·검증 후 다운로드' : saved ? '다운로드' : '검증 후 다운로드'}</span><span className="download-label-short">{dirty ? '저장 후 받기' : saved ? '다운로드' : '검증 후 받기'}</span></button></div></section>
+        <section className="document-header"><button className="icon-button document-menu-toggle" aria-label="문서 목록 열기" title="문서 목록 열기" onClick={() => setSidebarOpen(true)}><LayoutPanelLeft size={19} /></button><div className="file-heading"><FileText size={24} strokeWidth={1.4} /><div><h1 title={doc.name}><button className="file-name-trigger" disabled={disabled} aria-label="문서 이름 변경" title="문서 이름 변경" onClick={() => setFileAction('rename')}>{doc.name}</button></h1><p>{doc.conversion ? 'HWP → HWPX' : doc.format.toUpperCase()}<span>·</span>버전 {doc.revision + 1}<span>·</span><span className={dirty ? 'unsaved-label' : ''}>{studioDirty ? '편집 중 · 저장 전' : dirty ? `${dirty}개 변경 · 저장 전` : '저장됨'}</span></p></div></div><WorkspaceMenu view={tab} disabled={disabled} dirty={dirty} studioDirty={studioDirty} tableCount={tableCount} onView={next => { changeView(next); if (next === 'tables') setTableEditing(false); }} onValidate={() => void validate()} onInfo={() => setInfoOpen(!infoOpen)} onSettings={() => setAdvancedOpen(true)} onHelp={() => setHelpOpen(true)} onReview={() => setReviewOpen(true)} onHistory={() => setVersionsOpen(true)} onFiles={() => setFileAction('rename')} onPageLayout={() => setPageLayoutOpen(true)} /><div className="document-actions"><button className="outline-button header-save" disabled={disabled || !dirty} onClick={() => void save()} title="수정 저장 (Ctrl S)"><Save size={15} />수정 저장</button><button className="primary-button" disabled={disabled} onClick={() => void download()} aria-label={dirty ? '저장·검증 후 다운로드' : saved ? '다운로드' : '검증 후 다운로드'} title="필요한 수정 저장과 현재 버전 검증을 마친 뒤 다운로드합니다"><ArrowDownToLine size={16} /><span className="download-label">{dirty ? '저장·검증 후 다운로드' : saved ? '다운로드' : '검증 후 다운로드'}</span><span className="download-label-short">{dirty ? '저장 후 받기' : saved ? '다운로드' : '검증 후 받기'}</span></button></div></section>
         <div className={`editor-layout ${!infoOpen ? 'wide-layout' : ''}`}><section className="editor">
           <PageEditor key={`editor-${doc.id}-${editorEpoch}`} ref={pageEditor} doc={doc} active={tab === 'studio'} disabled={disabled || versionsOpen} onDirty={setStudioDirty} onSave={onPageSave} onFileAction={onHostFileAction} />{(readerOpened || tab === 'original' || tab === 'figures' || tab === 'tables') && <ToolBoundary onClose={() => { setReaderOpened(false); setTab('studio'); }}><React.Suspense fallback={<div role="status">원문 보기 도구를 불러오고 있습니다.</div>}><DocumentReader key={doc.id} doc={doc} active={tab === 'original' || tab === 'figures' || (tab === 'tables' && !tableEditing)} mode={tab === 'figures' ? 'figures' : tab === 'tables' ? 'tables' : 'original'} dirty={dirty} onMode={setTab} onEdit={() => setTab('paragraphs')} onEditTable={() => setTableEditing(true)} toolsCollapsed={toolsCollapsed} onToggleTools={toggleReaderTools} onReadingScroll={() => { if (!toolsPinned) setToolsCollapsed(true); }} /></React.Suspense></ToolBoundary>}
           {(tab === 'paragraphs' || (tab === 'tables' && tableEditing)) && <>
@@ -519,14 +551,16 @@ function App() {
     </main>
     {advancedOpen && doc && <ToolBoundary onClose={() => setAdvancedOpen(false)}><React.Suspense fallback={<div className="workbench-loading" role="status">도구를 불러오고 있습니다.</div>}><AdvancedSettings doc={doc} drafts={history.present} onClose={() => setAdvancedOpen(false)} onApply={applyProposals} onSettings={setDoc} /></React.Suspense></ToolBoundary>}
     {newDocumentOpen && <ToolBoundary onClose={closeNewDocument}><React.Suspense fallback={<div className="workbench-loading" role="status">문서 양식을 열고 있습니다.</div>}><NewDocument busy={disabled} error={error} onClose={closeNewDocument} onCreate={value => void createDocument(value)} /></React.Suspense></ToolBoundary>}
+    {pageLayoutOpen && <ToolBoundary onClose={closePageLayout}><React.Suspense fallback={<div className="workbench-loading" role="status">쪽 양식 도구를 열고 있습니다.</div>}><PageLayoutTemplates doc={doc} dirty={!!dirty} busy={disabled} onClose={closePageLayout} onApply={applyPageLayout} /></React.Suspense></ToolBoundary>}
     {reviewOpen && doc && <ToolBoundary onClose={closeReview}><React.Suspense fallback={<div className="workbench-loading" role="status">도구를 불러오고 있습니다.</div>}><ChangeReview doc={doc} drafts={history.present} onClose={closeReview} onRevert={revertChanges} onGo={goToChange} /></React.Suspense></ToolBoundary>}
     {versionsOpen && doc && <ToolBoundary onClose={closeVersions}><React.Suspense fallback={<div className="workbench-loading" role="status">도구를 불러오고 있습니다.</div>}><VersionHistory doc={doc} dirty={!!dirty} onClose={closeVersions} onRestore={restoreVersion} /></React.Suspense></ToolBoundary>}
     {backupShelf && <ToolBoundary onClose={closeBackupShelf}><React.Suspense fallback={<div className="workbench-loading" role="status">임시보관함을 열고 있습니다.</div>}><BackupShelf activeId={doc?.id} names={Object.fromEntries(documents.map(item => [item.id, item.name]))} onOpen={recoverBackup} onClose={closeBackupShelf} /></React.Suspense></ToolBoundary>}
     {fileAction && doc && <ToolBoundary onClose={closeFileAction}><React.Suspense fallback={<div className="workbench-loading" role="status">파일 작업을 열고 있습니다.</div>}><DocumentActions doc={doc} initialMode={fileAction} dirty={!!dirty} onClose={closeFileAction} onSubmit={manageDocument} /></React.Suspense></ToolBoundary>}
     {dragging && <div className="drop-overlay" onDragLeave={() => setDragging(false)}><ArrowUpFromLine size={32} strokeWidth={1.4} /><h2>파일을 놓아 열기</h2><p>HWP · HWPX · 최대 20MB</p></div>}
     {reportOpen && doc && <div className="modal-backdrop" onClick={() => setReportOpen(false)}><section className="modal report-modal" role="dialog" aria-modal="true" aria-labelledby="report-title" onClick={e => e.stopPropagation()}><div className="modal-heading"><div><h2 id="report-title">검증 결과</h2><p>버전 {doc.revision + 1} · {saved ? '검증 완료' : '자동 검사 결과'}</p></div><button className="icon-button" aria-label="검증 결과 닫기" onClick={() => setReportOpen(false)}><X size={20} /></button></div><div className={`report-summary ${doc.report.issues.length ? 'warning' : ''}`}><FileCheck2 size={23} /><div><h3>{doc.report.issues.length ? '원본의 기존 오류가 남아 있습니다' : '새로 발생한 오류가 없습니다'}</h3><p>{saved ? '현재 버전을 다운로드할 수 있습니다.' : '다운로드하려면 검증하기를 실행하세요.'}</p></div></div><div className="check-list">{doc.report.checks.map(check => <div key={check}><CircleCheck size={16} /><span>{check}</span><b>완료</b></div>)}</div><p className="report-explanation">이 검사는 문서 구조를 확인합니다. 인쇄 배치는 한글 프로그램에서 확인하세요.</p>{doc.report.issues.length > 0 && <div className="issue-list"><h3>원본의 기존 오류 {doc.report.issues.length}개</h3>{doc.report.issues.map((issue, i) => <div key={i}><b>{issue.code || issue.kind}</b><p>{issue.message}</p><small>{issue.location}</small></div>)}</div>}{doc.report.repairs.length > 0 && <p className="repair-note">오래된 줄 배치 정보 {doc.report.repairs.length}건을 정리했습니다.</p>}<div className="modal-actions"><a className="outline-button" href={`/api/documents/${doc.id}/report`} download><ArrowDownToLine size={15} />검사 기록 JSON</a><button className="primary-button" onClick={() => setReportOpen(false)}>확인</button></div></section></div>}
+    {privacyOpen && <ToolBoundary onClose={closePrivacy}><React.Suspense fallback={<div className="workbench-loading" role="status">보안 설정을 열고 있습니다.</div>}><PrivacyPanel dirty={!!dirty} onClose={closePrivacy} /></React.Suspense></ToolBoundary>}
     {helpOpen && <div className="modal-backdrop" onClick={() => setHelpOpen(false)}><section className="modal help-modal" role="dialog" aria-modal="true" aria-labelledby="help-title" onClick={e => e.stopPropagation()}><div className="modal-heading"><h2 id="help-title">사용 안내</h2><button className="icon-button" aria-label="사용 안내 닫기" onClick={() => setHelpOpen(false)}><X size={20} /></button></div><ol className="guide-steps"><li><b>문서 시작하기</b><p>내 문서의 새 문서에서 빈 문서·보고서·회의록·표 문서를 만들 수 있습니다. HWP 5 또는 HWPX 파일을 선택하거나 화면으로 끌어 놓으세요. 최대 20MB까지 지원합니다.</p></li><li><b>내용 수정 및 저장</b><p>문서 편집에서 원문 위를 클릭해 입력하고 글자·문단·표·그림·쪽 도구를 사용하세요. 서식 도구를 접거나 전체 화면을 켜면 문서를 더 넓게 볼 수 있습니다. 문서 목록은 왼쪽 위 버튼으로 엽니다. 텍스트 편집은 본문 이어 보기가 기본입니다. 문단 목록에서 번호별로 확인할 수도 있습니다. 내용을 바꾼 뒤 수정 저장(Ctrl/Cmd S)을 누르세요. 수정 내용에서 전후를 비교하거나 항목별로 되돌릴 수 있습니다. 미저장 텍스트 편집은 이 탭에, 원문 편집 임시본은 이 브라우저에 보관합니다. 같은 문서 버전을 다시 열면 복원할 수 있습니다. 임시보관은 파일 다운로드를 대신하지 않습니다. 그래프·그림 탭에서는 삽입된 개체를 따로 볼 수 있습니다. 복합 개체가 있는 문단과 셀은 읽기 전용입니다.</p></li><li><b>검증 및 다운로드</b><p>저장·검증 후 다운로드로 한 번에 완료하거나, 수정 저장과 검증을 각각 실행할 수 있습니다. 검증에 실패하면 다운로드를 중단합니다.</p></li><li><b>이전 버전 비교 및 복원</b><p>보기 및 도구의 버전 기록에서 저장한 내용을 비교하고 검색할 수 있습니다. 문서 이름을 클릭하거나 보기 및 도구의 이름 변경·복사에서 파일 이름을 바꾸고 독립된 복사본을 만들 수 있습니다. 작업 도구의 검토·출력에서 인쇄·PDF 저장을 열 수 있습니다. PDF는 브라우저 인쇄 창에서 PDF로 저장을 선택하세요. 이전 버전을 복원하면 현재 내용과 기록을 유지하면서 새 버전으로 저장합니다. 미저장 편집을 먼저 저장하고, 복원한 버전은 검증 후 다운로드하세요.</p></li></ol><p className="help-note">파일은 업로드 시 이 사이트의 서버로 전송됩니다. 서버의 원본·수정본·작업 메모는 업로드 후 24시간 동안 보관하며, 내 문서에서 삭제할 수 있습니다. 접근 권한은 이 브라우저의 세션 쿠키로 구분합니다. 브라우저에 저장된 원문 편집 임시본은 서버 보관 기간과 별개로 남을 수 있습니다. 문서 목록 메뉴의 임시 편집 보관함에서 내려받거나 새 문서로 복구·삭제할 수 있습니다. 공용 기기에서는 작업 후 다운로드하고 사이트 데이터를 지워 주세요. AI 수정이나 외부 AI 서비스 전송은 사용하지 않습니다.</p><button className="primary-button" onClick={() => setHelpOpen(false)}>확인</button></section></div>}
   </div>;
 }
 
-createRoot(document.getElementById('root')!).render(<React.StrictMode><ApplicationBoundary><App /></ApplicationBoundary></React.StrictMode>);
+createRoot(document.getElementById('root')!).render(<React.StrictMode><ApplicationBoundary><PrivacyGate><App /></PrivacyGate></ApplicationBoundary></React.StrictMode>);

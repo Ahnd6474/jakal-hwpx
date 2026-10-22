@@ -1,9 +1,11 @@
 import type { Document, Job, Operation } from './api';
+import type { PageLayout, BackgroundPage } from './page-layout';
 import { ApiError, isConnectionFailure, requestJson, type RequestOptions } from './request.ts';
 
 type Base = Pick<Document, 'id' | 'revision' | 'settings_version'>;
 type Command = { kind: 'edit'; operations: Operation[] } | { kind: 'validate' }
-  | { kind: 'restore'; source_revision: number } | { kind: 'studio'; bytes: Uint8Array };
+  | { kind: 'restore'; source_revision: number } | { kind: 'studio'; bytes: Uint8Array }
+  | { kind: 'layout'; section: number | null; layout: PageLayout; background_pages?: BackgroundPage[] };
 type Accepted = { job_id: string; document_id: string; kind: string; base_revision: number };
 type Progress = { signal?: AbortSignal; onStage?: (job: Job) => void; onReconnect?: () => void };
 type Json = <T>(url: string, options?: RequestOptions) => Promise<T>;
@@ -43,6 +45,7 @@ export class DocumentCommands {
     const { kind } = command;
     const payload = { revision: base.revision, settings_version: base.settings_version,
       ...(kind === 'edit' ? { operations: command.operations } : {}),
+      ...(kind === 'layout' ? { layout: command.layout, section: command.section, ...(command.background_pages !== undefined ? { background_pages: command.background_pages } : {}) } : {}),
       ...(kind === 'restore' ? { source_revision: command.source_revision } : {}) };
     const serialized = JSON.stringify(payload);
     const bytes = kind === 'studio' ? new Uint8Array(command.bytes) : new TextEncoder().encode(serialized);
@@ -54,7 +57,7 @@ export class DocumentCommands {
       if (this.pending.size >= 64) this.pending.delete(this.pending.keys().next().value!);
       this.pending.set(intent, key);
     }
-    const paths = { edit: 'operations', validate: 'validations', restore: 'restorations', studio: 'studio' };
+    const paths = { edit: 'operations', validate: 'validations', restore: 'restorations', studio: 'studio', layout: 'page-layout' };
     let path = `/api/documents/${base.id}/${paths[kind]}`;
     let body: BodyInit = serialized;
     const headers: Record<string, string> = { 'Idempotency-Key': key };
@@ -71,7 +74,7 @@ export class DocumentCommands {
           accepted = await this.json<Accepted>(path, { method: 'POST', headers, body, signal: progress.signal });
           break;
         } catch (error) {
-          // Only these four endpoints guarantee idempotency. Generic requests,
+          // Only these five endpoints guarantee idempotency. Generic requests,
           // uploads and document copies are deliberately never retried here.
           if (attempt || !isConnectionFailure(error) || progress.signal?.aborted) throw error;
           progress.onReconnect?.();

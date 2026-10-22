@@ -44,12 +44,16 @@ def test_unexpected_error_hides_internal_details_and_keeps_security_headers(site
 
 def test_secure_cookie_follows_https_and_http_remains_usable(tmp_path, monkeypatch):
     monkeypatch.delenv('JAKAL_COOKIE_SECURE', raising=False)
+    monkeypatch.setenv('JAKAL_PUBLIC_ORIGIN', 'https://site.test')
     app = create_app(tmp_path / 'data', run_worker=False)
     with TestClient(app, base_url='https://site.test') as client:
-        cookie = client.get('/api/health').headers['Set-Cookie']
+        cookie = client.get('/api/session').headers['Set-Cookie']
         assert 'Secure' in cookie and 'HttpOnly' in cookie and 'SameSite=strict' in cookie
+        assert cookie.startswith('__Host-jakal_session=') and 'Domain=' not in cookie
+    monkeypatch.delenv('JAKAL_PUBLIC_ORIGIN')
+    app = create_app(tmp_path / 'data', run_worker=False)
     with TestClient(app, base_url='http://127.0.0.1') as client:
-        assert 'Secure' not in client.get('/api/health').headers['Set-Cookie']
+        assert 'Secure' not in client.get('/api/session').headers['Set-Cookie']
         assert client.get('/api/documents').status_code == 200
 
 

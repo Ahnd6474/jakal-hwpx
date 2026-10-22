@@ -188,6 +188,15 @@ def structure_signature(document: HwpxDocument, *, include_binaries: bool = True
 
 
 def process(directory: Path, kind: str, payload: dict, name: str) -> dict:
+    if kind == 'analyze' and payload.get('page_template'):
+        from .schemas import PageLayoutDocumentRequest
+        from .page_background import make_background_document
+        request = PageLayoutDocumentRequest.model_validate(payload['page_template'])
+        generated = make_background_document(request.layout, request.background_pages or [])
+        atomic_write(directory / 'revision-0.hwpx', generated.compile(validate=False, auto_repair=False))
+    if kind == 'layout':
+        from .page_layout import process_layout
+        return process_layout(directory, payload, name)
     if kind == "restore":
         from .revisions import process_restore
         return process_restore(directory, payload, name)
