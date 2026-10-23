@@ -14,12 +14,16 @@ from server.runtime import REPO, server_options
 
 
 class DeploymentClient:
+    secure_cookie = True
+    connection_factory = staticmethod(lambda: http.client.HTTPConnection(
+        '127.0.0.1', server_options()['port'], timeout=10))
+
     def __init__(self):
         origin = urlsplit(os.environ['JAKAL_PUBLIC_ORIGIN'])
         self.headers = {'Host': origin.netloc, 'X-Forwarded-Proto': 'https'}
 
     def request(self, method, path, body=None, headers=None):
-        connection = http.client.HTTPConnection('127.0.0.1', server_options()['port'], timeout=10)
+        connection = self.connection_factory()
         try:
             connection.request(method, path, body=body, headers=self.headers | (headers or {}))
             response = connection.getresponse()
@@ -59,13 +63,13 @@ class DeploymentClient:
         assert status == 200
         cookie = SimpleCookie()
         cookie.load(headers['set-cookie'])
-        value = cookie['__Host-jakal_session']
-        assert value['secure'] and value['httponly'] and value['samesite'] == 'strict'
+        value = cookie['__Host-jakal_session' if self.secure_cookie else 'jakal_session']
+        assert bool(value['secure']) == self.secure_cookie and value['httponly'] and value['samesite'] == 'strict'
         self.headers['Cookie'] = f'{value.key}={value.value}'
         self.headers['X-Jakal-Workspace'] = json.loads(raw)['workspace']
 
 
-def check_deployment():
+def check_deployment(*, via_gateway=False, desktop=False):
     # The loopback transport models the proxy's HTTP hop; public HTTPS is
     # terminated by Caddy. No request targets an external host.
     client = DeploymentClient()
@@ -73,8 +77,13 @@ def check_deployment():
     assert status == 200 and 'set-cookie' not in headers
     for path in ['/', '/studio/index.html']:
         assert client.request('GET', path)[0] == 200, path
-    assert client.request('GET', '/api/health', headers={'Host': 'other.invalid'})[0] == 400
-    assert client.request('GET', '/api/health', headers={'X-Forwarded-Proto': 'http'})[0] == 400
+    rejected, blocked_headers, blocked_body = client.request('GET', '/api/health', headers={'Host': 'other.invalid'})
+    if via_gateway:
+        assert 'set-cookie' not in blocked_headers and b'"status":"ok"' not in blocked_body
+    else:
+        assert rejected == 400
+    forwarded_status = client.request('GET', '/api/health', headers={'X-Forwarded-Proto': 'http'})[0]
+    assert forwarded_status == (200 if via_gateway or desktop else 400)
     client.begin()
     assert client.request('GET', '/api/documents', headers={'Origin': 'https://other.invalid'})[0] == 403
     assert client.request('GET', '/api/documents', headers={'X-Jakal-Workspace': '0' * 32})[0] == 401
@@ -105,7 +114,7 @@ def check_deployment():
         stranger.json('DELETE', '/api/session')
     client.json('DELETE', '/api/session')
     assert client.request('GET', '/api/documents')[0] == 401
-    print('Production HWP/HWPX upload, edit, validate, download and session isolation passed.')
+    print(('Desktop' if desktop else 'Production') + ' HWP/HWPX upload, edit, validate, download and session isolation passed.')
 
 
 if __name__ == '__main__':

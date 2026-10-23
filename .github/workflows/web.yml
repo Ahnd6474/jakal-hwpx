@@ -36,6 +36,11 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Check container build context
+        run: python scripts/check_container_context.py
       - name: Validate HTTPS gateway
         run: >-
           docker run --rm --network none
@@ -45,27 +50,4 @@ jobs:
       - name: Build complete application image
         run: docker build -t jakal-workspace:test .
       - name: Verify isolated production container
-        shell: bash
-        run: |
-          set -euo pipefail
-          trap 'docker rm -f jakal-container-check >/dev/null 2>&1 || true; docker volume rm jakal-container-check-data >/dev/null 2>&1 || true' EXIT
-          docker volume create jakal-container-check-data
-          docker run -d --name jakal-container-check --network none --read-only \
-            --cap-drop ALL --security-opt no-new-privileges:true \
-            --tmpfs /tmp:rw,noexec,nosuid,size=268435456,uid=10001,gid=10001,mode=1770 \
-            --mount type=volume,source=jakal-container-check-data,target=/var/lib/jakal \
-            -e JAKAL_PUBLIC_ORIGIN=https://deployment.invalid \
-            -e JAKAL_TRUSTED_PROXIES=127.0.0.1 jakal-workspace:test
-          ready=false
-          for attempt in $(seq 1 30); do
-            if docker exec jakal-container-check python -m server.healthcheck; then
-              ready=true
-              break
-            fi
-            sleep 1
-          done
-          if [ "$ready" != true ]; then
-            docker logs jakal-container-check
-            exit 1
-          fi
-          docker exec -i jakal-container-check python - < scripts/check_deployment.py
+        run: python scripts/check_container.py --image jakal-workspace:test

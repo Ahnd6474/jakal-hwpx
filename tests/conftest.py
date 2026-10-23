@@ -20,7 +20,7 @@ SAMPLE_CORPUS_DIR = REPO_ROOT / "examples" / "samples" / "hwpx"
 if str(SRC_ROOT) not in sys.path:
     sys.path.insert(0, str(SRC_ROOT))
 
-from jakal_hwpx import HwpxDocument
+from jakal_hwpx import HwpDocument, HwpPureProfile, HwpxDocument
 
 _TMP_PATH_COUNTER = itertools.count()
 collect_ignore_glob = ["pytest-cache-files-*", "_pytest_cache*", "_pytest_basetemp*", "_tmp_pytest*", "_release_tmp*"]
@@ -71,6 +71,21 @@ def valid_hwpx_files(sample_corpus_dir: Path) -> list[Path]:
 @pytest.fixture(scope="session")
 def sample_hwpx_path(valid_hwpx_files: list[Path]) -> Path:
     return valid_hwpx_files[0]
+
+
+@pytest.fixture(scope="session")
+def hwp_donor_collection(_workspace_tmp_root: Path) -> Path:
+    # Tests must work in a clean clone without the ignored, private corpus.
+    root = _workspace_tmp_root / "donor-collection"
+    root.mkdir()
+    document = HwpDocument.blank()
+    section = HwpPureProfile.load_bundled().target_section_index
+    document.append_table_pure()
+    document.append_picture_pure()
+    document.append_hyperlink_pure()
+    document.append_paragraph("Extra paragraph outside the retained control", section_index=section)
+    document.save(root / "generated-combined-controls.hwp")
+    return root
 
 
 def _tmp_dir_name(nodeid: str) -> str:

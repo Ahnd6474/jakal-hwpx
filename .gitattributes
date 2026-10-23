@@ -1,4 +1,6 @@
 # HWP document assets
+*.sh text eol=lf
+*.cmd text eol=crlf
 *.hwp -text
 *.hwpx -text
 

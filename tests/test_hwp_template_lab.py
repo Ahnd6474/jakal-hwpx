@@ -10,12 +10,8 @@ from jakal_hwpx import (
 )
 
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
-COLLECTION_ROOT = REPO_ROOT / "hwp_collection"
-
-
-def test_find_control_occurrences_finds_table_controls_in_collection_donor() -> None:
-    donor_path = next(path for path in sorted(COLLECTION_ROOT.glob("*.hwp")) if "RFP-100개" in path.name)
+def test_find_control_occurrences_finds_table_controls_in_collection_donor(hwp_donor_collection: Path) -> None:
+    donor_path = next(hwp_donor_collection.glob("*.hwp"))
     document = HwpBinaryDocument.open(donor_path)
 
     occurrences = find_control_occurrences(document, "tbl ")
@@ -25,8 +21,8 @@ def test_find_control_occurrences_finds_table_controls_in_collection_donor() -> 
     assert occurrences[0].paragraph_start_index <= occurrences[0].record_index <= occurrences[0].paragraph_end_index
 
 
-def test_build_minimal_control_candidate_rewrites_to_smaller_section(tmp_path: Path) -> None:
-    donor_path = next(path for path in sorted(COLLECTION_ROOT.glob("*.hwp")) if "RFP-100개" in path.name)
+def test_build_minimal_control_candidate_rewrites_to_smaller_section(tmp_path: Path, hwp_donor_collection: Path) -> None:
+    donor_path = next(hwp_donor_collection.glob("*.hwp"))
     document = HwpBinaryDocument.open(donor_path)
     occurrence = find_control_occurrences(document, "tbl ")[0]
 
@@ -38,14 +34,14 @@ def test_build_minimal_control_candidate_rewrites_to_smaller_section(tmp_path: P
     assert len(reopened.section_records(occurrence.section_index)) < len(document.section_records(occurrence.section_index))
 
 
-def test_run_template_lab_generates_minimized_candidates_with_fake_validator(tmp_path: Path) -> None:
+def test_run_template_lab_generates_minimized_candidates_with_fake_validator(tmp_path: Path, hwp_donor_collection: Path) -> None:
     def fake_validator(input_path: str | Path, output_path: str | Path, output_format: str) -> Path:
         target = Path(output_path)
         target.write_bytes(b"validated")
         return target
 
     candidates = run_template_lab(
-        COLLECTION_ROOT,
+        hwp_donor_collection,
         tmp_path,
         features=["table", "picture", "hyperlink"],
         validate_with_hancom=True,

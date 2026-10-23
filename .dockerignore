@@ -11,6 +11,7 @@
 !server/
 !server/**
 !web/
+web/*
 !web/package.json
 !web/package-lock.json
 !web/index.html
@@ -23,6 +24,7 @@
 !web/scripts/
 !web/scripts/**
 !web/public/
+web/public/*
 !web/public/fonts/
 !web/public/fonts/**
 !web/public/licenses/
