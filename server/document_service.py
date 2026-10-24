@@ -45,26 +45,28 @@ class DocumentService:
 
     def state(self, identifier: str, owner: str):
         document = self.owned(identifier, owner)
+        with self.store.connect() as db:
+            external = db.execute("SELECT count(*) FROM connection_proposals WHERE document=? AND owner=? AND status='pending'", (identifier, owner)).fetchone()[0] if db.execute("SELECT 1 FROM sqlite_master WHERE name='connection_proposals'").fetchone() else 0
         return {**{key: document[key] for key in ("id", "name", "revision", "status", "validated", "settings_version")},
-                "expires": document["created"] + self.store.ttl}
+                "expires": document["created"] + self.store.ttl, 'pending_proposals': external}
 
-    def _submit(self, identifier, owner, kind, body, request_key=None):
+    def _submit(self, identifier, owner, kind, body, request_key=None, accept_guard=None):
         self.owned(identifier, owner)
         payload = body.model_dump(exclude={"settings_version"})
         if kind == 'layout' and payload.get('background_pages') is None:
             payload.pop('background_pages', None)
         job = self.store.enqueue(identifier, owner, kind, payload, body.revision,
-            request_key=request_key, settings_version=body.settings_version)
+            request_key=request_key, settings_version=body.settings_version, accept_guard=accept_guard)
         return {"job_id": job, "document_id": identifier, "kind": kind, "base_revision": body.revision}
 
-    def edit(self, identifier: str, owner: str, body: EditRequest, request_key: str | None = None):
+    def edit(self, identifier: str, owner: str, body: EditRequest, request_key: str | None = None, *, accept_guard=None):
         targets = [operation_key(op.model_dump()) for op in body.operations]
         if len(targets) != len(set(targets)):
             raise WorkspaceError("duplicate_target", "같은 요소를 한 작업에서 두 번 수정할 수 없습니다.", 422)
-        return self._submit(identifier, owner, "edit", body, request_key)
+        return self._submit(identifier, owner, "edit", body, request_key, accept_guard)
 
-    def validate(self, identifier: str, owner: str, body: CommandRevisionRequest, request_key: str | None = None):
-        return self._submit(identifier, owner, "validate", body, request_key)
+    def validate(self, identifier: str, owner: str, body: CommandRevisionRequest, request_key: str | None = None, *, accept_guard=None):
+        return self._submit(identifier, owner, "validate", body, request_key, accept_guard)
 
     def layout(self, identifier: str, owner: str, body: PageLayoutRequest, request_key: str | None = None):
         if body.background_pages and len(body.background_pages) > 1:

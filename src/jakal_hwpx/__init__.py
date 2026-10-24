@@ -185,7 +185,7 @@ from .parts import (
 )
 from .xmlnode import HwpxXmlNode
 
-__version__ = "0.3.1"
+__version__ = "0.4.0"
 
 _LAZY_EXPORTS = {
     "default_hwp_script_path": ("jakal_hwpx.hwp2py", "default_hwp_script_path"),

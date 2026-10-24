@@ -26,7 +26,10 @@ from .document_service import DocumentService
 from .errors import WorkspaceError
 from .storage import Store
 from .worker import Worker
-from .privacy import COOKIE, SECURE_COOKIE, DeploymentPolicy, Sessions, SessionRateLimited, protect_storage
+from .privacy import COOKIE, SECURE_COOKIE, DeploymentPolicy, Sessions, SessionRateLimited, SessionIssuance, protect_storage
+from .connections import Connections
+from .connection_routes import routes as connection_routes
+from .mcp_adapter import http_transport
 
 REPO = Path(__file__).resolve().parents[1]
 MAX_UPLOAD = 20 * 1024 * 1024
@@ -77,23 +80,29 @@ def create_app(data_dir: Path | None = None, *, run_worker: bool = True) -> Fast
     sessions = Sessions(store, allow_legacy=not policy.production)
     worker = Worker(store)
     service = DocumentService(store)
+    connections = Connections(store, service)
+    make_mcp_manager, mcp_transport = http_transport(connections)
+    connection_requests = SessionIssuance(per_peer=240, total=2400)
     template_imports = threading.BoundedSemaphore(2)
 
     @asynccontextmanager
     async def lifespan(app):
-        if run_worker:
-            worker.start()
-        try:
-            yield
-        finally:
+        mcp_manager = make_mcp_manager()
+        async with mcp_manager.run():
             if run_worker:
-                worker.close()
+                worker.start()
+            try:
+                yield {'mcp_manager': mcp_manager}
+            finally:
+                if run_worker:
+                    worker.close()
 
     app = FastAPI(title="Jakal Document Workspace", lifespan=lifespan, docs_url=None if policy.production else "/api/docs", redoc_url=None, openapi_url=None if policy.production else "/api/openapi.json")
     app.state.store = store
     app.state.worker = worker
     app.state.documents = service
     app.state.sessions = sessions
+    app.state.connections = connections
     app.add_middleware(BodyLimit)
 
     def security_headers(path):
@@ -122,17 +131,33 @@ def create_app(data_dir: Path | None = None, *, run_worker: bool = True) -> Fast
     @app.middleware("http")
     async def session_and_headers(request: Request, call_next):
         headers = security_headers(request.scope.get('path', '/'))
-        critical = {'host', 'origin', 'sec-fetch-site', 'x-jakal-workspace', 'content-length', 'transfer-encoding'}
+        critical = {'host', 'origin', 'sec-fetch-site', 'x-jakal-workspace', 'content-length', 'transfer-encoding', 'authorization',
+            'mcp-protocol-version', 'mcp-method', 'mcp-name', 'mcp-session-id'}
         if any(len(request.headers.getlist(name)) > 1 for name in critical) or (request.headers.get('content-length') and request.headers.get('transfer-encoding')):
             return JSONResponse({'detail': '중복되거나 모호한 요청 헤더입니다.'}, status_code=400, headers=headers)
         if not policy.allowed(request):
             return JSONResponse({'detail': '허용되지 않은 도메인 또는 HTTPS 설정입니다.'}, status_code=400, headers=headers)
         private = request.url.path == '/api' or request.url.path.startswith('/api/')
-        if private or request.method in {"POST", "PUT", "PATCH", "DELETE"}:
+        external = request.url.path in {'/mcp', '/mcp/'} or request.url.path.startswith('/api/connected/')
+        if private or external or request.method in {"POST", "PUT", "PATCH", "DELETE"}:
             origin = request.headers.get("origin")
             expected = f"{request.url.scheme}://{request.headers.get('host', '')}"
             if request.headers.get("sec-fetch-site") in {"cross-site", "same-site"} or (origin and origin != expected):
                 return JSONResponse({"detail": "다른 사이트에서 보낸 요청은 허용하지 않습니다."}, status_code=403, headers=headers)
+        if external:
+            try:
+                connection_requests.consume(request.client.host if request.client else '')
+                authorization = request.headers.get('authorization', '')
+                token = authorization[7:] if authorization.startswith('Bearer ') else ''
+                request.state.connection = await run_in_threadpool(connections.authenticate, token)
+            except SessionRateLimited as error:
+                return JSONResponse({'detail': '연결 요청이 너무 많습니다. 잠시 후 다시 요청해 주세요.', 'code': 'connection_rate_limit'}, status_code=429,
+                    headers={**headers, 'Retry-After': str(error.retry_after)})
+            except WorkspaceError as error:
+                return JSONResponse({'detail': str(error), 'code': error.code}, status_code=error.status, headers=headers)
+            response = await call_next(request)
+            response.headers.update(headers)
+            return response
         secure = policy.production or request.url.scheme == 'https' or os.environ.get('JAKAL_COOKIE_SECURE') == '1'
         cookie_name = SECURE_COOKIE if secure else COOKIE
         public_asset = not private or request.url.path in {'/api/health', '/api/templates'}
@@ -522,6 +547,11 @@ def create_app(data_dir: Path | None = None, *, run_worker: bool = True) -> Fast
         if not store.delete(identifier, request.state.owner):
             raise HTTPException(409, "실행 중인 작업이나 파일 전송이 끝난 후 삭제해 주세요.")
         return {"deleted": True}
+
+    app.include_router(connection_routes(connections))
+    from starlette.routing import Route
+    app.router.routes.extend([Route('/mcp', mcp_transport, methods=['GET', 'POST', 'DELETE']),
+        Route('/mcp/', mcp_transport, methods=['GET', 'POST', 'DELETE'])])
 
     dist = REPO / "web" / "dist"
     if dist.exists():

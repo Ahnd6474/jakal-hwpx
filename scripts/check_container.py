@@ -11,7 +11,7 @@ REPO = Path(__file__).resolve().parents[1]
 
 
 def docker(*args, source=None, check=True):
-    return subprocess.run(['docker', *args], input=source, text=True,
+    return subprocess.run(['docker', *args], input=source, text=True, encoding='utf-8',
         stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=check)
 
 
@@ -121,6 +121,14 @@ response.read()
 redirect.close()
 scope['check_deployment'](via_gateway=True)
 print('Verified TLS, HTTP redirect and spoofed forwarding-header handling through the production gateway.')
+''')
+        mcp_probe = (REPO / 'scripts/check_mcp.py').read_text(encoding='utf-8')
+        execute(f'''
+import asyncio, ssl
+scope = {{'__name__': 'mcp_probe'}}
+exec(compile({mcp_probe!r}, 'mcp_probe.py', 'exec'), scope)
+context = ssl.create_default_context(cadata={authority!r})
+asyncio.run(scope['check_site']('https://deployment.invalid', stdio=False, verify=context))
 ''')
     except subprocess.CalledProcessError as error:
         raise RuntimeError(error.stderr.strip() or error.stdout.strip() or 'Docker verification failed.') from None

@@ -39,6 +39,7 @@ const PageLayoutTemplates = await component('PageLayoutTemplates');
 const ImportPageTemplate = await component('ImportPageTemplate');
 const PrivacyGate = await component('PrivacyGate');
 const PrivacyPanel = await component('PrivacyPanel');
+const ExternalConnections = await component('ExternalConnections');
 function fixture(t) {
   const dom = new JSDOM('<button id="previous">Previous</button><div id="root"></div>', { url: 'https://unit.test/' });
   const errors = []; dom.window.addEventListener('error', event => errors.push(event.error));
@@ -54,6 +55,72 @@ function fixture(t) {
 }
 const click = async element => { assert.ok(element); await act(async () => element.click()); };
 const button = name => [...document.querySelectorAll('button')].find(e => e.textContent.includes(name));
+
+test('external connection defaults to proposals and only displays a credential after explicit creation', async t => {
+  const { root } = fixture(t);
+  const previous = globalThis.fetch; t.after(() => { globalThis.fetch = previous; });
+  let created;
+  globalThis.fetch = async (url, options) => {
+    if (url.endsWith('/connections') && options.method === 'POST') {
+      created = JSON.parse(options.body);
+      return new Response(JSON.stringify({ id: 'c', token: 'private-token', expires: Date.now() / 1000 + 3600,
+        stdio_config: null, http_config: { mcpServers: { jakal: { url: 'https://unit.test/mcp', headers: { Authorization: 'Bearer private-token' } } } } }));
+    }
+    return new Response(JSON.stringify({ connections: [], proposals: [], events: [] }));
+  };
+  await act(async () => root.render(React.createElement(ExternalConnections, { doc: { id: 'd', name: 'test.hwpx', revision: 0, settings_version: 0 }, dirty: false, onClose() {}, async onApplied() {} })));
+  assert.equal(document.querySelectorAll('select')[0].value, 'propose');
+  assert.equal(document.querySelector('textarea'), null);
+  await click(button('연결 설정 만들기'));
+  assert.equal(created.permission, 'propose');
+  assert.equal(created.document_id, 'd');
+  assert.match(document.querySelector('textarea').value, /Bearer private-token/);
+  assert.equal(localStorage.length, 0);
+  await click(button('설정 표시 닫기'));
+  assert.equal(document.querySelector('textarea'), null);
+});
+
+test('direct external editing needs explicit consent and cannot be enabled with unsaved edits', async t => {
+  const { root, dom } = fixture(t);
+  const previous = globalThis.fetch; t.after(() => { globalThis.fetch = previous; });
+  globalThis.fetch = async () => new Response(JSON.stringify({ connections: [], proposals: [], events: [] }));
+  const props = { doc: { id: 'd', name: 'test.hwpx', revision: 0 }, dirty: true, onClose() {}, async onApplied() {} };
+  await act(async () => root.render(React.createElement(ExternalConnections, props)));
+  const select = document.querySelector('select');
+  await act(async () => { select.value = 'write'; select.dispatchEvent(new dom.window.Event('change', { bubbles: true })); });
+  assert.equal(document.querySelector('input[type=checkbox]').disabled, true);
+  assert.equal(button('연결 설정 만들기').disabled, true);
+  await act(async () => root.render(React.createElement(ExternalConnections, { ...props, dirty: false })));
+  assert.equal(button('연결 설정 만들기').disabled, true);
+  await click(document.querySelector('input[type=checkbox]'));
+  assert.equal(button('연결 설정 만들기').disabled, false);
+});
+
+test('external proposal approval submits only selected targets and blocks stale or unsaved revisions', async t => {
+  const { root } = fixture(t);
+  const previous = globalThis.fetch; t.after(() => { globalThis.fetch = previous; });
+  let approval, applied = 0;
+  const proposal = { id: 'p', connection: 'c', title: '문구 정리', label: '연결 도구', revision: 0, settings_version: 0, status: 'pending' };
+  globalThis.fetch = async (url, options) => {
+    let body = { connections: [], proposals: [proposal], events: [] };
+    if (url === '/api/proposals/p') body = { ...proposal, changes: [{ id: 's0-p0', label: '첫 문단', before: '원본', after: '수정' }, { id: 's0-p1', label: '둘째 문단', before: '둘', after: '다른 수정' }] };
+    if (url === '/api/proposals/p/approve') { approval = JSON.parse(options.body); body = { job_id: 'job' }; }
+    if (url.startsWith('/api/jobs/job')) body = { status: 'completed', result: { revision: 1 } };
+    return new Response(JSON.stringify(body));
+  };
+  const props = { doc: { id: 'd', name: 'test.hwpx', revision: 0, settings_version: 0 }, dirty: true, onClose() {}, async onApplied() { applied++; } };
+  await act(async () => root.render(React.createElement(ExternalConnections, props)));
+  await click(button('수정 제안'));
+  await click(button('문구 정리'));
+  assert.equal(button('개 적용').disabled, true);
+  await act(async () => root.render(React.createElement(ExternalConnections, { ...props, dirty: false, doc: { ...props.doc, revision: 1 } })));
+  assert.equal(button('개 적용').disabled, true);
+  await act(async () => root.render(React.createElement(ExternalConnections, { ...props, dirty: false })));
+  await click(document.querySelectorAll('input[type=checkbox]')[1]);
+  await click(button('개 적용'));
+  assert.deepEqual(approval.targets, ['s0-p0']);
+  assert.equal(applied, 1);
+});
 
 test('private workspace hides document UI until session confirmation and closes it on session loss', async t => {
   const { root, dom } = fixture(t);

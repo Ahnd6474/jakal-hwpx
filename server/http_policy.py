@@ -15,9 +15,9 @@ def response_headers(path: str) -> dict[str, str]:
             "default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; worker-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self'; object-src 'none'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'"
         ),
     }
-    if path == '/api' or path.startswith('/api/'):
+    if path == '/api' or path.startswith('/api/') or path in {'/mcp', '/mcp/'}:
         headers['Cache-Control'] = 'no-store'
         headers['Pragma'] = 'no-cache'
         headers['Expires'] = '0'
-        headers['Vary'] = 'Cookie'
+        headers['Vary'] = 'Authorization' if path in {'/mcp', '/mcp/'} or path.startswith('/api/connected/') else 'Cookie'
     return headers

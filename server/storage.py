@@ -110,7 +110,7 @@ class Store:
 
     def enqueue(self, document: str, owner: str, kind: str, payload: dict, revision: int | None = None,
                 *, request_key: str | None = None, fingerprint: dict | None = None,
-                settings_version: int | None = None):
+                settings_version: int | None = None, accept_guard=None):
         if request_key is not None and not re.fullmatch(r"[A-Za-z0-9_-]{16,128}", request_key):
             raise WorkspaceError("invalid_request_key", "작업 식별자가 올바르지 않습니다.", 422)
         # Hash the submitted intent, not mutable database settings or temporary
@@ -129,6 +129,8 @@ class Store:
                 if previous:
                     if previous["request_hash"] != request_hash:
                         raise WorkspaceError("request_key_conflict", "이미 사용한 작업 식별자로 다른 내용을 요청할 수 없습니다.")
+                    if accept_guard is not None:
+                        accept_guard(db, row, previous["id"])
                     return previous["id"]
             if revision is not None and (row["revision"] != revision or row["status"] != "ready"):
                 raise WorkspaceError("revision_conflict", "문서 버전이 변경되었습니다. 편집 내용을 보관한 뒤 최신 문서를 다시 열어 주세요.")
@@ -139,6 +141,8 @@ class Store:
             # The database revision is authoritative, including for internal
             # callers which omit the HTTP request's revision field.
             payload = {**payload, "revision": row["revision"], "settings": json.loads(row["settings"])}
+            if accept_guard is not None:
+                accept_guard(db, row, job)
             db.execute("INSERT INTO jobs(id,document,owner,kind,created,payload,request_key,request_hash) VALUES(?,?,?,?,?,?,?,?)", (job, document, owner, kind, time.time(), json.dumps(payload, ensure_ascii=False), request_key, request_hash))
         return job
 
@@ -300,6 +304,9 @@ class Store:
             db.execute("DELETE FROM jobs WHERE document=? AND owner=?", (identifier, owner))
             db.execute("DELETE FROM revisions WHERE document=?", (identifier,))
             db.execute("DELETE FROM documents WHERE id=? AND owner=?", (identifier, owner))
+            if db.execute("SELECT 1 FROM sqlite_master WHERE name='connections'").fetchone():
+                for table in ('connection_proposals', 'connection_events', 'editor_presence', 'connections'):
+                    db.execute(f'DELETE FROM {table} WHERE document=?', (identifier,))
         # A locked file can survive deletion on Windows; retain the tombstone
         # name so the periodic cleanup can retry without a document DB row.
         shutil.rmtree(tombstone, ignore_errors=True)
@@ -307,6 +314,9 @@ class Store:
 
     def cleanup(self):
         with self.connect() as db:
+            if db.execute("SELECT 1 FROM sqlite_master WHERE name='connections'").fetchone():
+                db.execute('DELETE FROM editor_presence WHERE expires<?', (time.time(),))
+                db.execute('DELETE FROM connection_proposals WHERE document IN (SELECT id FROM documents WHERE created<?)', (time.time() - self.ttl,))
             expired = db.execute("SELECT id,owner FROM documents WHERE created<?", (time.time() - self.ttl,)).fetchall()
             # Keep expired/revoked records until all their possible documents
             # have expired, so an old credential can never be migrated again.

@@ -1219,3 +1219,50 @@ hr { height: 1px; border: 0; background: var(--line); margin: 25px 0; }
 .privacy-panel > p { margin: 18px 0; font-size: 12px; line-height: 1.9; color: #697682; }
 .privacy-confirm { display: flex; gap: 9px; align-items: flex-start; font-size: 12px; line-height: 1.8; margin: 20px 0; }
 .privacy-confirm input { margin-top: 4px; flex-shrink: 0; }
+.external-modal { width: min(860px, calc(100vw - 32px)); max-height: calc(100dvh - 32px); padding: 0; display: flex; flex-direction: column; overflow: hidden; }
+.external-modal .modal-heading { padding: 22px 24px 14px; margin: 0; flex-shrink: 0; }
+.external-modal h2 { display: flex; gap: 9px; align-items: center; }
+.external-modal h3 { font-size: 14px; margin: 0 0 12px; }
+.external-modal .modal-heading p { font-size: 11px; color: #75828e; margin-top: 7px; max-width: 660px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.external-tabs { display: flex; gap: 5px; padding: 0 24px; border-bottom: 1px solid #e5e9ed; flex-shrink: 0; }
+.external-tabs > button[role=tab] { background: none; border: 0; padding: 12px 13px; color: #738190; font-size: 12px; border-bottom: 2px solid transparent; }
+.external-tabs > button[aria-selected=true] { color: #344b5d; border-bottom-color: #344b5d; font-weight: 600; }
+.external-tabs > .icon-button { margin-left: auto; }
+.external-body { padding: 21px 24px 25px; overflow-y: auto; min-height: 0; }
+.external-body > p, .external-create > p, .external-config > p { font-size: 12px; line-height: 1.8; color: #6b7884; margin: 0 0 16px; }
+.external-create, .external-config { border: 1px solid #dfe5ea; border-radius: 5px; padding: 18px; margin: 18px 0 24px; }
+.external-fields { display: grid; grid-template-columns: 1fr 1.3fr 100px; gap: 12px; margin-bottom: 13px; }
+.external-fields label, .external-config > label { display: flex; flex-direction: column; gap: 7px; font-size: 11px; color: #627383; }
+.external-fields input, .external-fields select, .external-config select { width: 100%; min-width: 0; border: 1px solid #d5dde4; border-radius: 3px; padding: 9px 8px; background: white; color: #35495a; font: inherit; }
+.external-create > .primary-button { margin-left: auto; }
+.external-config > div:first-child { margin-bottom: 15px; }
+.external-config small { color: #7c8994; font-size: 11px; }
+.external-config > label { max-width: 320px; margin-bottom: 12px; }
+.external-config textarea { display: block; width: 100%; height: 230px; resize: vertical; border: 1px solid #dce2e7; border-radius: 4px; padding: 12px; font: 11px/1.8 Consolas, monospace; white-space: pre; margin-bottom: 12px; }
+.external-buttons { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; justify-content: flex-end; font-size: 11px; }
+.external-section-heading { margin-top: 22px !important; }
+.external-list { border-top: 1px solid #e4e9ed; }
+.external-connection, .external-event, .external-proposal { display: flex; width: 100%; justify-content: space-between; align-items: center; gap: 15px; border: 0; border-bottom: 1px solid #e6ebef; padding: 14px 1px; text-align: left; background: transparent; font: inherit; }
+.external-connection strong, .external-event strong, .external-proposal strong { display: block; color: #3d4e5e; font-size: 12px; font-weight: 600; }
+.external-connection span, .external-event small, .external-proposal small { display: block; color: #7d8993; font-size: 11px; margin-top: 6px; }
+.external-proposal > span:last-child { white-space: nowrap; font-size: 11px; color: #667d8e; }
+.external-proposal:hover { background: #f8fafb; }
+.external-empty { padding: 24px 4px; font-size: 12px; color: #88949e; line-height: 1.8; }
+.external-message { margin: 12px 24px 0; font-size: 12px; display: flex; gap: 7px; align-items: center; line-height: 1.7; }
+.external-editing { margin: 12px 24px 0; padding: 10px 13px; background: #f7f8f8; border: 1px solid #e3e7e9; font-size: 11px; color: #6b7884; line-height: 1.8; }
+.external-editing > div { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-top: 6px; }
+.external-comparisons { margin: 18px 0; }
+.external-comparisons label { display: flex; gap: 8px; align-items: center; font-size: 12px; margin-bottom: 12px; }
+.external-comparisons .change-comparison p { overflow-wrap: anywhere; max-height: 260px; overflow-y: auto; }
+@media (max-width: 760px) {
+  .external-backdrop { padding: 8px; }
+  .external-modal { width: 100%; max-height: calc(100dvh - 16px); }
+  .external-modal .modal-heading { padding: 17px 16px 12px; }
+  .external-tabs { padding: 0 9px; }
+  .external-body { padding: 17px 16px; }
+  .external-fields { grid-template-columns: 1fr; }
+  .external-connection { align-items: flex-start; flex-wrap: wrap; }
+  .external-create, .external-config { padding: 14px; }
+  .external-message { margin-inline: 16px; }
+  .external-modal .modal-heading p { max-width: calc(100vw - 110px); }
+}

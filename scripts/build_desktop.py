@@ -79,7 +79,7 @@ def extract_python(archive, target):
                 raise RuntimeError('Invalid runtime archive path.')
             source.extract(member, target)
     (target / 'python313._pth').write_text('python313.zip\n.\n../packages\n../../app\nimport site\n', encoding='utf-8')
-    (target / 'sitecustomize.py').write_text('import sys\nsys.dont_write_bytecode = True\n', encoding='utf-8')
+    (target / 'sitecustomize.py').write_text('import site, sys\nfrom pathlib import Path\nsys.dont_write_bytecode = True\nsite.addsitedir(str(Path(__file__).resolve().parents[1] / "packages"))\n', encoding='utf-8')
     subprocess.run([str(target / 'python.exe'), '-I', '-B', '-X', 'utf8', '-c',
         "import py_compile; py_compile.compile('sitecustomize.py', cfile='sitecustomize.pyc', doraise=True)"], cwd=target, check=True)
     (target / 'sitecustomize.py').unlink()

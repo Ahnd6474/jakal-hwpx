@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import asyncio
 import hashlib
 import http.client
 import io
@@ -18,6 +19,7 @@ REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO))
 from check_deployment import DeploymentClient, check_deployment
 from jakal_hwpx import HwpxDocument
+from check_mcp import check_site
 
 
 def start(package, data, environment):
@@ -101,6 +103,7 @@ def main():
     try:
         client_for(ready)
         check_deployment(desktop=True)
+        asyncio.run(check_site(f"http://127.0.0.1:{ready['port']}"))
         client = client_for(ready)
         client.begin()
         check_imports(client)

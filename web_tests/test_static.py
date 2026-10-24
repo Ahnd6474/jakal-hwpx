@@ -5,7 +5,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from server.static import WebStaticFiles, accepts_gzip
-from web_tests.test_api import client, raw_document, upload
+from web_tests.test_api import client, raw_document, upload, wait
 
 
 @pytest.mark.parametrize('header,expected', [('gzip, deflate, br', True), ('gzip;q=0, *;q=1', False), ('*;q=.5', True), ('br', False), ('gzip;q=garbage', False), ('gzip;q=2', False), ('GZIP;q=0.5', True)])
@@ -64,7 +64,10 @@ def test_bounded_job_wait_returns_completion_and_checks_ownership(client, raw_do
     job = response.json()['job_id']
     result = client.get(f'/api/jobs/{job}?wait_ms=1500')
     assert result.status_code == 200
-    assert result.json()['status'] == 'completed'
+    # wait_ms is a maximum polling interval, not a parser completion deadline.
+    # A cold Windows worker may legitimately still be running after 1.5 seconds.
+    assert result.json()['status'] in {'queued', 'running', 'completed'}
+    assert wait(client, job)['status'] == 'completed'
     stranger = TestClient(client.app)
     assert stranger.get(f'/api/jobs/{job}?wait_ms=1500').status_code == 404
     stranger.close()
