@@ -143,6 +143,8 @@ def main():
         '--target', str(root / 'runtime/packages'), str(wheel) + '[web]'], cwd=REPO, check=True)
     copy_application(app)
     shutil.copy2(REPO / 'desktop/bootstrap.py', app / 'desktop_bootstrap.py')
+    shutil.copy2(REPO / 'desktop/guide.html', root / 'guide.html')
+    shutil.copy2(REPO / 'desktop/Start.cmd', root / '시작.cmd')
     for name in ['LICENSE', 'THIRD_PARTY_NOTICES.md']:
         shutil.copy2(REPO / name, root / name)
     # The installed runtime is fully local; user Python paths and site packages

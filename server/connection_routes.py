@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import ipaddress
+import os
 from pathlib import Path
 import sys
 
@@ -24,7 +25,7 @@ def routes(connections):
             local = False
         stdio_config = {'mcpServers': {'jakal': {'command': sys.executable,
             'args': ['-I', '-B', '-X', 'utf8', str(Path(__file__).with_name('mcp_entry.py'))],
-            'env': {'JAKAL_WORKSPACE_URL': origin, 'JAKAL_CONNECTION_TOKEN': token}}}} if local else None
+            'env': {'JAKAL_WORKSPACE_URL': origin, 'JAKAL_CONNECTION_TOKEN': token}}}} if local and os.environ.get('JAKAL_STDIO_CONFIG', '1') == '1' else None
         return result | {'http_config': http_config, 'stdio_config': stdio_config}
 
     @router.get('/api/documents/{identifier}/connections')

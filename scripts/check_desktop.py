@@ -92,6 +92,8 @@ def main():
     with zipfile.ZipFile(args.archive) as archive:
         archive.extractall(work)
     package = work / 'Jakal-Workspace'
+    assert (package / 'guide.html').is_file(), 'Offline startup guide is missing.'
+    assert (package / '시작.cmd').is_file(), 'Double-click startup helper is missing.'
     data = work / '사용자 자료'
     environment = os.environ | {'PATH': str(work / 'no-system-runtimes'), 'NODE_OPTIONS': '--require nonexistent-file',
         'PYTHONPATH': str(work / 'wrong-python-path'), 'JAKAL_ENV': 'production',

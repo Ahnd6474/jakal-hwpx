@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'"><title>Jakal · 다른 PC에서 시작하기</title>
+<style>
+*{box-sizing:border-box}body{margin:0;background:#f5f6f7;color:#273744;font:15px/1.85 "맑은 고딕",system-ui,sans-serif}main{max-width:850px;margin:42px auto;padding:34px 40px;background:white;border:1px solid #e1e5e8;border-radius:6px}header{border-bottom:1px solid #e3e7ea;padding-bottom:22px;margin-bottom:28px}header p{color:#687783;margin:8px 0 0}h1{font-size:27px;line-height:1.45;margin:0}h2{font-size:18px;margin:30px 0 12px}h3{font-size:15px;margin:0 0 4px}ol{padding-left:23px}li{padding:6px 0}code{font:13px/1.7 Consolas,monospace;background:#eef1f3;padding:3px 6px;border-radius:3px;overflow-wrap:anywhere}aside{padding:17px 20px;background:#f5f7f8;border-left:3px solid #8b9ba8;margin:22px 0}.step{font-weight:600}details{border-top:1px solid #e4e8eb;padding:13px 0}summary{cursor:pointer;font-weight:600}details p{margin:9px 0 3px;color:#61717e}footer{margin-top:30px;color:#75818c;font-size:12px}a{color:#365e7a}table{border-collapse:collapse;width:100%;font-size:13px}th,td{padding:10px;border-bottom:1px solid #e4e8eb;text-align:left;vertical-align:top}th{width:140px;color:#667884}@media(max-width:650px){main{margin:12px;padding:24px 20px}h1{font-size:23px}th{width:95px}}
+</style></head><body><main>
+<header><h1>다른 PC에서도 바로 시작하세요</h1><p>Windows용 실행 패키지 · Python, Node.js, Docker, 한글 프로그램을 따로 설치할 필요가 없습니다.</p></header>
+<h2>가장 간단한 방법: 압축 풀고 실행</h2>
+<ol><li><span class="step">Windows용 ZIP 전체를 다른 PC로 옮깁니다.</span><br><code>Jakal-Workspace-…-windows-x64.zip</code>을 USB나 파일 전송으로 복사하세요. 실행 파일 하나만 옮기면 실행되지 않습니다.</li>
+<li><span class="step">ZIP을 우클릭하고 ‘압축 풀기’를 선택합니다.</span><br>압축 파일 안에서 바로 실행하지 말고, 문서 폴더 등 쓰기 가능한 일반 폴더에 모두 풀어 주세요.</li>
+<li><span class="step">압축을 푼 폴더에서 <code>시작.cmd</code>를 더블클릭합니다.</span><br><code>Jakal.exe</code>를 직접 실행해도 됩니다. 편집기 실행 창이 나타나고 기본 브라우저에서 사이트가 열립니다.</li>
+<li><span class="step">HWP·HWPX를 열어 편집합니다.</span><br>샘플 열기나 새 문서로 먼저 확인할 수도 있습니다. 필요한 수정 저장·검증을 마친 뒤 다운로드하세요.</li></ol>
+<aside><h3>서버나 도메인이 없어도 됩니다</h3>웹 브라우저를 사용하지만 편집기는 이 PC에서 실행됩니다. 보통 <code>http://127.0.0.1:18987/</code>에서 열리며, 포트가 사용 중이면 실행 창에 표시된 다른 주소를 사용합니다. 실행에 필요한 파일은 패키지에 들어 있습니다.</aside>
+<h2>사용 중 기억할 것</h2><table><tbody>
+<tr><th>브라우저만 닫았을 때</th><td>실행 창의 <strong>편집기 열기</strong>를 누르면 다시 열립니다. 실행 창은 작업하는 동안 켜 두세요.</td></tr>
+<tr><th>작업을 마칠 때</th><td>문서를 저장·다운로드한 뒤 실행 창의 <strong>종료</strong>를 누르세요. 단순히 브라우저 탭을 닫으면 편집기는 계속 실행됩니다.</td></tr>
+<tr><th>저장 폴더</th><td>실행 창의 <strong>저장 폴더 열기</strong>에서 확인합니다. 앱의 임시 자료는 <code>%LOCALAPPDATA%\JakalWorkspace</code>에 저장되며, 업로드 문서의 기본 보관 기간은 24시간입니다. 완성본은 다운로드해 보관하세요.</td></tr>
+<tr><th>다른 PC로 문서 이동</th><td>패키지 ZIP과 별도로 원본·다운로드한 문서 파일을 옮겨 새 PC에서 다시 여세요. 실행 패키지를 복사하면 문서와 브라우저 세션까지 옮겨지는 것은 아닙니다.</td></tr>
+<tr><th>MCP 연결</th><td>문서 상단의 보기 메뉴 → <strong>외부 도구 연결</strong>에서 설정을 발급하세요. 새 PC의 실행 경로와 주소가 다를 수 있으므로 그 PC에서 다시 발급한 설정을 사용합니다.</td></tr>
+</tbody></table>
+<h2>화면이 열리지 않을 때</h2>
+<details><summary>실행 파일이나 폴더가 없다고 나옵니다</summary><p>ZIP 전체를 새 폴더에 다시 풀어 주세요. <code>Jakal.exe</code>, <code>app</code>, <code>runtime</code> 폴더가 같은 위치에 있어야 합니다.</p></details>
+<details><summary>브라우저가 자동으로 열리지 않습니다</summary><p>실행 창이 ‘실행 중’으로 바뀌면 <strong>편집기 열기</strong>를 누르거나, 표시된 주소를 브라우저 주소창에 직접 입력하세요. 실행 창이 닫혀 있으면 <code>시작.cmd</code>를 다시 실행하세요.</p></details>
+<details><summary>8000번 주소가 안 열립니다</summary><p>이 패키지는 보통 18987번을 사용합니다. 이전 PC나 개발 환경의 주소 대신 현재 실행 창에 나온 주소로 접속하세요.</p></details>
+<details><summary>회사·학교 PC에서 스크립트 실행이 제한됩니다</summary><p><code>시작.cmd</code> 대신 <code>Jakal.exe</code>를 직접 실행하세요. 프로그램 자체 실행도 제한된 기기라면 해당 기기의 관리 정책을 확인해야 합니다.</p></details>
+<details><summary>문서가 이전 PC처럼 보이지 않습니다</summary><p>원본에서 사용하는 글꼴이 새 PC에 없으면 줄바꿈·배치가 달라질 수 있습니다. 같은 글꼴이 설치되어 있는지 확인하세요.</p></details>
+<details><summary>macOS·Linux에서도 확인하고 싶습니다</summary><p>Windows 실행 파일 대신 <strong>Jakal-Server ZIP</strong>의 로컬 실행 방식을 사용하세요. Docker Engine 28 이상과 Compose v2가 실행 중이면 <code>sh local.sh start</code>로 시작할 수 있습니다. 서버 패키지 안의 <code>guide.html</code>에 안내가 들어 있습니다.</p></details>
+<footer>지원 대상: Windows 10·11 x64. 이 안내는 인터넷 연결 없이 파일을 직접 열어 읽을 수 있습니다.</footer>
+</main></body></html>

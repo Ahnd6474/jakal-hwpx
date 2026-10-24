@@ -54,6 +54,7 @@ jobs:
           sh -n .artifacts/package-check/Jakal-Server/manage.sh
           docker build -t jakal-server:package .artifacts/package-check/Jakal-Server
           python scripts/check_container.py --image jakal-server:package
+          python scripts/check_local.py .artifacts/package-check/Jakal-Server
       - uses: actions/upload-artifact@v4
         with:
           name: Jakal-Server

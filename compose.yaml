@@ -23,7 +23,9 @@ services:
       - documents:/var/lib/jakal
     tmpfs:
       - /tmp:rw,noexec,nosuid,size=268435456,uid=10001,gid=10001,mode=1770
-    networks: [backend]
+    networks:
+      backend:
+        ipv4_address: ${JAKAL_APP_ADDRESS:-172.30.88.3}
     stop_grace_period: 30s
     logging:
       driver: local

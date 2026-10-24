@@ -248,6 +248,15 @@ def test_browser_connection_fails_closed_without_bearer(workspace):
     assert client.get('/mcp').status_code == 401
 
 
+def test_container_local_connection_only_offers_host_usable_http_settings(workspace, monkeypatch):
+    client, document = workspace
+    monkeypatch.setenv('JAKAL_STDIO_CONFIG', '0')
+    response = client.post('/api/connections', json={'document_id': document, 'label': 'Docker'})
+    assert response.status_code == 201
+    assert response.json()['stdio_config'] is None
+    assert response.json()['http_config']['mcpServers']['jakal']['url'].endswith('/mcp')
+
+
 def test_long_paragraphs_can_be_read_in_chunks_and_search_returns_matching_context(workspace, monkeypatch):
     client, document = workspace
     grant = connect(client, document, 'read')

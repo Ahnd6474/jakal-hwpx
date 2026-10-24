@@ -142,7 +142,9 @@ sealed class EditorWindow : Form {
         Button close = new Button { Text = "종료", Location = new Point(339, 148), Size = new Size(145, 38) };
         close.Click += delegate { Close(); };
         Label footer = new Label { Text = "종료 전에는 편집 중인 문서를 저장해 주세요.", AutoSize = true, ForeColor = SystemColors.GrayText, Location = new Point(26, 205) };
-        Controls.AddRange(new Control[] { title, hint, status, open, folder, close, footer });
+        LinkLabel guide = new LinkLabel { Text = "사용 안내", AutoSize = true, Location = new Point(428, 205) };
+        guide.LinkClicked += delegate { string path = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "guide.html"); if (File.Exists(path)) Process.Start(new ProcessStartInfo(path) { UseShellExecute = true }); };
+        Controls.AddRange(new Control[] { title, hint, status, open, folder, close, footer, guide });
         poll.Interval = 250; poll.Tick += delegate {
             int ready = editor.ReadyPort();
             if (ready > 0 && !launched) { launched = true; port = ready; status.Text = "실행 중  ·  http://127.0.0.1:" + port; open.Enabled = true; if (autoOpen) OpenBrowser(); if (selfTest) Close(); }
