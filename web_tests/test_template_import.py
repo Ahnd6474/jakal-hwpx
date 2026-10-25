@@ -75,7 +75,8 @@ def test_jpg_collection_preserves_order_and_orientation_and_creates_editable_doc
 
 
 def test_pdf_import_keeps_page_sizes_and_returns_preview_without_changing_source(client):
-    source = next(path for path in Path('examples/samples/pdf').glob('*.pdf') if path.stat().st_size < 1_000_000)
+    # Use the five-page landscape fixture regardless of filesystem iteration order.
+    source = Path(__file__).resolve().parents[1] / 'examples/samples/pdf/2026학년도 정시 주요사항 안내.pdf'
     original = source.read_bytes()
     value = extract(client, [(source.name, original)])
     assert value['source'] == 'pdf' and len(value['background_pages']) == 5
