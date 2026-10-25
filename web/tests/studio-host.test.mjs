@@ -8,7 +8,7 @@ import { build } from 'esbuild';
 // Execute only the integration module against mocks, without a browser or site.
 const bridge = await fs.readFile('studio/host-bridge.ts', 'utf8');
 const bundled = await build({
-  stdin: { contents: `const {window,document,location,registry,inputHandler,wasm,canvasView,eventBus,documentState,setChromeVisibility,setThemeMode,initPromise} = env;\n${bridge}`, loader: 'ts', resolveDir: resolve('.') },
+  stdin: { contents: `const {window,document,location,registry,inputHandler,wasm,canvasView,eventBus,documentState,setChromeVisibility,setThemeMode,initPromise,dispatcher,getContext} = env;\n${bridge}`, loader: 'ts', resolveDir: resolve('.') },
   bundle: true, format: 'iife', platform: 'node', write: false, logLevel: 'silent',
   alias: { '@jakal/input-profile': resolve('studio/input-profile.ts'), '@jakal/block-insertion': resolve('studio/block-insertion.ts'), '@jakal/file-actions': resolve('studio/file-actions.ts'), '@jakal/table-tools': resolve('studio/table-tools.ts') },
 });
@@ -26,7 +26,7 @@ function fixture() {
     inputHandler: { cursor, focus: () => focused++, getPosition: () => ({ sectionIndex: 2, paragraphIndex: 7, charOffset: 4 }), executeOperation: descriptor => { edits.push(descriptor); descriptor.operation(engine); } },
     wasm: {}, canvasView: null, eventBus: { on() {} }, documentState: { isDirty: () => true }, setChromeVisibility() {}, setThemeMode() {}, initPromise: Promise.resolve(),
   };
-  runInNewContext(bundled.outputFiles[0].text, { env, URLSearchParams, location: env.location });
+  runInNewContext(bundled.outputFiles[0].text, { env, document: env.document, URLSearchParams, location: env.location });
   return { definitions, handlers, messages, edits, cursor, focusCount: () => focused };
 }
 test('block command gates body context and uses the current caret in one snapshot operation', () => {

@@ -39,3 +39,15 @@
 .jakal-table-dialog footer { justify-content: flex-end; padding-top: 10px; }
 .jakal-table-dialog button[type=submit] { background: #2359c4; border-color: #2359c4; color: white; }
 .jakal-table-dialog button:disabled { opacity: .45; cursor: not-allowed; }
+.jakal-table-dialog [hidden], .jakal-table-layout[hidden] { display: none !important; }
+.jakal-nested-preview { padding: 18px; border: 2px solid #94a3b8; background: #f1f5f9; margin-bottom: 16px; }
+.jakal-nested-preview > div { box-sizing: border-box; padding: 14px 8px; border: 2px solid #2359c4; background: white; color: #2359c4; text-align: center; }
+.jakal-nested-width { display: grid; gap: 6px; margin-top: 14px; color: #526174; }
+.jakal-nested-width input { width: 90px; padding: 7px; border: 1px solid #b6c1d0; border-radius: 7px; font: inherit; }
+.jakal-table-layout { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; padding: 7px 12px; background: #eef4ff; border-bottom: 1px solid #cbd8f0; font: 12px/1.4 system-ui, sans-serif; color: #1e3a6e; }
+.jakal-table-layout strong { margin-right: 8px; }
+.jakal-table-layout button { padding: 5px 9px; border: 1px solid #c5d1e4; border-radius: 5px; background: white; color: #172033; cursor: pointer; font: inherit; }
+.jakal-table-layout button:disabled { opacity: .45; cursor: not-allowed; }
+.jakal-table-layout button:focus-visible { outline: 2px solid #2359c4; outline-offset: 2px; }
+.jakal-table-layout .jakal-table-insert-separate { margin-left: 8px; border-color: #7c9fdc; color: #174cae; }
+.jakal-table-layout small { color: #526174; }

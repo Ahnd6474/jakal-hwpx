@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { JSDOM } from 'jsdom';
-import { showTableDialog, installTableTools } from '../studio/table-tools.ts';
+import { showTableDialog, installTableTools, installTableLayout } from '../studio/table-tools.ts';
 
 function fixture(t) {
   const dom = new JSDOM('', { url: 'https://editor.test' });
@@ -17,17 +17,51 @@ function fixture(t) {
 test('table dialog applies presets, remembers sizes and returns focus on apply or cancel', t => {
   const { dom, submit } = fixture(t);
   const calls = []; let focuses = 0;
-  let dialog = showTableDialog(true, (...args) => calls.push(args), () => focuses++);
-  assert.match(dialog.textContent, /셀 안에 표 만들기/);
+  let dialog = showTableDialog('split', (...args) => calls.push(args), () => focuses++);
+  assert.match(dialog.textContent, /칸 나누기/);
   assert.equal(document.activeElement.name, 'rows');
   dialog.querySelector('[data-rows="5"]').click();
   assert.match(dialog.querySelector('[role="status"]').textContent, /5줄 × 2칸 · 10셀/);
   submit(dialog);
   assert.deepEqual(calls, [[5, 2]]); assert.equal(focuses, 1); assert.equal(dialog.isConnected, false);
-  dialog = showTableDialog(false, () => assert.fail('cancel must not apply'), () => focuses++);
+  dialog = showTableDialog('split', () => assert.fail('cancel must not apply'), () => focuses++);
   assert.equal(dialog.querySelector('[name="rows"]').value, '5');
   dialog.dispatchEvent(new dom.window.Event('cancel', { cancelable: true }));
   assert.equal(dialog.isConnected, false); assert.equal(focuses, 2);
+});
+
+test('a separate nested-table dialog shows an inset table and its own width', t => {
+  const { dom, submit } = fixture(t), calls = [];
+  const dialog = showTableDialog(true, (...args) => calls.push(args), () => {});
+  assert.match(dialog.querySelector('h2').textContent, /표 안에 새 표/);
+  assert.equal(dialog.querySelector('.jakal-table-presets').hidden, true);
+  assert.equal(dialog.querySelector('.jakal-nested-preview').hidden, false);
+  const width = dialog.querySelector('[name="width"]');
+  assert.equal(width.value, '75'); width.value = '60'; width.dispatchEvent(new dom.window.Event('input', { bubbles: true }));
+  assert.equal(dialog.querySelector('.jakal-nested-preview > div').style.width, '60%');
+  submit(dialog); assert.deepEqual(calls, [[2, 2, 60]]);
+});
+
+test('the contextual table layout keeps split/merge separate from nested insertion', t => {
+  fixture(t); document.body.innerHTML = '<header id="studio-header"></header>';
+  const commands = new Map([
+    ['table:cell-split', { canExecute: context => context.inTable }],
+    ['table:cell-merge', { canExecute: context => context.hasMultiCellSelection }],
+    ['table:create-nested', { canExecute: context => context.inTable }],
+  ]);
+  const listeners = new Map(), dispatched = [];
+  const context = { hasDocument: true, isEditable: true, inTable: false };
+  installTableLayout({ get: id => commands.get(id) }, { dispatch: id => { dispatched.push(id); return true; } },
+    { on: (event, handler) => listeners.set(event, handler) }, () => context);
+  const bar = document.querySelector('[aria-label="표 레이아웃"]');
+  assert.equal(bar.hidden, true);
+  context.inTable = true; listeners.get('cursor-cell-changed')();
+  assert.equal(bar.hidden, false);
+  const [split, merge, insert] = bar.querySelectorAll('button');
+  assert.equal(split.textContent, '칸 나누기'); assert.equal(merge.disabled, true);
+  context.hasMultiCellSelection = true; listeners.get('command-state-changed')();
+  split.click(); merge.click(); insert.click();
+  assert.deepEqual(dispatched, ['table:cell-split', 'table:cell-merge', 'table:create-nested']);
 });
 
 test('invalid dimensions stay blocked and a failed insertion keeps the dialog and error visible', t => {
@@ -65,4 +99,23 @@ test('the create command keeps a frozen cell path and uses one snapshot transact
   submit(document.querySelector('dialog'));
   assert.equal(operations.length, 1); assert.equal(operations[0].kind, 'snapshot');
   assert.equal(inserted[0][0].cellPath[0].cellIndex, 2);
+});
+
+test('the former size picker now splits the selected cell without creating a table', t => {
+  const { submit } = fixture(t);
+  const commands = new Map([['table:create', { id: 'table:create' }], ['table:cell-split', { id: 'table:cell-split' }]]);
+  const calls = [];
+  const position = { sectionIndex: 0, paragraphIndex: 0, charOffset: 0, parentParaIndex: 1, controlIndex: 2, cellIndex: 3, cellParaIndex: 0 };
+  const engine = { documentGeneration: 1, getCellInfo: () => ({ row: 1, col: 1 }),
+    splitTableCellInto: (...args) => { calls.push(args); return { ok: true }; },
+    createNestedTable: () => assert.fail('splitting a cell must not create a child table') };
+  const input = { getCursorPosition: () => position, hasMultiCellSelection: () => false, focus() {},
+    executeOperation: action => action.operation(engine) };
+  installTableTools({ get: id => commands.get(id), register: command => commands.set(command.id, command) }, () => input);
+  commands.get('table:cell-split').execute({ getInputHandler: () => input, wasm: engine });
+  const dialog = document.querySelector('dialog');
+  assert.equal(dialog.querySelector('h2').textContent, '칸 나누기');
+  assert.equal(dialog.querySelector('.jakal-nested-width').hidden, true);
+  dialog.querySelector('[data-rows="2"]').click(); submit(dialog);
+  assert.deepEqual(calls, [[0, 1, 2, 1, 1, 2, 2, false, false]]);
 });

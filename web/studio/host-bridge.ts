@@ -3,11 +3,12 @@
 import { installInputProfile } from '@jakal/input-profile';
 import { insertBlock } from '@jakal/block-insertion';
 import { installHostFileActions } from '@jakal/file-actions';
-import { installTableTools } from '@jakal/table-tools';
+import { installTableTools, installTableLayout } from '@jakal/table-tools';
 void initPromise.then(() => installInputProfile({ wasm, input: inputHandler, view: canvasView }));
 const jakalHost = window.parent !== window;
 if (jakalHost) installHostFileActions(registry, action => jakalPost('file-action', { action }));
 if (jakalHost) installTableTools(registry, () => inputHandler);
+if (jakalHost) void initPromise.then(() => installTableLayout(registry, dispatcher, eventBus, getContext));
 if (jakalHost) registry.register({
   id: 'jakal:insert-block', label: '텍스트 블록 삽입',
   canExecute: context => {

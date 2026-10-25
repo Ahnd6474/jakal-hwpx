@@ -75,13 +75,13 @@ await build({
       if (id.replaceAll('\\', '/').endsWith('/core/wasm-bridge.ts')) {
         const tableMethod = '  createTableEx(options: {';
         if (!code.includes(tableMethod)) throw new Error('Pinned table creation bridge changed');
-        code = `import { insertNestedTable, editNestedTable, type TablePosition } from '@jakal/nested-table';\n` + code.replace(tableMethod, `  editNestedTable(position: TablePosition, operation: string): TablePosition {
+        code = `import { insertNestedTable, editNestedTable, type TablePosition, type TableOptions, type StructureOptions } from '@jakal/nested-table';\n` + code.replace(tableMethod, `  editNestedTable(position: TablePosition, operation: string, options?: StructureOptions): TablePosition {
           if (!this.doc) throw new Error('문서가 로드되지 않았습니다');
-          return editNestedTable(this.doc, position, operation);
+          return editNestedTable(this.doc, position, operation, options);
         }
-        createNestedTable(position: TablePosition, rows: number, cols: number): TablePosition {
+        createNestedTable(position: TablePosition, rows: number, cols: number, options?: TableOptions): TablePosition {
           if (!this.doc) throw new Error('문서가 로드되지 않았습니다');
-          return insertNestedTable(this.doc, position, rows, cols);
+          return insertNestedTable(this.doc, position, rows, cols, options);
         }
 ${tableMethod}`);
         // Byte-only SDK exports must also reject reported content loss.

@@ -4,7 +4,9 @@ export type TablePosition = {
   parentParaIndex?: number; controlIndex?: number; cellIndex?: number; cellParaIndex?: number;
   cellPath?: CellPathEntry[];
 };
-export type TableOptions = { colWidths?: number[]; rowHeights?: number[]; treatAsChar?: boolean };
+export type TableOptions = { colWidths?: number[]; rowHeights?: number[]; treatAsChar?: boolean; widthPercent?: number };
+export type CellRange = { startRow: number; startCol: number; endRow: number; endCol: number };
+export type StructureOptions = { rows?: number; cols?: number; range?: CellRange };
 type NativeDocument = {
   getParagraphCount(section: number): number;
   getParagraphLength(section: number, paragraph: number): number;
@@ -18,12 +20,14 @@ type NativeDocument = {
   copySelection(section: number, first: number, start: number, last: number, end: number): string;
   copyControl(section: number, paragraph: number, path: string, control: number): string;
   createTableEx(options: string): string;
+  setTableProperties(section: number, paragraph: number, control: number, props: string): string;
   getCellPropertiesByPath(section: number, paragraph: number, path: string, cell: number): string;
   splitParagraphInCellByPath(section: number, paragraph: number, path: string, offset: number): string;
   pasteInternalInCellByPath(section: number, paragraph: number, path: string, offset: number): string;
   pasteControl(section: number, paragraph: number, offset: number): string;
   getCellInfoByPath(section: number, paragraph: number, path: string): string;
   getCellParagraphLengthByPath(section: number, paragraph: number, path: string): number;
+  resizeTableCellsByPath(section: number, paragraph: number, path: string, changes: string): string;
   getCursorModel(): string;
   getControls(): string;
   getCharIndexAtStreamPos(list: number, paragraph: number, position: number): string;
@@ -32,6 +36,9 @@ type NativeDocument = {
   insertTableColumn(section: number, paragraph: number, control: number, col: number, right: boolean): string;
   deleteTableRow(section: number, paragraph: number, control: number, row: number): string;
   deleteTableColumn(section: number, paragraph: number, control: number, col: number): string;
+  splitTableCellInto(section: number, paragraph: number, control: number, row: number, col: number, rows: number, cols: number, equal: boolean, mergeFirst: boolean): string;
+  splitTableCellsInRange(section: number, paragraph: number, control: number, startRow: number, startCol: number, endRow: number, endCol: number, rows: number, cols: number, equal: boolean): string;
+  mergeTableCells(section: number, paragraph: number, control: number, startRow: number, startCol: number, endRow: number, endCol: number): string;
   beginBatch(): string;
   endBatch(): string;
 };
@@ -110,17 +117,22 @@ export function insertNestedTable(
     throw new Error('칸 너비를 확인해 주세요.');
   }
   const total = requested.reduce((sum, width) => sum + width, 0);
-  const width = options.colWidths ? Math.min(total, available) : available;
+  const percent = options.widthPercent ?? 75;
+  if (!Number.isFinite(percent) || percent < 10 || percent > 100) throw new Error('표 너비를 10~100%로 입력하세요.');
+  const targetWidth = Math.max(cols, Math.floor(available * percent / 100));
+  const width = options.colWidths ? Math.min(total, targetWidth) : targetWidth;
   const colWidths = requested.map(value => Math.max(1, Math.floor(value / total * (width - cols)) + 1));
   if (options.rowHeights && (options.rowHeights.length !== rows || options.rowHeights.some(h => !Number.isSafeInteger(h) || h < 1 || h > 1_000_000))) {
     throw new Error('줄 높이를 확인해 주세요.');
   }
-  return withScratch(doc, section, (appendScratch, copy) => {
+  const cursor = withScratch(doc, section, (appendScratch, copy) => {
     const scratch = appendScratch();
     const table = checked(doc.createTableEx(JSON.stringify({
       sectionIdx: section, paraIdx: scratch, charOffset: 0, rowCount: rows, colCount: cols,
       treatAsChar: true, colWidths, ...(options.rowHeights ? { rowHeights: options.rowHeights } : {}),
     })));
+    checked(doc.setTableProperties(section, table.paraIdx, table.controlIdx,
+      JSON.stringify({ outerLeft: 141, outerRight: 141, outerTop: 141, outerBottom: 141 })));
     copy(table.paraIdx, '', table.controlIdx);
     // Give the new table its own paragraph, preserving text and controls on
     // either side and leaving a paragraph for exiting the table afterwards.
@@ -134,6 +146,16 @@ export function insertNestedTable(
       cellPath: [...path, { controlIndex: 0, cellIndex: 0, cellParaIndex: 0 }],
     };
   });
+  refreshTableLayout(doc, position);
+  return cursor;
+}
+
+function refreshTableLayout(doc: NativeDocument, position: TablePosition) {
+  // Clipboard edits refresh cell paragraphs but leave ancestor row measurements
+  // cached. A zero-size resize recomputes them without changing stored sizes.
+  const outer = tableCellPath(position).slice(0, 1);
+  checked(doc.resizeTableCellsByPath(position.sectionIndex, position.parentParaIndex!, JSON.stringify(outer),
+    JSON.stringify([{ cellIdx: outer[0].cellIndex, heightDelta: 0 }])));
 }
 
 export function parentTableCell(position: TablePosition): TablePosition {
@@ -146,8 +168,8 @@ export function parentTableCell(position: TablePosition): TablePosition {
 }
 
 /** Flat row/column APIs target the outer table; resolve the innermost cell list. */
-export function editNestedTable(doc: NativeDocument, position: TablePosition, operation: string): TablePosition {
-  if (!['insertRowAbove', 'insertRowBelow', 'insertColLeft', 'insertColRight', 'deleteRow', 'deleteCol'].includes(operation)) {
+export function editNestedTable(doc: NativeDocument, position: TablePosition, operation: string, options: StructureOptions = {}): TablePosition {
+  if (!['insertRowAbove', 'insertRowBelow', 'insertColLeft', 'insertColRight', 'deleteRow', 'deleteCol', 'splitCells', 'mergeCells'].includes(operation)) {
     throw new Error('지원하지 않는 표 편집입니다.');
   }
   const path = tableCellPath(position), model = JSON.parse(doc.getCursorModel());
@@ -170,7 +192,7 @@ export function editNestedTable(doc: NativeDocument, position: TablePosition, op
     throw new Error('이 표의 입력 위치를 확인하지 못했습니다. 표를 별도 문단에 놓고 다시 시도하세요.');
   }
   const offset = anchor ? JSON.parse(doc.getCharIndexAtStreamPos(list, paragraph, anchor.pos)).charIndex : 0;
-  return withScratch(doc, position.sectionIndex, (append, copy) => {
+  const cursor = withScratch(doc, position.sectionIndex, (append, copy) => {
     copy(position.parentParaIndex!, JSON.stringify(parentPath), target.controlIndex);
     const scratch = append(), table = checked(doc.pasteControl(position.sectionIndex, scratch, 0));
     const args = [position.sectionIndex, table.paraIdx, table.controlIdx] as const;
@@ -178,6 +200,19 @@ export function editNestedTable(doc: NativeDocument, position: TablePosition, op
     if (operation === 'insertColLeft' || operation === 'insertColRight') checked(doc.insertTableColumn(...args, info.col, operation === 'insertColRight'));
     if (operation === 'deleteRow') checked(doc.deleteTableRow(...args, info.row));
     if (operation === 'deleteCol') checked(doc.deleteTableColumn(...args, info.col));
+    if (operation === 'splitCells') {
+      if (![options.rows, options.cols].every(value => Number.isSafeInteger(value) && value! >= 1 && value! <= 100)
+        || options.rows! * options.cols! > 2500) throw new Error('나눌 줄과 칸 수를 확인하세요.');
+      if (options.range) {
+        const r = options.range;
+        checked(doc.splitTableCellsInRange(...args, r.startRow, r.startCol, r.endRow, r.endCol, options.rows!, options.cols!, false));
+      } else checked(doc.splitTableCellInto(...args, info.row, info.col, options.rows!, options.cols!, false, false));
+    }
+    if (operation === 'mergeCells') {
+      const r = options.range;
+      if (!r) throw new Error('합칠 칸을 먼저 선택하세요.');
+      checked(doc.mergeTableCells(...args, r.startRow, r.startCol, r.endRow, r.endCol));
+    }
     copy(table.paraIdx, '', table.controlIdx);
     checked(doc.deleteCellTableControlByPath(position.sectionIndex, position.parentParaIndex!, JSON.stringify(parentPath), target.controlIndex));
     checked(doc.pasteInternalInCellByPath(position.sectionIndex, position.parentParaIndex!, JSON.stringify(parentPath), offset));
@@ -190,4 +225,6 @@ export function editNestedTable(doc: NativeDocument, position: TablePosition, op
       parentParaIndex: position.parentParaIndex, controlIndex: path[0].controlIndex,
       cellIndex: path[0].cellIndex, cellParaIndex: path[0].cellParaIndex, cellPath: path };
   });
+  refreshTableLayout(doc, position);
+  return cursor;
 }

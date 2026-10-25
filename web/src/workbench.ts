@@ -11,6 +11,8 @@ export const taskGroups = [
 const hidden = new Set(['edit:document-history', 'edit:compare-documents', 'jakal:insert-block']);
 const searchAliases: Record<string, string> = {
   'table:create-nested': '중첩표 중첩 표 안에 표 내부 nested table',
+  'table:cell-split': '칸 나누기 셀 분할 줄 열 행 split',
+  'table:cell-merge': '칸 합치기 셀 병합 merge',
   'table:parent-cell': '상위 바깥 셀 나가기 중첩표 탈출',
   'table:insert-row-above': '행 추가 위', 'table:insert-row-below': '행 추가 아래',
   'table:insert-col-left': '열 추가 왼쪽', 'table:insert-col-right': '열 추가 오른쪽',

@@ -48,7 +48,8 @@ test('nested tables fit the cell, accept text, persist across export, undo and r
     assert.equal(dimensions(reloaded, third).colCount, 2);
     const inner = JSON.parse(reloaded.getCellPropertiesByPath(0, cursor.parentParaIndex, JSON.stringify(cursor.cellPath), 0));
     const outer = JSON.parse(reloaded.getCellProperties(0, position.parentParaIndex, position.controlIndex, 0));
-    assert.ok(inner.width * 3 <= outer.width - outer.paddingLeft - outer.paddingRight);
+    assert.ok(inner.width * 3 < (outer.width - outer.paddingLeft - outer.paddingRight) * .8,
+      'a separate inner table leaves visible space inside its parent cell');
     assert.ok(reloaded.getControls().includes('tbl'));
   } finally { reloaded.free(); }
   doc.restoreSnapshot(before);
@@ -56,6 +57,34 @@ test('nested tables fit the cell, accept text, persist across export, undo and r
   doc.restoreSnapshot(after);
   assert.deepEqual(exportBytes(doc), bytes);
   doc.discardSnapshot(before); doc.discardSnapshot(after);
+});
+
+test('cell split/merge changes the existing grid, while nested insertion adds a separate table', t => {
+  const { doc, position } = fixture(t);
+  const count = () => JSON.parse(doc.getControls()).filter(control => control.ctrlId === 'tbl').length;
+  const before = count(), args = [0, position.parentParaIndex, position.controlIndex];
+  doc.splitTableCellInto(...args, 0, 0, 1, 2, false, false);
+  assert.equal(count(), before);
+  assert.equal(JSON.parse(doc.getTableDimensions(...args)).cellCount, 5);
+  doc.mergeTableCells(...args, 0, 0, 0, 1);
+  assert.equal(count(), before);
+  assert.equal(JSON.parse(doc.getTableDimensions(...args)).cellCount, 4);
+  const grid = doc.getTableDimensions(...args);
+  let inner = insertNestedTable(doc, position, 2, 2, { widthPercent: 60 });
+  assert.equal(count(), before + 1);
+  assert.equal(doc.getTableDimensions(...args), grid);
+  const layouts = JSON.parse(doc.getPageControlLayout(0)).controls.filter(control => control.type === 'table');
+  const child = layouts.at(-1), parent = layouts.find(control => control.paraIdx === position.parentParaIndex && control.controlIdx === position.controlIndex);
+  const cell = parent.cells[0];
+  assert.ok(child.y >= cell.y && child.y + child.h <= cell.y + cell.h,
+    'the inserted table is visible inside its parent immediately, before saving or reloading');
+  inner = editNestedTable(doc, inner, 'splitCells', { rows: 1, cols: 2 });
+  assert.equal(dimensions(doc, inner).cellCount, 5);
+  assert.equal(count(), before + 1);
+  inner = editNestedTable(doc, inner, 'mergeCells', { range: { startRow: 0, startCol: 0, endRow: 0, endCol: 1 } });
+  assert.equal(dimensions(doc, inner).cellCount, 4);
+  assert.equal(doc.getTableDimensions(...args), grid);
+  exportBytes(doc);
 });
 
 test('inserting a table preserves a rich internal copy buffer', t => {
