@@ -4,16 +4,23 @@ export const commandGroups: Record<string, string> = { edit: '편집', format: '
 const outputCommands = new Set(['file:print', 'file:print-to-pdf']);
 export const taskGroups = [
   { id: 'insert', label: '내용 넣기', commands: ['table:create', 'insert:image', 'insert:equation', 'insert:symbols', 'insert:hyperlink', 'insert:footnote', 'insert:endnote', 'insert:textbox', 'insert:bookmark'] },
-  { id: 'table', label: '표 다듬기', commands: ['table:insert-row-above', 'table:insert-row-below', 'table:insert-col-left', 'table:insert-col-right', 'table:delete-row', 'table:delete-col', 'table:cell-merge', 'table:cell-split', 'table:cell-props', 'table:border-each', 'table:cell-height-equal', 'table:cell-width-equal', 'table:formula'] },
+  { id: 'table', label: '표 다듬기', commands: ['table:create', 'table:create-nested', 'table:parent-cell', 'table:insert-row-above', 'table:insert-row-below', 'table:insert-col-left', 'table:insert-col-right', 'table:delete-row', 'table:delete-col', 'table:cell-merge', 'table:cell-split', 'table:cell-props', 'table:border-each', 'table:cell-height-equal', 'table:cell-width-equal', 'table:formula'] },
   { id: 'layout', label: '쪽 구성', commands: ['page:setup', 'page:break', 'page:column-break', 'page:col-settings', 'page:header-create', 'page:footer-create', 'page:insert-field-pagenum', 'page:insert-field-totalpage', 'page:page-border', 'page:section-settings'] },
   { id: 'finish', label: '검토·출력', commands: ['edit:find', 'edit:find-replace', 'edit:goto', 'view:para-mark', 'view:ctrl-mark', 'file:print-to-pdf', 'file:print'] },
 ];
 const hidden = new Set(['edit:document-history', 'edit:compare-documents', 'jakal:insert-block']);
+const searchAliases: Record<string, string> = {
+  'table:create-nested': '중첩표 중첩 표 안에 표 내부 nested table',
+  'table:parent-cell': '상위 바깥 셀 나가기 중첩표 탈출',
+  'table:insert-row-above': '행 추가 위', 'table:insert-row-below': '행 추가 아래',
+  'table:insert-col-left': '열 추가 왼쪽', 'table:insert-col-right': '열 추가 오른쪽',
+  'table:delete-row': '행 삭제', 'table:delete-col': '열 삭제',
+};
 export function visibleCommands(commands: EditorCommand[], query: string, group: string) {
   const words = query.normalize('NFKC').toLocaleLowerCase().trim().split(/\s+/).filter(Boolean);
   return commands.filter(item => {
     const category = item.id.split(':')[0];
-    return !!commandGroups[category] && (category !== 'file' || outputCommands.has(item.id)) && !hidden.has(item.id) && (!group || category === group) && words.every(word => `${item.label} ${commandGroups[category]} ${item.id} ${item.shortcutLabel || ''}`.normalize('NFKC').toLocaleLowerCase().includes(word));
+    return !!commandGroups[category] && (category !== 'file' || outputCommands.has(item.id)) && !hidden.has(item.id) && (!group || category === group) && words.every(word => `${item.label} ${commandGroups[category]} ${item.id} ${item.shortcutLabel || ''} ${searchAliases[item.id] || ''}`.normalize('NFKC').toLocaleLowerCase().includes(word));
   }).sort((a, b) => Number(b.enabled) - Number(a.enabled));
 }
 

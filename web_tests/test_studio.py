@@ -40,6 +40,30 @@ def test_studio_roundtrip_preserves_original_and_saves_format_and_structure(clie
     assert reopened.sections[0].paragraphs()[0]._element.find("hp:run", NS).get("charPrIDRef") == style_id
 
 
+def test_studio_save_preserves_nested_tables_and_their_editable_cell_text(client, raw_document):
+    identifier = upload(client, raw_document)
+    document = HwpxDocument.from_bytes(raw_document)
+    outer = document.tables()[0]
+    inner = document.append_table(rows=2, columns=2, cell_texts=[["안쪽 표", "한글 😀"], ["수식 x²", "끝"]])
+    # Insert a real table control in the outer cell's own paragraph.
+    cell_run = outer.cell(0, 0).element.find("hp:subList/hp:p/hp:run", NS)
+    cell_run.append(inner.element)
+    inner.element.find("hp:pos", NS).set("treatAsChar", "1")
+    edited = document.compile()
+    response = save(client, identifier, edited)
+    assert response.status_code == 202
+    assert wait(client, response.json()["job_id"])["status"] == "completed"
+    base = f"/api/documents/{identifier}"
+    check = client.post(base + "/validations", json={"revision": 1}).json()
+    assert wait(client, check["job_id"])["status"] == "completed"
+    reopened = HwpxDocument.from_bytes(client.get(base + "/download?revision=1").content)
+    root = reopened.sections[0].root_element
+    nested = root.xpath(".//hp:tc/hp:subList/hp:p/hp:run/hp:tbl", namespaces=NS)
+    assert len(nested) == 1
+    assert nested[0].xpath(".//hp:t/text()", namespaces=NS) == ["안쪽 표", "한글 😀", "수식 x²", "끝"]
+    assert client.get(base + "/original").content == raw_document
+
+
 def test_studio_invalid_reference_does_not_publish_or_replace_source(client, raw_document):
     identifier = upload(client, raw_document)
     document = HwpxDocument.from_bytes(raw_document)

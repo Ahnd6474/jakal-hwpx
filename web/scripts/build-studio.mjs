@@ -35,10 +35,17 @@ await build({
     '@jakal/block-insertion': resolve(web, 'studio/block-insertion.ts'),
     '@jakal/character-dialog': resolve(web, 'studio/character-dialog.ts'),
     '@jakal/file-actions': resolve(web, 'studio/file-actions.ts'),
+    '@jakal/table-tools': resolve(web, 'studio/table-tools.ts'),
+    '@jakal/nested-table': resolve(web, 'studio/nested-table.ts'),
   } },
   plugins: [{
     name: 'jakal-studio-host', enforce: 'pre',
     transform(code, id) {
+      if (id.replaceAll('\\', '/').endsWith('/core/mutation-method-registry.ts')) {
+        const methods = "'createTable', 'createTableEx',";
+        if (!code.includes(methods)) throw new Error('Pinned table mutation registry changed');
+        return code.replace(methods, "'createTable', 'createTableEx', 'createNestedTable', 'editNestedTable',");
+      }
       if (id.replaceAll('\\', '/').endsWith('/ui/chrome-mode.ts')) return restoreHostFileCommands(code.replaceAll('\r\n', '\n'));
       if (id.replaceAll('\\', '/').endsWith('/command/commands/format.ts')) {
         code = code.replaceAll('\r\n', '\n');
@@ -66,6 +73,17 @@ await build({
         return code + '\n' + bridge;
       }
       if (id.replaceAll('\\', '/').endsWith('/core/wasm-bridge.ts')) {
+        const tableMethod = '  createTableEx(options: {';
+        if (!code.includes(tableMethod)) throw new Error('Pinned table creation bridge changed');
+        code = `import { insertNestedTable, editNestedTable, type TablePosition } from '@jakal/nested-table';\n` + code.replace(tableMethod, `  editNestedTable(position: TablePosition, operation: string): TablePosition {
+          if (!this.doc) throw new Error('문서가 로드되지 않았습니다');
+          return editNestedTable(this.doc, position, operation);
+        }
+        createNestedTable(position: TablePosition, rows: number, cols: number): TablePosition {
+          if (!this.doc) throw new Error('문서가 로드되지 않았습니다');
+          return insertNestedTable(this.doc, position, rows, cols);
+        }
+${tableMethod}`);
         // Byte-only SDK exports must also reject reported content loss.
         const fontSetter = 'scopedHostCanvasFont(String(value)) ?? substituteCssFontFamily(String(value))';
         if (!code.includes(fontSetter)) throw new Error('Pinned Canvas font setter changed');

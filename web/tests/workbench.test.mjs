@@ -16,6 +16,17 @@ test('tool search respects scope, context and multiple keywords', () => {
   assert.equal(visibleCommands(commands, '수식', 'table').length, 0);
   assert.deepEqual(visibleCommands(commands, '', '').map(x => x.id), ['insert:equation', 'format:bold', 'table:merge']);
 });
+test('table tools can be found using nested-table, row and column terminology', () => {
+  const tables = [
+    { id: 'table:create-nested', label: '셀 안에 표 만들기', enabled: true },
+    { id: 'table:parent-cell', label: '상위 셀로 이동', enabled: true },
+    { id: 'table:insert-row-below', label: '아래 줄 추가', enabled: true },
+    { id: 'table:insert-col-right', label: '오른쪽 칸 추가', enabled: true },
+  ];
+  for (const [query, id] of [['중첩 표', 'table:create-nested'], ['나가기', 'table:parent-cell'], ['행 추가', 'table:insert-row-below'], ['열 추가', 'table:insert-col-right']]) {
+    assert.equal(visibleCommands(tables, query, 'table')[0]?.id, id);
+  }
+});
 test('blocks preserve typed math, Korean and markup as plain text', () => {
   const text = 'ㄱ. x^2 < 3\r\nㄴ. <script>not executable</script> 😀';
   assert.equal(blockText('examples', text, false), '\n' + text.replace('\r\n', '\n'));
