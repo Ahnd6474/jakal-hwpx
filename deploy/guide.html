@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'"><title>Jakal · Docker로 로컬에서 확인하기</title><style>
+*{box-sizing:border-box}body{margin:0;background:#f5f6f7;color:#273744;font:15px/1.85 "맑은 고딕",system-ui,sans-serif}main{max-width:850px;margin:42px auto;padding:34px 40px;background:white;border:1px solid #e1e5e8;border-radius:6px}header{border-bottom:1px solid #e3e7ea;padding-bottom:22px;margin-bottom:28px}h1{font-size:26px;line-height:1.45;margin:0}h2{font-size:18px;margin:28px 0 12px}p{color:#61717e}code{font:13px/1.8 Consolas,monospace;background:#eef1f3;padding:3px 6px;border-radius:3px;overflow-wrap:anywhere}pre{overflow-x:auto;background:#f1f4f6;padding:15px;font:13px/1.9 Consolas,monospace;white-space:pre-wrap;overflow-wrap:anywhere}li{padding:5px 0}aside{padding:15px 20px;background:#f5f7f8;border-left:3px solid #8b9ba8;margin:20px 0}details{border-top:1px solid #e4e8eb;padding:13px 0}summary{cursor:pointer;font-weight:600}a{color:#365e7a}footer{font-size:12px;color:#75818c;margin-top:27px}@media(max-width:650px){main{margin:12px;padding:24px 20px}h1{font-size:23px}}
+</style></head><body><main>
+<header><h1>서버 없이 내 컴퓨터에서 확인하기</h1><p>Windows·macOS·Linux의 Docker 로컬 실행. 도메인이나 인증서를 준비할 필요가 없습니다.</p></header>
+<aside><strong>Windows라면 더 간단한 방법이 있습니다.</strong><br>Windows 실행 패키지 ZIP을 풀고 <code>시작.cmd</code> 또는 <code>Jakal.exe</code>를 실행하면 Docker·Python·Node.js 설치 없이 사용할 수 있습니다. 아래는 Docker가 있는 컴퓨터를 위한 대안입니다.</aside>
+<h2>1. 준비</h2><ol><li><strong>Docker Engine 28 이상과 Compose v2</strong>를 설치하고 실행해 두세요. Docker Desktop을 사용한다면 Linux 컨테이너 모드를 사용합니다.</li><li><strong>Jakal-Server ZIP 전체</strong>를 압축 해제하세요. 첫 실행에는 이미지·의존성을 내려받기 위한 인터넷 연결이 필요하며, 준비가 몇 분 걸릴 수 있습니다.</li></ol>
+<h2>2. 시작</h2><p><strong>Windows:</strong> 압축을 푼 폴더의 <code>StartLocal.cmd</code>를 더블클릭하세요. 준비가 끝나면 브라우저가 열립니다.</p><p><strong>macOS·Linux:</strong> 터미널에서 압축을 푼 폴더로 이동한 뒤 실행하세요.</p><pre>sh local.sh start</pre><p>소스 저장소에서 실행한다면 <code>sh deploy/local.sh start</code>를 사용합니다. 소스에서 시작할 때는 웹 화면도 처음에 함께 빌드합니다.</p>
+<h2>3. 브라우저에서 열기</h2><p><a href="http://127.0.0.1:18988/">http://127.0.0.1:18988/</a>로 접속하세요. 새 문서·샘플 또는 직접 올린 HWP·HWPX로 확인할 수 있습니다. 편집·검증·다운로드와 외부 도구 연결도 사용할 수 있습니다.</p>
+<h2>중지와 다시 시작</h2><p>Windows는 <code>StopLocal.cmd</code>로 중지하고 <code>StartLocal.cmd</code>로 다시 시작합니다. macOS·Linux는 다음 명령을 사용하세요.</p><pre>sh local.sh stop
+sh local.sh start</pre><p>중지해도 Docker의 문서 저장 볼륨은 유지됩니다. 업로드 문서는 기본 24시간 임시 보관되므로 필요한 결과는 다운로드해 별도로 보관하세요. 패키지를 다른 PC로 옮길 때에는 문서 파일도 따로 옮겨 다시 올립니다.</p>
+<h2>상태·로그 확인</h2><pre>sh local.sh status
+sh local.sh logs</pre><p>Windows PowerShell에서는 <code>.\local.ps1 -Action status</code> 또는 <code>.\local.ps1 -Action logs</code>를 사용합니다.</p>
+<h2>문제 해결</h2><details><summary>Docker에 연결할 수 없거나 버전 오류가 나옵니다</summary><p>Docker를 먼저 켜고 준비가 끝난 뒤 다시 실행하세요. <code>docker version</code>으로 서버 버전을, <code>docker compose version</code>으로 Compose v2를 확인할 수 있습니다. Engine 28 이상을 사용하세요.</p></details>
+<details><summary>18988번 포트가 이미 사용 중입니다</summary><p>다른 포트로 시작할 수 있습니다. 같은 포트 설정을 유지해 다시 실행하세요.</p><pre># macOS·Linux
+JAKAL_LOCAL_PORT=18989 sh local.sh start
+
+# Windows PowerShell
+$env:JAKAL_LOCAL_PORT='18989'
+.\local.ps1 start</pre><p>이때 주소는 <code>http://127.0.0.1:18989/</code>입니다.</p></details>
+<details><summary>Windows에서 PowerShell 스크립트 실행이 제한됩니다</summary><p>실행 정책을 변경하는 대신 패키지 폴더의 터미널에서 Docker 명령을 직접 사용할 수 있습니다.</p><pre>docker compose -p jakal-local -f compose.local.yaml up -d --build --wait --wait-timeout 240
+docker compose -p jakal-local -f compose.local.yaml stop</pre></details>
+<details><summary>네트워크 주소가 다른 Docker 작업과 충돌합니다</summary><p>로컬 구성의 주소를 함께 변경하세요. 예를 들어 macOS·Linux에서 다음과 같이 실행합니다.</p><pre>JAKAL_LOCAL_SUBNET=172.30.90.0/29 JAKAL_LOCAL_PROXY_ADDRESS=172.30.90.2 JAKAL_LOCAL_APP_ADDRESS=172.30.90.3 sh local.sh start</pre><p>기존 로컬 네트워크가 있다면 먼저 <code>docker compose -p jakal-local -f compose.local.yaml down</code>으로 정리한 뒤 새 주소로 시작하세요. <code>--volumes</code>를 추가하지 않으면 문서 저장 볼륨은 유지됩니다. 회사 네트워크와 겹치지 않는 주소를 선택합니다.</p></details>
+<details><summary>다른 사람에게 접속 주소를 보내고 싶습니다</summary><p><code>127.0.0.1</code>은 각자 자신의 컴퓨터를 가리킵니다. 다른 컴퓨터에는 패키지를 전달해 그 컴퓨터에서 실행하세요. 인터넷 공개 배포는 별도 서버와 도메인을 준비한 뒤 기존 <code>StartServer.cmd</code> 또는 <code>sh manage.sh start</code>를 사용합니다.</p></details>
+<footer>이 안내는 파일을 직접 열어 읽을 수 있습니다. 로컬 실행은 해당 PC에서만 접속하도록 구성되어 있으며, 기존 공개 배포 구성과 별도로 실행됩니다.</footer>
+</main></body></html>
