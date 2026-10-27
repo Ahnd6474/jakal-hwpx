@@ -24,6 +24,13 @@ const bridge = await readFile(resolve(web, 'studio/host-bridge.ts'), 'utf8');
 const css = await readFile(resolve(web, 'studio/jakal.css'), 'utf8');
 await build({
   configFile: false, root: resolve(source, 'rhwp-studio'), base: '/studio/', publicDir: false,
+  // PostCSS also sees @import-ed styles; Vite's transform hook does not.
+  css: { postcss: { plugins: [{
+    postcssPlugin: 'jakal-local-icon-sprites',
+    Declaration(declaration) {
+      declaration.value = declaration.value.replaceAll('url(/images/', 'url(/studio/images/');
+    },
+  }] } },
   define: { __APP_VERSION__: JSON.stringify('0.8.7'), __RHWP_DISABLE_EXTERNAL_WEBFONTS__: 'true', __RHWP_HWPCTRL__: 'false' },
   resolve: { alias: {
     '@': resolve(source, 'rhwp-studio/src'), '@wasm': resolve(web, 'node_modules/@rhwp/core'),
@@ -36,6 +43,7 @@ await build({
     '@jakal/character-dialog': resolve(web, 'studio/character-dialog.ts'),
     '@jakal/file-actions': resolve(web, 'studio/file-actions.ts'),
     '@jakal/table-tools': resolve(web, 'studio/table-tools.ts'),
+    '@jakal/object-layout': resolve(web, 'studio/object-layout.ts'),
     '@jakal/nested-table': resolve(web, 'studio/nested-table.ts'),
   } },
   plugins: [{

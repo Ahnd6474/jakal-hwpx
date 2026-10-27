@@ -175,30 +175,3 @@ export function installTableTools(registry: CommandRegistry, getInput: () => Inp
     } });
   }
 }
-
-export function installTableLayout(registry: CommandRegistry, dispatcher: { dispatch: (id: string) => boolean },
-  events: { on: (event: string, listener: () => void) => unknown }, getContext: () => EditorContext) {
-  const header = document.getElementById('studio-header');
-  if (!header) return;
-  const bar = document.createElement('section');
-  bar.className = 'jakal-table-layout'; bar.setAttribute('aria-label', '표 레이아웃');
-  const title = document.createElement('strong'); title.textContent = '표 레이아웃'; bar.append(title);
-  const buttons = new Map<string, HTMLButtonElement>();
-  for (const [id, label] of [['table:cell-split', '칸 나누기'], ['table:cell-merge', '칸 합치기'],
-    ['table:create-nested', '표 안에 새 표 넣기'], ['table:parent-cell', '상위 칸으로']]) {
-    const button = document.createElement('button'); button.type = 'button'; button.textContent = label;
-    if (id === 'table:create-nested') button.className = 'jakal-table-insert-separate';
-    button.addEventListener('mousedown', event => event.preventDefault());
-    button.addEventListener('click', () => { dispatcher.dispatch(id); update(); });
-    bar.append(button); buttons.set(id, button);
-  }
-  const hint = document.createElement('small'); hint.textContent = '칸 합치기: 합칠 칸을 먼저 선택'; bar.append(hint);
-  const update = () => {
-    const context = getContext();
-    bar.hidden = !(context.hasDocument && (context.inTable || context.inCellSelectionMode || context.inTableObjectSelection));
-    for (const [id, button] of buttons) button.disabled = !context.isEditable || context.isFormMode || !(registry.get(id)?.canExecute?.(context) ?? false);
-  };
-  header.append(bar);
-  for (const event of ['cursor-cell-changed', 'cursor-format-changed', 'selection-changed', 'command-state-changed', 'document-changed', 'table-object-selection-changed']) events.on(event, update);
-  update();
-}

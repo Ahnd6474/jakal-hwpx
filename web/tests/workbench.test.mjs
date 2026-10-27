@@ -33,6 +33,15 @@ test('blocks preserve typed math, Korean and markup as plain text', () => {
   assert.equal(blockText('choices', '① A\n② B\n', true), '\n① A    ② B\n');
   assert.equal(blockText('answer', '답안\n\n\n', false), '\n답안\n\n\n');
 });
+
+test('object layout and chart tools are discoverable with Korean terms', () => {
+  const objects = [{ id: 'view:object-layout', label: '개체 레이아웃 열기', enabled: true },
+    { id: 'insert:picture-props', label: '개체 속성', enabled: true },
+    { id: 'insert:chart-data-edit', label: '차트 데이터 편집', enabled: true }];
+  assert.equal(visibleCommands(objects, '이미지 탭', '')[0]?.id, 'view:object-layout');
+  assert.equal(visibleCommands(objects, '그림 여백', 'insert')[0]?.id, 'insert:picture-props');
+  assert.equal(visibleCommands(objects, '그래프 계열', '')[0]?.id, 'insert:chart-data-edit');
+});
 test('block size and control character gates reject malformed payloads', () => {
   for (const text of ['', '   ', 'x'.repeat(12001), '\u0000x', 'x\n'.repeat(121)]) assert.throws(() => blockText('question', text, false));
   assert.throws(() => blockText('unknown', 'text', false));

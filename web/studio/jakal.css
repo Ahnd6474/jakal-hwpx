@@ -39,15 +39,31 @@
 .jakal-table-dialog footer { justify-content: flex-end; padding-top: 10px; }
 .jakal-table-dialog button[type=submit] { background: #2359c4; border-color: #2359c4; color: white; }
 .jakal-table-dialog button:disabled { opacity: .45; cursor: not-allowed; }
-.jakal-table-dialog [hidden], .jakal-table-layout[hidden] { display: none !important; }
+.jakal-table-dialog [hidden] { display: none !important; }
 .jakal-nested-preview { padding: 18px; border: 2px solid #94a3b8; background: #f1f5f9; margin-bottom: 16px; }
 .jakal-nested-preview > div { box-sizing: border-box; padding: 14px 8px; border: 2px solid #2359c4; background: white; color: #2359c4; text-align: center; }
 .jakal-nested-width { display: grid; gap: 6px; margin-top: 14px; color: #526174; }
 .jakal-nested-width input { width: 90px; padding: 7px; border: 1px solid #b6c1d0; border-radius: 7px; font: inherit; }
-.jakal-table-layout { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; padding: 7px 12px; background: #eef4ff; border-bottom: 1px solid #cbd8f0; font: 12px/1.4 system-ui, sans-serif; color: #1e3a6e; }
-.jakal-table-layout strong { margin-right: 8px; }
-.jakal-table-layout button { padding: 5px 9px; border: 1px solid #c5d1e4; border-radius: 5px; background: white; color: #172033; cursor: pointer; font: inherit; }
-.jakal-table-layout button:disabled { opacity: .45; cursor: not-allowed; }
-.jakal-table-layout button:focus-visible { outline: 2px solid #2359c4; outline-offset: 2px; }
-.jakal-table-layout .jakal-table-insert-separate { margin-left: 8px; border-color: #7c9fdc; color: #174cae; }
-.jakal-table-layout small { color: #526174; }
+.jakal-object-layout [hidden], .jakal-object-layout[hidden] { display: none !important; }
+.jakal-layout-active #style-bar, .jakal-layout-active #icon-toolbar { display: none !important; }
+.jakal-object-layout { position: relative; border-bottom: 1px solid #c9d6eb; background: #f6f9ff; color: #203654; font: 12px/1.4 system-ui, sans-serif; }
+.jakal-layout-tabs[hidden] { display: none !important; }
+.jakal-layout-tabs { display: flex; flex: 0 0 auto; align-self: stretch; margin-left: 4px; padding: 0; }
+.jakal-object-layout button { font: inherit; cursor: pointer; }
+.jakal-layout-tabs [role=tab] { padding: 6px 12px; border: 0; border-bottom: 2px solid transparent; color: #23518f; background: #edf3fd; font: 600 12px/1.4 system-ui, sans-serif; white-space: nowrap; cursor: pointer; }
+.jakal-layout-tabs [aria-selected=true] { border-bottom-color: #2359c4; background: #e4edff; }
+.jakal-layout-collapse { position: absolute; right: 12px; top: 7px; border: 0; background: transparent; color: #52647e; padding: 3px 6px; }
+.jakal-layout-panel { display: flex; align-items: stretch; flex-wrap: wrap; gap: 10px; padding: 8px 60px 8px 12px; }
+.jakal-layout-group { display: flex; flex-direction: column; justify-content: space-between; gap: 5px; border-right: 1px solid #dae3f1; padding-right: 10px; }
+.jakal-layout-group > div { display: flex; gap: 4px; flex-wrap: wrap; }
+.jakal-layout-group button { padding: 6px 9px; border: 1px solid #cbd7e6; border-radius: 5px; background: white; color: #24374f; }
+.jakal-layout-group button:hover:enabled { background: #e8f0ff; border-color: #8caee2; }
+.jakal-layout-group button:disabled { opacity: .4; cursor: not-allowed; }
+.jakal-object-layout button:focus-visible, .jakal-layout-tab:focus-visible { outline: 2px solid #2359c4; outline-offset: -2px; }
+.jakal-layout-group small { color: #667991; text-align: center; font-size: 10px; }
+.jakal-layout-hint { flex-basis: 100%; margin: 0; color: #66758a; font-size: 11px; }
+@media (max-width: 760px) {
+  .jakal-layout-panel { flex-wrap: nowrap; overflow-x: auto; }
+  .jakal-layout-group { flex: 0 0 auto; max-width: 260px; }
+  .jakal-layout-hint { min-width: 160px; flex: 0 0 160px; align-self: center; }
+}

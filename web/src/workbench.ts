@@ -3,6 +3,7 @@ export const quickCommands = ['edit:undo', 'edit:redo', 'edit:find', 'edit:find-
 export const commandGroups: Record<string, string> = { edit: '편집', format: '글자·문단', insert: '삽입', table: '표', page: '쪽', view: '보기', field: '입력 필드', hyperlink: '링크', file: '인쇄', tool: '도구' };
 const outputCommands = new Set(['file:print', 'file:print-to-pdf']);
 export const taskGroups = [
+  { id: 'objects', label: '개체 레이아웃', commands: ['view:object-layout', 'table:cell-props', 'insert:picture-props', 'insert:chart-data-edit', 'insert:rotate-cw', 'insert:flip-horz'] },
   { id: 'insert', label: '내용 넣기', commands: ['table:create', 'insert:image', 'insert:equation', 'insert:symbols', 'insert:hyperlink', 'insert:footnote', 'insert:endnote', 'insert:textbox', 'insert:bookmark'] },
   { id: 'table', label: '표 다듬기', commands: ['table:create', 'table:create-nested', 'table:parent-cell', 'table:insert-row-above', 'table:insert-row-below', 'table:insert-col-left', 'table:insert-col-right', 'table:delete-row', 'table:delete-col', 'table:cell-merge', 'table:cell-split', 'table:cell-props', 'table:border-each', 'table:cell-height-equal', 'table:cell-width-equal', 'table:formula'] },
   { id: 'layout', label: '쪽 구성', commands: ['page:setup', 'page:break', 'page:column-break', 'page:col-settings', 'page:header-create', 'page:footer-create', 'page:insert-field-pagenum', 'page:insert-field-totalpage', 'page:page-border', 'page:section-settings'] },
@@ -10,6 +11,9 @@ export const taskGroups = [
 ];
 const hidden = new Set(['edit:document-history', 'edit:compare-documents', 'jakal:insert-block']);
 const searchAliases: Record<string, string> = {
+  'view:object-layout': '표 그림 이미지 차트 도형 레이아웃 탭 개체 속성 배치 크기 여백 layout',
+  'insert:picture-props': '그림 이미지 차트 도형 개체 속성 레이아웃 크기 위치 배치 여백',
+  'insert:chart-data-edit': '차트 그래프 데이터 계열 값 편집',
   'table:create-nested': '중첩표 중첩 표 안에 표 내부 nested table',
   'table:cell-split': '칸 나누기 셀 분할 줄 열 행 split',
   'table:cell-merge': '칸 합치기 셀 병합 merge',

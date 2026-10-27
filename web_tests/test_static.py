@@ -1,4 +1,8 @@
 import gzip
+import re
+from html.parser import HTMLParser
+from pathlib import Path
+from urllib.parse import unquote, urljoin, urlsplit
 
 import pytest
 from fastapi import FastAPI
@@ -82,3 +86,68 @@ def test_editor_toolbar_icons_and_page_icons_use_available_local_assets(client):
     assert "--ui-icon-sprite-url: url('/studio/images/icon_small_ko.svg')" in css
     for path in ['/studio/favicon.ico', '/studio/icons/icon-256.png', '/studio/images/icon_small_ko.svg', '/studio/print.html']:
         assert client.get(path).status_code == 200
+
+
+def test_built_frontend_asset_references_and_binary_files_are_valid():
+    """Check emitted paths, including CSS fallbacks and lazy JS/worker chunks."""
+    root = Path(__file__).resolve().parents[1] / 'web' / 'dist'
+    assert (root / 'index.html').is_file(), 'Run npm run build in web first'
+    references = []
+
+    class AssetLinks(HTMLParser):
+        def handle_starttag(self, tag, attrs):
+            attrs = dict(attrs)
+            if tag in {'script', 'img', 'iframe', 'source'} and attrs.get('src'):
+                references.append((base, attrs['src']))
+            if tag == 'link' and attrs.get('href'):
+                references.append((base, attrs['href']))
+
+    for path in root.rglob('*'):
+        if not path.is_file():
+            continue
+        base = '/' + path.relative_to(root).as_posix()
+        if path.suffix == '.html':
+            AssetLinks().feed(path.read_text(encoding='utf-8'))
+        elif path.suffix == '.css':
+            references.extend((base, url) for url in re.findall(r'''url\(\s*["']?([^\s"')]+)''', path.read_text(encoding='utf-8')))
+        elif path.suffix == '.js':
+            # Vite emits imports, new URL worker/WASM paths and preload lists
+            # as literal relative paths. Ignore dynamic strings and external URLs.
+            source = path.read_text(encoding='utf-8')
+            references.extend((base, url) for url in re.findall(
+                r'''["']((?:\./|\.\./|/(?:assets|studio)/)[^\s"'`{}]+\.(?:js|css|wasm|woff2?|ttf|otf))["'](?!\s*:)''', source))
+            # Font catalogs resolve against the editor document, not its JS
+            # chunk. WASM import-map property keys above are not network URLs.
+            document_base = '/studio/' if base.startswith('/studio/') else '/'
+            references.extend((document_base, url) for url in re.findall(
+                r'''["'](fonts/[^\s"']+\.(?:woff2?|ttf|otf))["']''', source))
+        elif path.suffix == '.gz':
+            original = path.with_suffix('')
+            assert original.is_file(), f'Orphan gzip asset: {path}'
+            assert gzip.decompress(path.read_bytes()) == original.read_bytes(), f'Stale gzip asset: {path}'
+        elif path.suffix == '.wasm':
+            assert path.read_bytes()[:8] == b'\0asm\x01\0\0\0', f'Invalid WASM asset: {path}'
+        elif path.suffix in {'.woff', '.woff2', '.ttf', '.otf'}:
+            assert path.read_bytes()[:4] in {b'wOFF', b'wOF2', b'OTTO', b'\0\x01\0\0', b'ttcf'}, f'Invalid font asset: {path}'
+
+    missing = []
+    for base, reference in references:
+        if reference.startswith(('data:', 'http:', 'https:', '//', '#')):
+            continue
+        resolved = unquote(urlsplit(urljoin(base, reference)).path)
+        target = root / resolved.lstrip('/')
+        if not target.is_file() and not (target / 'index.html').is_file():
+            missing.append((base, reference, resolved))
+    assert not missing, f'Broken frontend asset references: {missing}'
+
+
+def test_standalone_editor_sprites_resolve_for_both_themes(client):
+    root = Path(__file__).resolve().parents[1] / 'web' / 'dist' / 'studio' / 'assets'
+    css = '\n'.join(path.read_text(encoding='utf-8') for path in root.glob('*.css'))
+    sprites = re.findall(r'url\((/[^)]+icon_small_ko(?:_dark)?\.svg)\)', css)
+    assert set(sprites) == {'/studio/images/icon_small_ko.svg', '/studio/images/icon_small_ko_dark.svg'}
+    for url in sprites:
+        response = client.get(url)
+        assert response.status_code == 200
+        assert response.headers['content-type'].startswith('image/svg+xml')
+        assert b'<svg' in response.content

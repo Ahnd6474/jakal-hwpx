@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { JSDOM } from 'jsdom';
-import { showTableDialog, installTableTools, installTableLayout } from '../studio/table-tools.ts';
+import { showTableDialog, installTableTools } from '../studio/table-tools.ts';
 
 function fixture(t) {
   const dom = new JSDOM('', { url: 'https://editor.test' });
@@ -40,28 +40,6 @@ test('a separate nested-table dialog shows an inset table and its own width', t 
   assert.equal(width.value, '75'); width.value = '60'; width.dispatchEvent(new dom.window.Event('input', { bubbles: true }));
   assert.equal(dialog.querySelector('.jakal-nested-preview > div').style.width, '60%');
   submit(dialog); assert.deepEqual(calls, [[2, 2, 60]]);
-});
-
-test('the contextual table layout keeps split/merge separate from nested insertion', t => {
-  fixture(t); document.body.innerHTML = '<header id="studio-header"></header>';
-  const commands = new Map([
-    ['table:cell-split', { canExecute: context => context.inTable }],
-    ['table:cell-merge', { canExecute: context => context.hasMultiCellSelection }],
-    ['table:create-nested', { canExecute: context => context.inTable }],
-  ]);
-  const listeners = new Map(), dispatched = [];
-  const context = { hasDocument: true, isEditable: true, inTable: false };
-  installTableLayout({ get: id => commands.get(id) }, { dispatch: id => { dispatched.push(id); return true; } },
-    { on: (event, handler) => listeners.set(event, handler) }, () => context);
-  const bar = document.querySelector('[aria-label="표 레이아웃"]');
-  assert.equal(bar.hidden, true);
-  context.inTable = true; listeners.get('cursor-cell-changed')();
-  assert.equal(bar.hidden, false);
-  const [split, merge, insert] = bar.querySelectorAll('button');
-  assert.equal(split.textContent, '칸 나누기'); assert.equal(merge.disabled, true);
-  context.hasMultiCellSelection = true; listeners.get('command-state-changed')();
-  split.click(); merge.click(); insert.click();
-  assert.deepEqual(dispatched, ['table:cell-split', 'table:cell-merge', 'table:create-nested']);
 });
 
 test('invalid dimensions stay blocked and a failed insertion keeps the dialog and error visible', t => {
