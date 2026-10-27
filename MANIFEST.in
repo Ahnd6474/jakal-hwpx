@@ -1,5 +1,4 @@
 include LICENSE
-include SECURITY.md
 include THIRD_PARTY_NOTICES.md
 include README.md
 include HWPX_MODULE.md
@@ -8,8 +7,3 @@ include STABILITY_CONTRACT.md
 include stability_contract.json
 recursive-include docs *.md *.svg
 recursive-include src/jakal_hwpx py.typed
-global-exclude .env .env.local .env.production *.sqlite *.sqlite3 *.sqlite3-* *.pem *.key
-prune .web-data
-prune .web-test-data
-prune uploads
-prune private-uploads

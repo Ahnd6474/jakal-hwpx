@@ -187,7 +187,6 @@ from .xmlnode import HwpxXmlNode
 
 __version__ = "1.0"
 
-
 _LAZY_EXPORTS = {
     "default_hwp_script_path": ("jakal_hwpx.hwp2py", "default_hwp_script_path"),
     "default_script_path": ("jakal_hwpx.hwpx2py", "default_script_path"),
@@ -360,7 +359,6 @@ __all__ = [
     "Table",
     "TableCell",
     "TableCellXml",
-    "TableCell",
     "TableXml",
     "TypedRecord",
     "UnknownRecord",

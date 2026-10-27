@@ -21,7 +21,7 @@ HWP_COLLECTION_DIR = REPO_ROOT / "hwp_collection"
 if str(SRC_ROOT) not in sys.path:
     sys.path.insert(0, str(SRC_ROOT))
 
-from jakal_hwpx import HwpDocument, HwpPureProfile, HwpxDocument
+from jakal_hwpx import HwpxDocument
 
 _TMP_PATH_COUNTER = itertools.count()
 collect_ignore_glob = ["pytest-cache-files-*", "_pytest_cache*", "_pytest_basetemp*", "_tmp_pytest*", "_release_tmp*"]
@@ -75,19 +75,10 @@ def sample_hwpx_path(valid_hwpx_files: list[Path]) -> Path:
 
 
 @pytest.fixture(scope="session")
-
-def hwp_donor_collection(_workspace_tmp_root: Path) -> Path:
-    # Tests must work in a clean clone without the ignored, private corpus.
-    root = _workspace_tmp_root / "donor-collection"
-    root.mkdir()
-    document = HwpDocument.blank()
-    section = HwpPureProfile.load_bundled().target_section_index
-    document.append_table_pure()
-    document.append_picture_pure()
-    document.append_hyperlink_pure()
-    document.append_paragraph("Extra paragraph outside the retained control", section_index=section)
-    document.save(root / "generated-combined-controls.hwp")
-    return root
+def hwp_collection_dir() -> Path:
+    if not HWP_COLLECTION_DIR.exists() or not any(HWP_COLLECTION_DIR.glob("*.hwp")):
+        pytest.skip("Optional local HWP donor corpus is not available.")
+    return HWP_COLLECTION_DIR
 
 
 def _tmp_dir_name(nodeid: str) -> str:

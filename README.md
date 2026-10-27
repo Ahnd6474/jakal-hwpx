@@ -144,18 +144,6 @@ python scripts/check_release.py --profile release
 
 ## Documentation
 
-### Local web workspace
-
-An optional React/FastAPI app supports native HWP 5 and HWPX upload, paragraph and
-table-cell editing, validation, and same-format download. Advanced settings add
-protected terms, batch replacement, task notes, and strict validation.
-Documents open in a read-only page viewer with equations and original layout;
-tables and charts/images have separate views. The browser renderer may differ
-from Hancom for unsupported objects or fonts.
-On Windows, run `scripts/start_web.ps1 -Install`, then open
-`http://127.0.0.1:8000`. See [docs/web-workspace.md](docs/web-workspace.md) for setup,
-supported operations, storage, and deployment limits.
-
 - [HWPX_MODULE.md](https://github.com/Ahnd6474/jakal-hwpx/blob/main/HWPX_MODULE.md): public module and API index
 - [docs/README.md](https://github.com/Ahnd6474/jakal-hwpx/blob/main/docs/README.md): docs directory index
 - [docs/hancom-document.md](https://github.com/Ahnd6474/jakal-hwpx/blob/main/docs/hancom-document.md): `HancomDocument`

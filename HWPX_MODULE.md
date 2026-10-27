@@ -20,7 +20,7 @@ from jakal_hwpx import HancomDocument, HwpxDocument, HwpDocument
 Direct submodule imports still work, but the root import path is the documented public entry point.
 
 ## Main layers
- 
+
 | Layer | Primary objects | Use it for |
 |---|---|---|
 | Format-neutral model | `HancomDocument`, `HancomSection`, block dataclasses | authoring, conversion, roundtrip-safe document workflows |
