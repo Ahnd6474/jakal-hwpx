@@ -191,7 +191,7 @@ from .parts import (
 )
 from .xmlnode import HwpxXmlNode
 
-__version__ = "1.0"
+__version__ = "1.1.0b1"
 
 _LAZY_EXPORTS = {
     "WordDocument": ("jakal_hwpx.addons.docx", "WordDocument"),

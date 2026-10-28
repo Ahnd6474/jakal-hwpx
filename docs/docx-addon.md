@@ -1,7 +1,9 @@
-# DOCX addon
+# DOCX addon (beta)
 
 DOCX 지원은 `jakal-hwpx`에 포함되는 선택 설치 addon입니다. 본체와 같은 버전의
 wheel/sdist로 배포하며, `docx` extra로 Word 백엔드 의존성을 설치합니다.
+`1.1.0b1`에서는 베타 API로 제공되며, 정식 `1.1.0` 전까지 피드백에 따라 동작과
+문서 변환 충실도 정책이 조정될 수 있습니다.
 
 ```sh
 pip install "jakal-hwpx[docx]"

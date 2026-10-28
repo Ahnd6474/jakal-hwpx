@@ -5,7 +5,7 @@
 The package exposes a shared document API and format-specific implementations:
 
 - `Document`: the shared document API (`HancomDocument` remains a compatibility alias)
-- DOCX addon `WordDocument(Document)`: retains Word details and dispatches shared edits to a Word backend
+- Beta DOCX addon `WordDocument(Document)`: retains Word details and dispatches shared edits to a Word backend
 - `HwpxDocument`: direct HWPX package and XML editing
 - `HwpDocument`: direct native HWP object and binary editing
 
@@ -58,12 +58,14 @@ doc.append_paragraph("Review complete")
 doc.save("build/output.hwpx")
 ```
 
-### DOCX addon
+### DOCX addon (beta)
 
 Install the bundled DOCX addon with `pip install "jakal-hwpx[docx]"`.
 Its implementation lives in `jakal_hwpx.addons.docx` and shares the same release
 as the core library. The default HWP/HWPX installation does not require python-docx;
 the addon and its backend load only when requested.
+The DOCX surface is released as a beta API in `1.1.0b1`; behavior and fidelity may
+change based on feedback before the stable `1.1.0` release.
 `Document.open("input.docx")` returns a `WordDocument`, which retains the complete
 original DOCX package alongside its common model view.
 
