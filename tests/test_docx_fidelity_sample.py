@@ -13,7 +13,7 @@ SOURCE = Path(__file__).resolve().parents[1] / "examples" / "samples" / "docx" /
 def test_representative_docx_retains_table_colors_borders_and_simple_equation(tmp_path: Path) -> None:
     source = Document.open(SOURCE)
     assert any("automatic numbering" in warning for warning in source.import_warnings)
-    assert any("first-page" in warning for warning in source.import_warnings)
+    assert any(block.apply_page_type == "FIRST" for block in source.sections[0].header_footer_blocks)
     assert not any("cell shading" in warning for warning in source.import_warnings)
     assert not any("Word equations" in warning for warning in source.import_warnings)
     assert source.save(tmp_path / "copy.docx").read_bytes() == SOURCE.read_bytes()

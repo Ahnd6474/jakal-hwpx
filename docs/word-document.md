@@ -2,13 +2,15 @@
 
 `Document`는 공통 문서 클래스이고 `WordDocument(Document)`는 Word 전용 구현입니다.
 기존 `HancomDocument`는 `Document`의 호환 별칭입니다.
+Word 구현은 함께 배포하는 [DOCX addon](./docx-addon.md)에 있습니다.
 
 ```bash
 pip install -e ".[docx]"
 ```
 
 ```python
-from jakal_hwpx import Document, WordDocument
+from jakal_hwpx import Document
+from jakal_hwpx.addons.docx import WordDocument
 
 doc = Document.open("input.docx")
 assert isinstance(doc, WordDocument)
@@ -60,9 +62,10 @@ Word 전용 요소는 변환 시 `UserWarning`으로 알립니다. `import_warni
 HWPX 경로에서는 표 셀과 머리말·꼬리말의 글자별 서식, 링크, 그림, 중첩 표를
 함께 변환합니다. 기본 표 스타일의 셀 여백과 정렬도 반영하며, 탭 위치·채움선과
 문단 스타일 이름, 생성·수정 시각도 왕복 변환합니다.
-직접 지정한 표 테두리·셀 음영과 선형 수식·분수·위/아래 첨자·근호를 변환합니다. 자동 번호·글머리표는
-표시 문자를 정적 텍스트로 옮기므로 편집 후 자동 갱신되지 않습니다.
-첫 페이지 전용 머리말·꼬리말, 각주 등은 현재 손실될 수 있습니다. 지원하지 않는
+직접 지정한 표 테두리·셀 음영과 선형 수식·분수·위/아래 첨자·근호를 변환합니다.
+HWPX 목록은 표시값과 목록 정의를 누름틀로 보존하고 DOCX로 돌아오면 자동 목록으로
+복원합니다. 첫 페이지 전용 머리말·꼬리말은 고정 글상자로 표시한 뒤 Word 영역으로
+복원합니다. 각주·미주와 본문/주석 내부 참조번호의 개별 서식도 유지합니다. 지원하지 않는
 수식 구조는 텍스트로 평탄화하지 않고 HWPX 변환을 거부합니다. 원본 DOCX 저장은
 이 경우에도 원본 수식을 보존합니다. HWP 출력의 셀 내부 개체 보존은 HWPX 경로와 다릅니다.
 재현 검사 문서는 [DOCX 변환 재현 기준](./docx-fidelity-benchmark.md)을 참고하세요.
@@ -169,3 +172,5 @@ Word와 한컴 간 화면 배치 동일성을 보장하지 않습니다.
 자동 회귀 검증은 `tests/test_word_document.py`, `tests/test_docx_preservation.py`,
 `tests/test_docx_import.py`에서 공통 메서드의 Word 연결, 원본 패키지/주석/수식 보존,
 지원하지 않는 수정의 거부와 파이썬 기본 변환을 확인합니다.
+흰 배경을 제외한 표시 영역과 글자 좌표·크기를 비교한 최신 결과는
+[참조번호 서식 보존 검증](./docx-fidelity-benchmark.md#참조번호-서식-보존-수정-후-검증)을 참고하세요.

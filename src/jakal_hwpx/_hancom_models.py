@@ -292,6 +292,10 @@ class Note:
     text: str
     number: int | None = None
     nested_blocks: list[object] = field(default_factory=list)
+    # Effective, self-contained Word rPr for the body reference and note marker.
+    # These differ from the surrounding note text and from each other.
+    reference_run_properties: str | None = None
+    marker_run_properties: str | None = None
 
     def set_text(self, value: str) -> None:
         self.text = value

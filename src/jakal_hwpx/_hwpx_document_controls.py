@@ -559,6 +559,8 @@ class HwpxDocumentControlMixin(HwpxDocumentGraphicMixin, HwpxDocumentFieldMixin)
         node = etree.Element(qname("hp", kind))
         node.set("num", str(number))
         node.set("numType", number_type)
+        if kind == "autoNum":
+            etree.SubElement(node, qname("hp", "autoNumFormat"), type="DIGIT", userChar="", prefixChar="", suffixChar="", supscript="0")
         section = self._append_control(section_index, paragraph_index, node, char_pr_id=char_pr_id)
         return AutoNumberXml(self, section, node)
 

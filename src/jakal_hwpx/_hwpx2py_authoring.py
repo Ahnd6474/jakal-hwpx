@@ -200,7 +200,9 @@ def _emit_authoring_block(lines: list[str], block: object, section_index: int, *
         return
 
     if isinstance(block, Note):
-        kwargs = _kwargs([section_kw, _kw("kind", block.kind, default="footNote"), _kw("number", block.number)])
+        kwargs = _kwargs([section_kw, _kw("kind", block.kind, default="footNote"), _kw("number", block.number),
+                          _kw("reference_run_properties", block.reference_run_properties),
+                          _kw("marker_run_properties", block.marker_run_properties)])
         suffix = f", {kwargs}" if kwargs else ""
         _line(lines, f"block = note(doc, {_py(block.text)}{suffix})", indent=1)
         _emit_source_paragraph_index(lines, block)

@@ -1,7 +1,10 @@
+from typing import TYPE_CHECKING
+
 from .bridge import HwpHwpxBridge
 from .hancom_converter import HancomOfficeConverter
 from .shared_document import Document
-from .word_document import WordDocument
+if TYPE_CHECKING:
+    from .addons.docx import WordDocument
 from .document import DocumentMetadata, HwpxDocument
 from .hancom_document import (
     AutoNumber,
@@ -191,6 +194,7 @@ from .xmlnode import HwpxXmlNode
 __version__ = "1.0"
 
 _LAZY_EXPORTS = {
+    "WordDocument": ("jakal_hwpx.addons.docx", "WordDocument"),
     "default_hwp_script_path": ("jakal_hwpx.hwp2py", "default_hwp_script_path"),
     "default_script_path": ("jakal_hwpx.hwpx2py", "default_script_path"),
     "generate_hwp_script": ("jakal_hwpx.hwp2py", "generate_hwp_script"),

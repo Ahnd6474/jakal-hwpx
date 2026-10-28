@@ -215,8 +215,8 @@ class Document:
         Unsupported features are reported through UserWarning and import_warnings.
         The original DOCX package is retained for format-preserving DOCX output.
         """
-        from ._hancom_from_docx import populate_from_docx
-        from .word_document import WordDocument
+        from .addons.docx.reader import populate_from_docx
+        from .addons.docx import WordDocument
 
         factory = WordDocument if cls is Document else cls
         instance = factory(sections=[], source_format="docx", converter=converter)
@@ -544,9 +544,12 @@ class Document:
         kind: str = "footNote",
         number: int | None = None,
         section_index: int = 0,
+        reference_run_properties: str | None = None,
+        marker_run_properties: str | None = None,
     ) -> Note:
         section = self._ensure_section(section_index)
-        block = Note(kind=kind, text=text, number=number)
+        block = Note(kind=kind, text=text, number=number,
+                     reference_run_properties=reference_run_properties, marker_run_properties=marker_run_properties)
         section.blocks.append(block)
         return block
 
@@ -1013,7 +1016,7 @@ class Document:
         The default path is portable Python. An explicitly supplied converter
         receives a current HWPX snapshot and the ``DOCX`` output format.
         """
-        from ._hancom_to_docx import build_docx
+        from .addons.docx.writer import build_docx
 
         effective_converter = converter or self._converter
         directory = self._ensure_temp_dir()
@@ -1103,6 +1106,13 @@ class Document:
             header_written = False
             footer_written = False
             for block in section.header_footer_blocks:
+                if block.apply_page_type == "FIRST":
+                    if block.nested_blocks:
+                        import warnings
+
+                        warnings.warn("HWP export: first-page stories retain their text in a page-relative shape; use HWPX or an explicit native converter for rich story content.", UserWarning, stacklevel=2)
+                    _append_hancom_block_to_hwp(document, _first_page_story_shape(block, section.settings), section_index=section_index)
+                    continue
                 if block.kind == "header" and not header_written:
                     header = document.append_header(block.text, apply_page_type=block.apply_page_type, section_index=section_index)
                     if header is not None and block.nested_blocks and hasattr(header, "set_nested_blocks"):
@@ -1116,7 +1126,7 @@ class Document:
             binary_document = document.binary_document()
             batch_active = False
             try:
-                for block in section.blocks:
+                for block in _hwp_effect_blocks(section.blocks):
                     uses_direct_section_records = isinstance(block, (Table, Picture, Hyperlink))
                     if uses_direct_section_records and batch_active:
                         binary_document.end_section_model_batch()
@@ -1172,11 +1182,43 @@ def _extract_hwp_section(section) -> HancomSection:
             blocks.extend(_extract_supported_nested_hwp_blocks(paragraph_controls))
             continue
         blocks.extend(_extract_hwp_paragraph_blocks(paragraph, paragraph_controls))
+    _restore_first_page_stories(blocks, header_footer_blocks)
     return HancomSection(
         settings=_extract_hwp_section_settings(section),
         header_footer_blocks=header_footer_blocks,
         blocks=blocks,
     )
+
+
+def _hwp_effect_blocks(blocks: list[HancomBlock]):
+    """The binary HWP writer uses displayed text for portable Word fields."""
+    from copy import deepcopy
+
+    label = ""
+    for position, block in enumerate(blocks):
+        following = blocks[position + 1] if position + 1 < len(blocks) else None
+        if _is_owned_text_shadow_paragraph(block, following):
+            continue
+        if isinstance(block, Field) and block.field_type == "JAKAL_LIST_LABEL":
+            label = block.display_text or ""
+            continue
+        if isinstance(block, Field) and "WordInstruction" in block.parameters:
+            yield Paragraph(block.display_text or "")
+            continue
+        if label and isinstance(block, Paragraph):
+            if not block.text:
+                continue
+            copied = deepcopy(block)
+            copied.text = label + copied.text
+            label = ""
+            yield copied
+        else:
+            if label:
+                yield Paragraph(label)
+                label = ""
+            yield block
+    if label:
+        yield Paragraph(label)
 
 
 def _extract_hwp_paragraph_blocks(paragraph, controls: list[object]) -> list[HancomBlock]:
@@ -2262,6 +2304,7 @@ def _extract_hwpx_section(section) -> HancomSection:
         if not paragraph_blocks and not _hwpx_paragraph_has_header_footer(paragraph):
             paragraph_blocks.append(_mark_hwpx_source_paragraph(_build_hwpx_paragraph_block(paragraph, ""), paragraph_index))
         blocks.extend(paragraph_blocks)
+    _restore_first_page_stories(blocks, header_footer_blocks)
     return HancomSection(settings=section_settings, header_footer_blocks=header_footer_blocks, blocks=blocks)
 
 
@@ -2542,21 +2585,32 @@ def _extract_hwpx_run_node(section, node: etree._Element) -> HancomBlock | list[
         field = _build_field_wrapper(section, node)
         if (field.field_type or "").upper() == "HYPERLINK":
             result = Hyperlink(target=field.hyperlink_target or "", display_text=field.display_text or None)
-            runs = list(node.xpath("ancestor::hp:p[1]/hp:run", namespaces=NS))
-            begin = node.xpath("ancestor::hp:run[1]", namespaces=NS)[0]
-            endings = node.xpath("ancestor::hp:p[1]//hp:fieldEnd[@beginIDRef=$id]/ancestor::hp:run[1]", namespaces=NS, id=field.control_id)
-            if endings and begin in runs and endings[0] in runs:
-                styled = [Paragraph("".join(_text_node_plain_text(text) for text in run.xpath("./hp:t", namespaces=NS)), char_pr_id=run.get("charPrIDRef"))
-                          for run in runs[runs.index(begin) + 1:runs.index(endings[0])]]
-                setattr(result, "_docx_hyperlink_runs", (result.display_text, styled))
-            return result
-        return _extract_field(field)
+        else:
+            result = _extract_field(field)
+        if isinstance(result, (Hyperlink, Field)):
+            styled = [Paragraph(_text_node_plain_text(text), char_pr_id=text.getparent().get("charPrIDRef")) for text in field._display_text_nodes()]
+            setattr(result, "_docx_hyperlink_runs", (result.display_text, styled))
+        return result
     if local_name in {"checkBtn", "radioBtn", "btn", "edit", "comboBox", "listBox", "scrollBar"}:
         return _extract_hwpx_form(_build_form_wrapper(section, node))
     if local_name in {"autoNum", "newNum"}:
-        return _extract_auto_number(_build_auto_number_wrapper(section, node))
+        number = _extract_auto_number(_build_auto_number_wrapper(section, node))
+        runs = node.xpath("ancestor::hp:run[1]", namespaces=NS)
+        if runs:
+            setattr(number, "_docx_char_pr_id", runs[0].get("charPrIDRef"))
+        formats = node.xpath("./hp:autoNumFormat/@type", namespaces=NS)
+        if formats:
+            setattr(number, "_docx_number_format", formats[0])
+        superscript = node.xpath("./hp:autoNumFormat/@supscript", namespaces=NS)
+        if superscript:
+            setattr(number, "_docx_superscript", superscript[0] == "1")
+        return number
     if local_name == "tbl":
-        return _extract_hwpx_table(_build_table_wrapper(section, node))
+        table = _extract_hwpx_table(_build_table_wrapper(section, node))
+        paragraphs = node.xpath("ancestor::hp:p[1]", namespaces=NS)
+        if paragraphs:
+            setattr(table, "_hwpx_paragraph_attributes", {key: paragraphs[0].get(key, "0") for key in ("pageBreak", "columnBreak")})
+        return table
     if local_name == "pic":
         return _extract_hwpx_picture(_build_picture_wrapper(section, node))
     if local_name in {"footNote", "endNote"}:
@@ -2739,12 +2793,23 @@ def _extract_hwpx_picture(picture) -> Picture:
 
 def _extract_hwpx_note(note) -> Note:
     number = int(note.number) if note.number and str(note.number).isdigit() else None
-    return Note(
+    blocks = _extract_hwpx_text_container_blocks(note.section, note.element)
+    formatting = next((block for block in blocks if isinstance(block, Field) and block.field_type == "JAKAL_NOTE_STYLE"), None)
+    result = Note(
         kind=note.kind,
         text=note.text,
         number=number,
-        nested_blocks=_extract_hwpx_text_container_blocks(note.section, note.element),
+        nested_blocks=[block for block in blocks if block is not formatting],
     )
+    runs = note.element.xpath("ancestor::hp:run[1]", namespaces=NS)
+    if runs:
+        setattr(result, "_docx_char_pr_id", runs[0].get("charPrIDRef"))
+    if formatting is not None:
+        reference = formatting.parameters.get("ReferenceRPr")
+        marker = formatting.parameters.get("MarkerRPr")
+        result.reference_run_properties = str(reference) if reference is not None else None
+        result.marker_run_properties = str(marker) if marker is not None else None
+    return result
 
 
 def _extract_hwpx_memo(memo) -> Memo:
@@ -2875,11 +2940,18 @@ def _extract_field(field) -> Field | Form | Memo:
         return _extract_hwpx_form_field(field)
     if (field.field_type or "").upper() == _HWPX_MEMO_FIELD_TYPE:
         return _extract_hwpx_memo_field(field)
+    parameters = field.parameter_map()
+    restored = _word_effect_from_field_name(field.name)
+    if restored is not None:
+        return Field(field_type=restored["kind"], display_text=field.display_text or None,
+                     name=restored["name"], parameters=restored["parameters"],
+                     editable=restored.get("editable", False), dirty=restored.get("dirty", False))
     return Field(
-        field_type=field.field_type or "",
+        field_type=parameters.get("JakalFieldKind", field.field_type or ""),
         display_text=field.display_text or None,
         name=field.name,
-        parameters=field.parameter_map(),
+        parameters={key: value for key, value in parameters.items() if key not in {"JakalFieldKind", "Prop", "Command"}}
+        if "JakalFieldKind" in parameters else parameters,
         editable=field.element.get("editable") == "1",
         dirty=field.element.get("dirty") == "1",
     )
@@ -3475,8 +3547,7 @@ def _build_hwpx_nested_sublist(document: HwpxDocument, blocks: list[HancomBlock]
     staged = []
     try:
         for _paragraph_index, paragraph_blocks in sorted(grouped.items()):
-            document.append_paragraph("", section_index=0)
-            paragraph_index = len(section.paragraphs()) - 1
+            paragraph_index = _append_control_host_paragraph(document, 0)
             paragraph = document._paragraph_element(0, paragraph_index)
             staged.append(paragraph)
             first = next((block for block in paragraph_blocks if isinstance(block, Paragraph)), None)
@@ -3601,7 +3672,7 @@ def _hwpx_hyperlink_parameters(target: str) -> dict[str, int | str]:
     return parameters
 
 
-def _apply_hwpx_hyperlink_runs(field, block: Hyperlink) -> None:
+def _apply_hwpx_hyperlink_runs(field, block: Hyperlink | Field) -> None:
     rich = getattr(block, "_docx_hyperlink_runs", None)
     if not rich or rich[0] != block.display_text:
         return
@@ -3618,8 +3689,77 @@ def _apply_hwpx_hyperlink_runs(field, block: Hyperlink) -> None:
     field.section.mark_modified()
 
 
+def _hwpx_field_kwargs(block: Field) -> dict[str, object]:
+    if "WordInstruction" in block.parameters or block.field_type in {"JAKAL_LIST_LABEL", "JAKAL_NOTE_STYLE"}:
+        import base64
+        import zlib
+
+        details = json.dumps({"kind": block.field_type, "name": block.name, "parameters": block.parameters,
+                              "editable": block.editable, "dirty": block.dirty},
+                             ensure_ascii=True, separators=(",", ":")).encode("utf-8")
+        name = _WORD_EFFECT_FIELD_PREFIX + base64.urlsafe_b64encode(zlib.compress(details)).decode("ascii")
+        if len(name) - len(_WORD_EFFECT_FIELD_PREFIX) > 131072:
+            raise ValueError("The Word feature definition is too large for a reversible HWPX field fallback.")
+        # Hancom rejects arbitrary field type names. Use its editable text
+        # field, retaining our semantic kind in ordinary field parameters.
+        return {"field_type": "CLICK_HERE", "name": name, "editable": True, "dirty": True, "parameters": {
+            **block.parameters, "JakalFieldKind": block.field_type, "Prop": 9,
+            "Command": "Clickhere:set:42:Direction:wstring:0: HelpState:wstring:0:  ",
+        }}
+    return {"field_type": block.effective_native_field_type, "name": block.name, "parameters": block.parameters,
+            "editable": block.editable, "dirty": block.dirty}
+
+
+_WORD_EFFECT_FIELD_PREFIX = "jakal:word-effect:v1:"
+
+
+def _word_effect_from_field_name(name: str | None) -> dict | None:
+    # Hancom rewrites CLICK_HERE to its native Prop/Command parameter set on
+    # save. Names survive that normalization, so they carry the small feature
+    # definition as well. No original document/package is embedded here.
+    if not name or not name.startswith(_WORD_EFFECT_FIELD_PREFIX):
+        return None
+    import base64
+    import zlib
+
+    try:
+        encoded = name.removeprefix(_WORD_EFFECT_FIELD_PREFIX)
+        if len(encoded) > 131072:
+            return None
+        decoder = zlib.decompressobj()
+        data = decoder.decompress(base64.urlsafe_b64decode(encoded), max_length=1048576)
+        if not decoder.eof or decoder.unconsumed_tail:
+            return None
+        details = json.loads(data)
+        if not isinstance(details, dict) or not isinstance(details.get("kind"), str) or not isinstance(details.get("parameters"), dict):
+            return None
+        details.setdefault("name", None)
+        if details.get("name") is not None and not isinstance(details["name"], str):
+            return None
+        if not isinstance(details.get("editable", False), bool) or not isinstance(details.get("dirty", False), bool):
+            return None
+        if any(not isinstance(key, str) or not isinstance(value, (str, int)) for key, value in details["parameters"].items()):
+            return None
+        return details
+    except (ValueError, TypeError, zlib.error):
+        return None
+
+
 def _apply_hwpx_nested_text_blocks(document: HwpxDocument, wrapper, block: object, *, vertical_align: str = "CENTER") -> None:
     nested = _nested_blocks(block)
+    if isinstance(block, Note) and (block.reference_run_properties is not None or block.marker_run_properties is not None):
+        parameters = {}
+        for key, value in (("ReferenceRPr", block.reference_run_properties), ("MarkerRPr", block.marker_run_properties)):
+            if value is not None:
+                parameters[key] = value
+        # An empty native text field retains the small formatting definition
+        # through Hancom's parameter normalization without printing any text.
+        carrier = Field("JAKAL_NOTE_STYLE", display_text="", parameters=parameters)
+        setattr(carrier, "nested_paragraph_index", getattr(nested[0], "nested_paragraph_index", 0) if nested else 0)
+        setattr(carrier, "nested_source_order", -1000)
+        if not nested:
+            nested = [Paragraph(block.text)]
+        nested = [carrier, *nested]
     if not nested:
         return
     sublist = _build_hwpx_nested_sublist(document, nested, vertical_align=vertical_align)
@@ -3657,6 +3797,20 @@ def _append_header_footer_block_to_hwpx(
     paragraph_index: int,
     block: HeaderFooter,
 ) -> None:
+    if block.apply_page_type == "FIRST":
+        settings = _extract_section_settings(document.sections[section_index])
+        fallback = _first_page_story_shape(block, settings)
+        appended = document.append_shape(
+            kind="rect", text="" if block.nested_blocks else block.text,
+            width=fallback.width, height=fallback.height,
+            section_index=section_index, paragraph_index=paragraph_index,
+        )
+        _apply_hwpx_shape_block(appended, fallback)
+        _apply_hwpx_nested_text_blocks(document, appended, fallback, vertical_align="BOTTOM" if block.kind == "footer" else "TOP")
+        # FIRST has no native HWPX header variant. The ordinary story is hidden
+        # on page one; a page-relative, non-wrapping text box displays it there.
+        document.section_settings(section_index).set_visibility(**{"hide_first_" + block.kind: True})
+        return
     if block.kind == "header":
         appended = document.append_header(
             "" if _has_nested_blocks(block) else block.text,
@@ -3675,9 +3829,49 @@ def _append_header_footer_block_to_hwpx(
         _apply_hwpx_nested_text_blocks(document, appended, block, vertical_align="TOP")
 
 
+_FIRST_PAGE_STORY_MARKER = "jakal:first-page-story:"
+
+
+def _first_page_story_shape(block: HeaderFooter, settings: SectionSettings) -> Shape:
+    margins = settings.margins
+    page_width = settings.page_height if settings.landscape == "NARROWLY" else settings.page_width
+    height = max(2000, int(margins.get("header" if block.kind == "header" else "footer", 3600)))
+    # Let multiline text occupy its natural height, including paragraphs larger
+    # than the reserved story area. This does not consume body layout space.
+    height = max(height, 1800 * max(1, block.text.count("\n") + 1))
+    return Shape(
+        "rect", text=block.text,
+        width=int(page_width or 59528) - int(margins.get("left", 8504)) - int(margins.get("right", 8504)),
+        height=height, shape_comment=_FIRST_PAGE_STORY_MARKER + block.kind,
+        line_width=0, has_line_node=False, has_fill_node=False,
+        text_margins={side: 0 for side in ("left", "right", "top", "bottom")},
+        layout={"treatAsChar": "0", "textWrap": "IN_FRONT_OF_TEXT", "flowWithText": "0",
+                "allowOverlap": "1", "holdAnchorAndSO": "1", "vertRelTo": "PAPER", "horzRelTo": "PAPER",
+                "vertAlign": "BOTTOM" if block.kind == "footer" else "TOP", "horzAlign": "LEFT",
+                "horzOffset": str(margins.get("left", 8504)),
+                "vertOffset": str(margins.get("bottom" if block.kind == "footer" else "top", 4252))},
+        nested_blocks=block.nested_blocks,
+    )
+
+
+def _restore_first_page_stories(blocks: list[HancomBlock], stories: list[HeaderFooter]) -> None:
+    for block in list(blocks):
+        if not isinstance(block, Shape) or block.shape_comment not in {
+            _FIRST_PAGE_STORY_MARKER + "header", _FIRST_PAGE_STORY_MARKER + "footer",
+        }:
+            continue
+        story = HeaderFooter(block.shape_comment.removeprefix(_FIRST_PAGE_STORY_MARKER), block.text,
+                             apply_page_type="FIRST", nested_blocks=block.nested_blocks)
+        _mark_hwpx_source_paragraph(story, getattr(block, "source_paragraph_index", 0), order=getattr(block, "source_order", 0))
+        stories.append(story)
+        blocks.remove(block)
+
+
 def _append_control_host_paragraph(document: HwpxDocument, section_index: int) -> int:
     document.append_paragraph("", section_index=section_index)
-    return len(document.sections[section_index].paragraphs()) - 1
+    index = len(document.sections[section_index].paragraphs()) - 1
+    document._paragraph_element(section_index, index).attrib.update({"pageBreak": "0", "columnBreak": "0"})
+    return index
 
 
 def _apply_hwpx_paragraph_style_block(
@@ -3971,6 +4165,14 @@ def _apply_styles(document: HwpxDocument, hancom_document: HancomDocument) -> No
         else:
             ref_list.replace(existing, node)
         document.header.mark_modified()
+    # Ref 0 is the default tab grid. Reserve it before importing explicit stops;
+    # otherwise a header's center/right stops become the default for body lists.
+    ref_list = document.header.root_element.find(qname("hh", "refList"))
+    tab_properties = ref_list.find(qname("hh", "tabProperties"))
+    if tab_properties is None:
+        tab_properties = etree.SubElement(ref_list, qname("hh", "tabProperties"), itemCnt="1")
+        etree.SubElement(tab_properties, qname("hh", "tabPr"), id="0", autoTabLeft="0", autoTabRight="0")
+        document.header.mark_modified()
     for style in hancom_document.paragraph_styles:
         appended = document.append_paragraph_style(
             style_id=style.style_id,
@@ -4006,13 +4208,16 @@ def _apply_styles(document: HwpxDocument, hancom_document: HancomDocument) -> No
             appended.element.set("tabPrIDRef", tab_id)
             document.header.mark_modified()
         if style.margins:
+            margins = style.margins
+            if getattr(style, "_docx_list_layout", False):
+                margins = {key: str(int(value) * 2) if key != "unit" else value for key, value in margins.items()}
             appended.set_margin(
-                intent=style.margins.get("intent"),
-                left=style.margins.get("left"),
-                right=style.margins.get("right"),
-                prev=style.margins.get("prev"),
-                next=style.margins.get("next"),
-                unit=style.margins.get("unit"),
+                intent=margins.get("intent"),
+                left=margins.get("left"),
+                right=margins.get("right"),
+                prev=margins.get("prev"),
+                next=margins.get("next"),
+                unit=margins.get("unit"),
             )
         if style.heading:
             heading_nodes = appended.element.xpath("./hh:heading", namespaces=NS)

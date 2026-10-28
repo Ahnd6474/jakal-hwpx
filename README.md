@@ -5,7 +5,7 @@
 The package exposes a shared document API and format-specific implementations:
 
 - `Document`: the shared document API (`HancomDocument` remains a compatibility alias)
-- `WordDocument(Document)`: retains Word details and dispatches shared edits to a Word backend
+- DOCX addon `WordDocument(Document)`: retains Word details and dispatches shared edits to a Word backend
 - `HwpxDocument`: direct HWPX package and XML editing
 - `HwpDocument`: direct native HWP object and binary editing
 
@@ -58,14 +58,18 @@ doc.append_paragraph("Review complete")
 doc.save("build/output.hwpx")
 ```
 
-### Word documents
+### DOCX addon
 
-Install Word support with `pip install "jakal-hwpx[docx]"`.
+Install the bundled DOCX addon with `pip install "jakal-hwpx[docx]"`.
+Its implementation lives in `jakal_hwpx.addons.docx` and shares the same release
+as the core library. The default HWP/HWPX installation does not require python-docx;
+the addon and its backend load only when requested.
 `Document.open("input.docx")` returns a `WordDocument`, which retains the complete
 original DOCX package alongside its common model view.
 
 ```python
-from jakal_hwpx import Document, WordDocument
+from jakal_hwpx import Document
+from jakal_hwpx.addons.docx import WordDocument
 
 doc = Document.open("input.docx")
 assert isinstance(doc, WordDocument)
@@ -84,7 +88,9 @@ and Word-specific details can be edited through the python-docx backend.
 HWP/HWPX output is generated in Python without Hancom Office. The common model
 retains supported content and formatting; unsupported Word features produce
 `UserWarning` messages during conversion. An external converter remains opt-in.
-See [WordDocument](docs/word-document.md) for supported edits, requirements, and visual limits.
+The existing `from jakal_hwpx import WordDocument` import remains supported.
+See the [DOCX addon](docs/docx-addon.md) and [WordDocument](docs/word-document.md)
+for supported edits, requirements, and visual limits.
 
 HWP and HWPX can also be exported to editable Word documents in Python:
 

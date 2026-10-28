@@ -6,6 +6,7 @@ from lxml import etree
 
 from .exceptions import ValidationIssue
 from .namespaces import NS, qname
+from ._hwpx_element_helpers import _set_text_node_content, _text_node_plain_text
 
 
 _FORM_TAG_BY_TYPE = {
@@ -1556,27 +1557,24 @@ class FieldXml:
 
     @property
     def display_text(self) -> str:
+        return "".join(_text_node_plain_text(node) for node in self._display_text_nodes())
+
+    def _display_text_nodes(self) -> list[etree._Element]:
         paragraph = self.element.xpath("ancestor::hp:p[1]", namespaces=NS)
-        begin_run = self.element.xpath("ancestor::hp:run[1]", namespaces=NS)
-        matching_end = self.element.xpath(
-            "ancestor::hp:p[1]//hp:fieldEnd[@beginIDRef=$begin_id][1]",
-            namespaces=NS,
-            begin_id=self.control_id,
-        )
-        if not paragraph or not begin_run or not matching_end:
-            return ""
-        end_run = matching_end[0].xpath("ancestor::hp:run[1]", namespaces=NS)
-        if not end_run:
-            return ""
-        runs = paragraph[0].xpath("./hp:run", namespaces=NS)
-        try:
-            begin_index = runs.index(begin_run[0])
-            end_index = runs.index(end_run[0])
-        except ValueError:
-            return ""
-        if end_index <= begin_index:
-            return ""
-        return "".join(_extract_text(run) for run in runs[begin_index + 1 : end_index])
+        if not paragraph:
+            return []
+        nodes = []
+        active = False
+        for run in paragraph[0].xpath("./hp:run", namespaces=NS):
+            for child in run:
+                for node in list(child) if child.tag == qname("hp", "ctrl") else [child]:
+                    if node is self.element:
+                        active = True
+                    elif active and node.tag == qname("hp", "fieldEnd") and node.get("beginIDRef") == self.control_id:
+                        return nodes
+                    elif active and node.tag == qname("hp", "t"):
+                        nodes.append(node)
+        return []
 
     def set_display_text(self, value: str) -> None:
         paragraph = self.element.xpath("ancestor::hp:p[1]", namespaces=NS)
@@ -1591,23 +1589,18 @@ class FieldXml:
         end_run = matching_end[0].xpath("ancestor::hp:run[1]", namespaces=NS)
         if not end_run:
             raise ValueError("Matching fieldEnd is not contained in a run.")
-        runs = paragraph[0].xpath("./hp:run", namespaces=NS)
-        try:
-            begin_index = runs.index(begin_run[0])
-            end_index = runs.index(end_run[0])
-        except ValueError as exc:
-            raise ValueError("Field runs could not be located in the paragraph.") from exc
-        middle_runs = runs[begin_index + 1 : end_index]
-        if middle_runs:
-            _set_text(middle_runs[0], value)
-            for extra in middle_runs[1:]:
-                _set_text(extra, "")
+        nodes = self._display_text_nodes()
+        if nodes:
+            _set_text_node_content(nodes[0], value)
+            for extra in nodes[1:]:
+                extra.getparent().remove(extra)
         else:
-            new_run = etree.Element(qname("hp", "run"))
-            new_run.set("charPrIDRef", begin_run[0].get("charPrIDRef", "0"))
-            text_node = etree.SubElement(new_run, qname("hp", "t"))
-            text_node.text = value
-            end_run[0].addprevious(new_run)
+            text_node = etree.Element(qname("hp", "t"))
+            _set_text_node_content(text_node, value)
+            end_child = matching_end[0]
+            while end_child.getparent() is not end_run[0]:
+                end_child = end_child.getparent()
+            end_child.addprevious(text_node)
         _invalidate_paragraph_layout(paragraph[0])
         self.section.mark_modified()
 

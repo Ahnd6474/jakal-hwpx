@@ -79,12 +79,14 @@ doc.write_to_hwp("build/report.hwp")
 
 ## Word DOCX 가져오기
 
+DOCX addon(`pip install "jakal-hwpx[docx]"`)을 사용하면
 `Document.open("input.docx")` 또는 `Document.read_docx()`는 `WordDocument(Document)`를
 반환합니다. Word 세부 정보는 하위 클래스의 원본 패키지와 python-docx 백엔드에 보관하며,
 공통 편집 함수는 Word 전용 구현으로 연결됩니다.
 
 ```python
-from jakal_hwpx import Document, WordDocument
+from jakal_hwpx import Document
+from jakal_hwpx.addons.docx import WordDocument
 
 doc = Document.open("input.docx")
 assert isinstance(doc, WordDocument)

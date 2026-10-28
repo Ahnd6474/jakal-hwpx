@@ -270,7 +270,7 @@ def test_docx_warns_about_features_outside_the_common_model(tmp_path: Path) -> N
     assert len(messages) == len(set(messages))
     assert any("automatic numbering" in message for message in messages)
     assert any(style.bold for style in document.character_styles)
-    assert any("first-page" in message for message in messages)
+    assert any(block.apply_page_type == "FIRST" for block in document.sections[0].header_footer_blocks)
 
 
 def test_docx_optional_dependency_has_install_instructions(tmp_path: Path, monkeypatch) -> None:
@@ -380,14 +380,15 @@ def test_docx_named_style_does_not_include_first_paragraph_direct_overrides(tmp_
     assert override.alignment_horizontal == "RIGHT"
 
 
-def test_docx_first_page_header_behavior_warns_even_when_first_header_is_empty(tmp_path: Path) -> None:
+def test_docx_first_page_header_behavior_keeps_an_empty_first_header(tmp_path: Path) -> None:
     source = Document()
     source.add_paragraph("Body")
     section = source.sections[0]
     section.header.paragraphs[0].text = "Header after first page"
     section.different_first_page_header_footer = True
     document = HancomDocument.read_docx(_save(source, tmp_path))
-    assert any("first-page" in message for message in document.import_warnings)
+    assert document.sections[0].settings.visibility["hideFirstHeader"] == "1"
+    assert not any("first-page" in message for message in document.import_warnings)
 
 
 @pytest.mark.parametrize("merges", [

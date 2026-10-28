@@ -258,6 +258,8 @@ def _append_hancom_block_to_hwp(
         line_style_kwargs = _hwpx_line_style_kwargs(block.line_style)
         if line_style_kwargs:
             shape.set_line_style(**line_style_kwargs)
+        else:
+            shape.set_line_style(color=block.line_color, width=block.line_width, style="SOLID" if block.line_width else "NONE")
         if block.text_margins and hasattr(shape, "set_text_margins"):
             shape.set_text_margins(**block.text_margins)
         return

@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from ._hancom_models import HancomBlock, HancomSection
+from .namespaces import NS
 
 if TYPE_CHECKING:
     from .document import HwpxDocument
@@ -37,6 +38,7 @@ from .hancom_document import (
     _build_hwpx_memo_parameters,
     _has_nested_blocks,
     _hwpx_layout_kwargs,
+    _hwpx_field_kwargs,
     _hwpx_rotation_kwargs,
     _media_type_for_extension,
     _memo_requires_hwpx_carrier,
@@ -113,16 +115,13 @@ def _write_section_to_hwpx(document: HwpxDocument, section_index: int, section: 
                 paragraph_index=paragraph_index,
             )
         elif isinstance(block, Field):
-            document.append_field(
-                field_type=block.effective_native_field_type,
+            appended = document.append_field(
+                **_hwpx_field_kwargs(block),
                 display_text=_block_owned_text_for_write(block),
-                name=block.name,
-                parameters=block.parameters,
-                editable=block.editable,
-                dirty=block.dirty,
                 section_index=section_index,
                 paragraph_index=paragraph_index,
             )
+            _apply_hwpx_hyperlink_runs(appended, block)
         elif isinstance(block, Form):
             document.append_form(
                 block.label,
@@ -153,18 +152,24 @@ def _write_section_to_hwpx(document: HwpxDocument, section_index: int, section: 
                     paragraph_index=paragraph_index,
                 )
         elif isinstance(block, AutoNumber):
-            document.append_auto_number(
+            appended = document.append_auto_number(
                 number=block.number,
                 number_type=block.number_type,
                 kind=block.kind,
                 section_index=section_index,
                 paragraph_index=paragraph_index,
+                char_pr_id=getattr(block, "_docx_char_pr_id", None),
             )
+            if block.kind == "autoNum":
+                appended.element.find("./hp:autoNumFormat", NS).set("type", getattr(block, "_docx_number_format", "DIGIT"))
+                if hasattr(block, "_docx_superscript"):
+                    appended.element.find("./hp:autoNumFormat", NS).set("supscript", "1" if block._docx_superscript else "0")
         elif isinstance(block, Note):
             appended = document.append_note(
                 "" if _has_nested_blocks(block) else block.text,
                 kind=block.kind,
                 number=block.number,
+                char_pr_id=getattr(block, "_docx_char_pr_id", None),
                 section_index=section_index,
                 paragraph_index=paragraph_index,
             )
@@ -249,6 +254,9 @@ def _append_non_paragraph_block_to_hwpx(
     paragraph_index: int,
     block: HancomBlock,
 ) -> None:
+    attributes = getattr(block, "_hwpx_paragraph_attributes", None)
+    if attributes:
+        document._paragraph_element(section_index, paragraph_index).attrib.update(attributes)
     if isinstance(block, Table):
         appended = document.append_table(
             block.rows,
@@ -288,16 +296,13 @@ def _append_non_paragraph_block_to_hwpx(
             paragraph_index=paragraph_index,
         )
     elif isinstance(block, Field):
-        document.append_field(
-            field_type=block.effective_native_field_type,
+        appended = document.append_field(
+            **_hwpx_field_kwargs(block),
             display_text=_block_owned_text_for_write(block),
-            name=block.name,
-            parameters=block.parameters,
-            editable=block.editable,
-            dirty=block.dirty,
             section_index=section_index,
             paragraph_index=paragraph_index,
         )
+        _apply_hwpx_hyperlink_runs(appended, block)
     elif isinstance(block, Form):
         document.append_form(
             block.label,
@@ -328,18 +333,24 @@ def _append_non_paragraph_block_to_hwpx(
                 paragraph_index=paragraph_index,
             )
     elif isinstance(block, AutoNumber):
-        document.append_auto_number(
+        appended = document.append_auto_number(
             number=block.number,
             number_type=block.number_type,
             kind=block.kind,
             section_index=section_index,
             paragraph_index=paragraph_index,
+            char_pr_id=getattr(block, "_docx_char_pr_id", None),
         )
+        if block.kind == "autoNum":
+            appended.element.find("./hp:autoNumFormat", NS).set("type", getattr(block, "_docx_number_format", "DIGIT"))
+            if hasattr(block, "_docx_superscript"):
+                appended.element.find("./hp:autoNumFormat", NS).set("supscript", "1" if block._docx_superscript else "0")
     elif isinstance(block, Note):
         appended = document.append_note(
             "" if _has_nested_blocks(block) else block.text,
             kind=block.kind,
             number=block.number,
+            char_pr_id=getattr(block, "_docx_char_pr_id", None),
             section_index=section_index,
             paragraph_index=paragraph_index,
         )
