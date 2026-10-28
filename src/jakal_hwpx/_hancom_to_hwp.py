@@ -3,6 +3,8 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from ._hancom_models import HancomBlock
+from ._hancom_styles import _build_hwp_colorref
+from .hwp_binary import TAG_BORDER_FILL, TypedRecord
 
 if TYPE_CHECKING:
     from .hwp_document import HwpDocument
@@ -33,6 +35,49 @@ from .hancom_document import (
 )
 
 
+def _ensure_hwp_table_border_fill(
+    document: HwpDocument,
+    fill_color: str | None,
+    borders: dict[str, dict[str, str | int]],
+) -> int:
+    key = (fill_color, tuple((side, tuple(sorted(spec.items()))) for side, spec in sorted(borders.items())))
+    cache = getattr(document, "_docx_table_border_fill_cache", None)
+    if cache is None:
+        cache = {}
+        setattr(document, "_docx_table_border_fill_cache", cache)
+    if key in cache:
+        return cache[key]
+    docinfo = document.docinfo_model()
+    records = docinfo.records_by_tag_id(TAG_BORDER_FILL)
+    if not records:
+        raise ValueError("The HWP profile has no border-fill template.")
+    template = records[1] if fill_color and len(records) > 1 and len(records[1].payload) >= 53 else records[0]
+    payload = bytearray(template.payload)
+    if fill_color:
+        if len(payload) < 53:
+            payload = bytearray(records[0].payload[:32]) + bytearray(21)
+            payload[32:36] = (1).to_bytes(4, "little")
+        payload[36:40] = _build_hwp_colorref(fill_color)
+    style_codes = {"single": 0, "dashed": 1, "dotted": 2, "double": 7}
+    widths = (0.1, 0.12, 0.15, 0.2, 0.25, 0.3, 0.4, 0.5, 0.6, 0.7, 1.0, 1.5, 2.0, 3.0, 4.0, 5.0)
+    for side, offset in (("left", 2), ("right", 8), ("top", 14), ("bottom", 20)):
+        spec = borders.get(side)
+        if not spec or spec.get("style") in {"none", "nil"}:
+            continue
+        payload[offset] = style_codes.get(str(spec.get("style", "single")), 0)
+        width_mm = int(spec.get("size", 4)) * 0.3527778 / 8
+        payload[offset + 1] = min(range(len(widths)), key=lambda index: abs(widths[index] - width_mm))
+        payload[offset + 2:offset + 6] = _build_hwp_colorref(str(spec.get("color", "000000")))
+    record = TypedRecord(tag_id=TAG_BORDER_FILL, level=records[-1].level, payload=bytes(payload))
+    parent = docinfo.id_mappings_record()
+    parent.children.insert(parent.children.index(records[-1]) + 1, record)
+    parent.set_count(8, len(records) + 1)
+    document.binary_document().replace_docinfo_model(docinfo)
+    style_id = len(records)
+    cache[key] = style_id
+    return style_id
+
+
 def _append_hancom_block_to_hwp(
     document: HwpDocument,
     block: HancomBlock,
@@ -40,6 +85,9 @@ def _append_hancom_block_to_hwp(
     section_index: int,
     paragraph_attribute_limits: tuple[int, int] | None = None,
 ) -> None:
+    unsupported = getattr(block, "_unsupported_word_math", None)
+    if unsupported:
+        raise ValueError(unsupported)
     if isinstance(block, Paragraph):
         if block.text:
             para_shape_id, style_id, split_flags, control_mask = _resolve_hwp_paragraph_attributes(
@@ -57,6 +105,11 @@ def _append_hancom_block_to_hwp(
             )
         return
     if isinstance(block, Table):
+        cell_border_fill_ids = dict(block.cell_border_fill_ids or {})
+        for row, column in set(block.cell_fill_colors or {}) | set(block.cell_border_styles or {}):
+            color = (block.cell_fill_colors or {}).get((row, column))
+            borders = (block.cell_border_styles or {}).get((row, column), {})
+            cell_border_fill_ids[(row, column)] = _ensure_hwp_table_border_fill(document, color, borders)
         table = document.append_table(
             rows=block.rows,
             cols=block.cols,
@@ -64,7 +117,7 @@ def _append_hancom_block_to_hwp(
             row_heights=block.row_heights,
             col_widths=block.col_widths,
             cell_spans=block.cell_spans,
-            cell_border_fill_ids=block.cell_border_fill_ids,
+            cell_border_fill_ids=cell_border_fill_ids or None,
             table_border_fill_id=block.table_border_fill_id,
             section_index=section_index,
         )
@@ -76,7 +129,7 @@ def _append_hancom_block_to_hwp(
             table.set_cell_spacing(block.cell_spacing)
         if block.table_margins:
             table.set_table_margins(**block.table_margins)
-        for (row, column), border_fill_id in (block.cell_border_fill_ids or {}).items():
+        for (row, column), border_fill_id in cell_border_fill_ids.items():
             table.set_cell_border_fill_id(row, column, border_fill_id)
         for (row, column), margins in (block.cell_margins or {}).items():
             table.set_cell_margins(row, column, **_normalize_int_map(margins))

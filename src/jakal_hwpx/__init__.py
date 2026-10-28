@@ -1,4 +1,7 @@
 from .bridge import HwpHwpxBridge
+from .hancom_converter import HancomOfficeConverter
+from .shared_document import Document
+from .word_document import WordDocument
 from .document import DocumentMetadata, HwpxDocument
 from .hancom_document import (
     AutoNumber,
@@ -249,6 +252,9 @@ __all__ = [
     "GraphicControlRecord",
     "HancomInteropError",
     "HancomDocument",
+    "HancomOfficeConverter",
+    "Document",
+    "WordDocument",
     "HancomMetadata",
     "HancomSection",
     "HeaderPart",

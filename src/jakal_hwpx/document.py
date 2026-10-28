@@ -1341,6 +1341,12 @@ class HwpxDocument(HwpxDocumentControlMixin, HwpxValidationMixin):
     def save_as_hwp(self, path: str | os.PathLike[str], *, converter=None, force_refresh: bool = True) -> Path:
         return self.to_hwp_document(converter=converter).save(path)
 
+    def to_docx_document(self, *, converter=None, preserve_formatting: bool | None = None):
+        return self.to_hancom_document().to_docx_document(converter=converter, preserve_formatting=preserve_formatting)
+
+    def save_as_docx(self, path: str | os.PathLike[str], *, converter=None, preserve_formatting: bool | None = None) -> Path:
+        return self.to_hancom_document().write_to_docx(path, converter=converter, preserve_formatting=preserve_formatting)
+
     def bridge(self, *, converter=None):
         from .bridge import HwpHwpxBridge
 

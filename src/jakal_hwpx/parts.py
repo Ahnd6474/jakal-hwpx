@@ -14,10 +14,12 @@ from .elements import (
     _missing_preserved_tokens,
     _preserved_structure_signature,
     _replace_paragraph_text_preserving_controls,
+    _replace_text,
 )
 from .exceptions import ValidationIssue
 from .namespaces import NS, SECTION_PATTERN, qname
 from .xmlnode import HwpxXmlNode
+from ._hwpx_element_helpers import _set_text_node_content, _text_node_plain_text
 
 XML_DECLARATION_RE = re.compile(br"^\s*<\?xml[^>]*standalone=['\"](yes|no)['\"]", re.IGNORECASE)
 
@@ -192,36 +194,14 @@ class XmlPart(HwpxPart):
         return self.raw_bytes
 
     def extract_hp_text(self) -> str:
-        fragments = []
-        for node in self._root.xpath(".//hp:t", namespaces=NS):
-            if node.text:
-                fragments.append(node.text)
-        return "".join(fragments)
+        return "".join(_text_node_plain_text(node) for node in self._root.xpath(".//hp:t", namespaces=NS))
 
     def replace_hp_text(self, old: str, new: str, count: int = -1) -> int:
         if not old:
             raise ValueError("old must be a non-empty string.")
-        remaining = count
-        replacements = 0
-        layout_invalidated = False
-        for node in self._root.xpath(".//hp:t", namespaces=NS):
-            current = node.text or ""
-            if old not in current:
-                continue
-            limit = remaining if remaining >= 0 else -1
-            updated, changed = _replace_with_limit(current, old, new, limit)
-            if changed:
-                node.text = updated
-                replacements += changed
-                _invalidate_paragraph_layout(node)
-                layout_invalidated = True
-                self.mark_modified()
-                if remaining >= 0:
-                    remaining -= changed
-                    if remaining <= 0:
-                        break
-        if replacements and not layout_invalidated:
-            _invalidate_paragraph_layout(self._root)
+        replacements = _replace_text(self._root, old, new, count=count)
+        if replacements:
+            self.mark_modified()
         return replacements
 
 
@@ -541,7 +521,7 @@ class SectionPart(XmlPart):
     def text_fragments(self) -> list[str]:
         values = []
         for paragraph in self._root.xpath("./hp:p", namespaces=NS):
-            chunks = [node.text or "" for node in paragraph.xpath(".//hp:t", namespaces=NS)]
+            chunks = [_text_node_plain_text(node) for node in paragraph.xpath(".//hp:t", namespaces=NS)]
             values.append("".join(chunks))
         return values
 
@@ -673,7 +653,7 @@ class SectionPart(XmlPart):
         run = etree.SubElement(paragraph, qname("hp", "run"))
         run.set("charPrIDRef", char_pr_id or self._default_char_pr_id(template))
         text_node = etree.SubElement(run, qname("hp", "t"))
-        text_node.text = text
+        _set_text_node_content(text_node, text)
         return paragraph
 
     def _select_template_paragraph(self, template_index: int | None = None) -> etree._Element:

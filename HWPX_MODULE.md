@@ -14,7 +14,7 @@ If you are starting fresh, read this in order:
 Prefer root-package imports:
 
 ```python
-from jakal_hwpx import HancomDocument, HwpxDocument, HwpDocument
+from jakal_hwpx import Document, WordDocument, HwpxDocument, HwpDocument
 ```
 
 Direct submodule imports still work, but the root import path is the documented public entry point.
@@ -23,7 +23,7 @@ Direct submodule imports still work, but the root import path is the documented 
 
 | Layer | Primary objects | Use it for |
 |---|---|---|
-| Format-neutral model | `HancomDocument`, `HancomSection`, block dataclasses | authoring, conversion, roundtrip-safe document workflows |
+| Format-neutral model | `Document` (`HancomDocument` compatibility alias), `HancomSection`, block dataclasses | authoring, conversion, roundtrip-safe document workflows |
 | HWPX package model | `HwpxDocument`, `*Xml` wrappers, `HwpxXmlNode` | direct HWPX editing, XML placement, validation, package parts |
 | Native HWP model | `HwpDocument`, `Hwp*Object` wrappers | direct native HWP editing and inspection |
 | Binary inspection | `HwpBinaryDocument`, `RecordNode`, `SectionModel` | streams, records, DocInfo, low-level debugging |
@@ -33,7 +33,8 @@ Direct submodule imports still work, but the root import path is the documented 
 
 ### Document models
 
-- `HancomDocument`
+- `Document` (`HancomDocument` is the compatibility alias)
+- `WordDocument`: Word-specific details, shared editing dispatch, native conversion
 - `HwpxDocument`
 - `HwpDocument`
 - `HwpHwpxBridge`

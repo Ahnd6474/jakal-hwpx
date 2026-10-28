@@ -93,6 +93,7 @@ class Paragraph:
     hwp_style_id: int | None = None
     hwp_split_flags: int | None = None
     hwp_control_mask: int | None = None
+    list_marker: str | None = None
 
 
 @dataclass
@@ -104,6 +105,8 @@ class Table:
     col_widths: list[int] | None = None
     cell_spans: dict[tuple[int, int], tuple[int, int]] | None = None
     cell_border_fill_ids: dict[tuple[int, int], int] | None = None
+    cell_fill_colors: dict[tuple[int, int], str] | None = None
+    cell_border_styles: dict[tuple[int, int], dict[str, dict[str, str | int]]] | None = None
     cell_margins: dict[tuple[int, int], dict[str, int]] | None = None
     cell_vertical_aligns: dict[tuple[int, int], str] | None = None
     table_border_fill_id: int = 1
@@ -555,6 +558,14 @@ class CharacterStyle:
     sym_mark: str | None = None
     font_refs: dict[str, str] = field(default_factory=dict)
     native_hwp_payload: bytes | None = None
+    font_names: dict[str, str] = field(default_factory=dict)
+    font_ratios: dict[str, int] = field(default_factory=dict)
+    bold: bool | None = None
+    italic: bool | None = None
+    underline: dict[str, str] = field(default_factory=dict)
+    strikeout: dict[str, str] = field(default_factory=dict)
+    script_position: str | None = None
+    native_hwpx_xml: bytes | None = None
 
 
 @dataclass

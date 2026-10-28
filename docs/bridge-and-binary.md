@@ -14,7 +14,7 @@ from jakal_hwpx import HwpHwpxBridge
 
 | API | 설명 |
 |---|---|
-| `HwpHwpxBridge.open(path, *, converter=None)` | 확장자와 내용 sniffing으로 HWP/HWPX를 열고 bridge를 만듭니다. |
+| `HwpHwpxBridge.open(path, *, converter=None)` | 확장자와 내용 sniffing으로 HWP/HWPX를 엽니다. DOCX는 `docx` extra를 사용해 공통 모델로 가져옵니다. |
 | `HwpHwpxBridge.from_hwp(source, *, converter=None)` | path 또는 `HwpDocument`에서 bridge를 만듭니다. |
 | `HwpHwpxBridge.from_hwpx(source, *, converter=None)` | path 또는 `HwpxDocument`에서 bridge를 만듭니다. |
 | `HwpHwpxBridge.from_hancom(source, *, converter=None)` | `HancomDocument`에서 bridge를 만듭니다. |

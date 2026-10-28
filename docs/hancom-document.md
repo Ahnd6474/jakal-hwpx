@@ -1,18 +1,20 @@
-# `HancomDocument`
+# `Document`
 
-`HancomDocument`는 `jakal_hwpx`의 기본 문서 모델입니다. HWPX와 HWP를 서로 다른 내부 포맷으로 보지 않고, 같은 Python 객체 모델로 올려서 편집한 뒤 원하는 포맷으로 저장합니다.
+`HancomDocument`는 이전 코드와의 호환성을 위한 `Document`의 별칭입니다.
+
+`Document`는 `jakal_hwpx`의 기본 문서 모델입니다. HWPX와 HWP를 같은 Python 객체 모델로 올려서 편집한 뒤 원하는 포맷으로 저장합니다. Word `.docx`도 선택 의존성을 설치하면 같은 모델로 가져올 수 있습니다.
 
 ```python
-from jakal_hwpx import HancomDocument
+from jakal_hwpx import Document
 ```
 
 ## 사용 시점
 
 | 상황 | 권장 |
 |---|---|
-| 새 문서를 만들고 HWP/HWPX 둘 다 저장 | `HancomDocument.blank()` |
+| 새 문서를 만들고 HWP/HWPX 둘 다 저장 | `Document.blank()` |
 | 입력 포맷이 HWP인지 HWPX인지 섞여 있음 | `read_hwp()`, `read_hwpx()` |
-| 앱 코드에서 XML이나 binary record를 직접 다루고 싶지 않음 | `HancomDocument` |
+| 앱 코드에서 XML이나 binary record를 직접 다루고 싶지 않음 | `Document` |
 | HWPX package 구조를 직접 고쳐야 함 | [`HwpxDocument`](./hwpx-document.md) |
 | HWP native wrapper를 직접 써야 함 | [`HwpDocument`](./hwp-document.md) |
 
@@ -20,12 +22,13 @@ from jakal_hwpx import HancomDocument
 
 | API | 설명 |
 |---|---|
-| `HancomDocument.blank(*, converter=None)` | 빈 공통 문서 모델을 만듭니다. |
-| `HancomDocument.open(path, *, converter=None)` | `.hwp`/`.hwpx`를 자동 감지해 엽니다. |
-| `HancomDocument.read_hwpx(path, *, converter=None)` | HWPX를 읽어 공통 모델로 변환합니다. |
-| `HancomDocument.read_hwp(path, *, converter=None)` | HWP를 읽어 공통 모델로 변환합니다. |
-| `HancomDocument.from_hwpx_document(document, *, converter=None)` | 이미 열린 `HwpxDocument`를 공통 모델로 올립니다. |
-| `HancomDocument.from_hwp_document(document, *, converter=None)` | 이미 열린 `HwpDocument`를 공통 모델로 올립니다. |
+| `Document.blank(*, converter=None)` | 빈 공통 문서 모델을 만듭니다. |
+| `Document.open(path, *, converter=None)` | `.hwp`/`.hwpx`/`.docx`를 감지해 엽니다. |
+| `Document.read_hwpx(path, *, converter=None)` | HWPX를 읽어 공통 모델로 변환합니다. |
+| `Document.read_hwp(path, *, converter=None)` | HWP를 읽어 공통 모델로 변환합니다. |
+| `Document.read_docx(path, *, converter=None)` | Word DOCX를 읽어 `WordDocument`로 엽니다. `docx` extra가 필요합니다. |
+| `Document.from_hwpx_document(document, *, converter=None)` | 이미 열린 `HwpxDocument`를 공통 모델로 올립니다. |
+| `Document.from_hwp_document(document, *, converter=None)` | 이미 열린 `HwpDocument`를 공통 모델로 올립니다. |
 
 ## 저장과 변환
 
@@ -33,7 +36,9 @@ from jakal_hwpx import HancomDocument
 |---|---|
 | `to_hwpx_document()` | 현재 모델을 `HwpxDocument`로 materialize합니다. |
 | `to_hwp_document(*, converter=None)` | 현재 모델을 `HwpDocument`로 materialize합니다. |
-| `save(path, *, validate=True, converter=None)` | 확장자에 따라 HWP/HWPX로 저장합니다. |
+| `save(path, *, validate=True, converter=None)` | 확장자에 따라 저장합니다. `WordDocument`는 DOCX 저장 및 파이썬 기반 HWP/HWPX 출력을 제공합니다. |
+| `to_docx_document(*, converter=None, preserve_formatting=None)` | 현재 모델을 편집 가능한 `WordDocument`로 변환합니다. 기본 경로는 파이썬입니다. |
+| `write_to_docx(path, *, converter=None, preserve_formatting=None)` | HWP/HWPX 모델은 DOCX를 생성하고, `WordDocument`는 원본 패키지와 수정 내용을 저장합니다. |
 | `write_to_hwpx(path, *, validate=True)` | HWPX 파일로 저장합니다. |
 | `write_to_hwp(path, *, converter=None)` | HWP 파일로 저장합니다. |
 | `bridge(*, converter=None)` | `HwpHwpxBridge`로 감싸 materialization 경로를 명시합니다. |
@@ -41,9 +46,9 @@ from jakal_hwpx import HancomDocument
 ## 최소 예제
 
 ```python
-from jakal_hwpx import HancomDocument
+from jakal_hwpx import Document
 
-doc = HancomDocument.blank()
+doc = Document.blank()
 doc.metadata.title = "분기 보고서"
 
 doc.append_paragraph("요약")
@@ -63,7 +68,8 @@ doc.write_to_hwp("build/report.hwp")
 |---|---|---|
 | `metadata` | `HancomMetadata` | 문서 제목, 작성자, 날짜 등 |
 | `sections` | `list[HancomSection]` | 섹션 목록 |
-| `source_format` | `str \| None` | `read_hwp()` 또는 `read_hwpx()`로 읽은 원본 포맷 |
+| `source_format` | `str \| None` | 원본 포맷: `hwp`, `hwpx`, `docx`, 또는 새 문서의 `None` |
+| `import_warnings` | `list[str]` | DOCX 가져오기에서 보존하지 못한 기능에 대한 경고 목록 |
 | `style_definitions` | `list[StyleDefinition]` | 문단/글자 스타일 정의 |
 | `paragraph_styles` | `list[ParagraphStyle]` | 문단 속성 정의 |
 | `character_styles` | `list[CharacterStyle]` | 글자 속성 정의 |
@@ -71,9 +77,30 @@ doc.write_to_hwp("build/report.hwp")
 | `bullet_definitions` | `list[BulletDefinition]` | bullet 정의 |
 | `memo_shape_definitions` | `list[MemoShapeDefinition]` | memo shape 정의 |
 
+## Word DOCX 가져오기
+
+`Document.open("input.docx")` 또는 `Document.read_docx()`는 `WordDocument(Document)`를
+반환합니다. Word 세부 정보는 하위 클래스의 원본 패키지와 python-docx 백엔드에 보관하며,
+공통 편집 함수는 Word 전용 구현으로 연결됩니다.
+
+```python
+from jakal_hwpx import Document, WordDocument
+
+doc = Document.open("input.docx")
+assert isinstance(doc, WordDocument)
+doc.append_paragraph("추가 문단")
+doc.save("output.docx")
+doc.save("output.hwpx")  # 파이썬으로 직접 변환
+```
+
+자세한 보존 방식, Word 전용 편집, 변환 요구 사항과 시각 검증 범위는
+[WordDocument](./word-document.md)를 참고하세요. `import_warnings`는 공통 모델의 투영이
+표현하지 못하는 기능을 기록합니다. Word 원본 저장은 이 기능을 그대로 보존합니다.
+HWP/HWPX 저장 또는 `to_common_document()` 호출 시 해당 경고를 발생시킵니다.
+
 ## Section model
 
-`HancomDocument`는 섹션을 `HancomSection`으로 표현합니다. 섹션 안에는 설정, 머리말/꼬리말, 본문 block이 들어갑니다.
+`Document`는 섹션을 `HancomSection`으로 표현합니다. 섹션 안에는 설정, 머리말/꼬리말, 본문 block이 들어갑니다.
 
 ```python
 section = doc.append_section()
@@ -172,7 +199,7 @@ section.settings.page_height = 84188
 
 ## 참고
 
-- `HancomDocument`는 앱 코드용 추상 모델입니다. HWPX XML wrapper가 필요하면 `to_hwpx_document()`를 호출하거나 `HwpxDocument`를 직접 사용합니다.
+- `Document`는 앱 코드용 추상 모델입니다. HWPX XML wrapper가 필요하면 `to_hwpx_document()`를 호출하거나 `HwpxDocument`를 직접 사용합니다.
 - HWP native wrapper가 필요하면 `to_hwp_document()`를 호출하거나 `HwpDocument`를 직접 사용합니다.
 - `write_to_hwpx(validate=True)`는 HWPX 저장 시 validation을 실행합니다.
 - 지원 범위와 안정성 기준은 [STABILITY_CONTRACT.md](../STABILITY_CONTRACT.md)를 따릅니다.

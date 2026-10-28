@@ -12,6 +12,12 @@ from .hancom_document import (
     AutoNumber,
     Bookmark,
     Field,
+    Equation,
+    Shape,
+    Note,
+    Chart,
+    Form,
+    Memo,
     HancomDocument,
     HeaderFooter,
     Hyperlink,
@@ -157,7 +163,7 @@ def _emit_nested_blocks(lines: list[str], block: object, *, target: str = "block
     nested_blocks = [
         nested
         for nested in getattr(block, "nested_blocks", [])
-        if isinstance(nested, (Paragraph, Bookmark, Hyperlink, Field, AutoNumber))
+        if isinstance(nested, (Paragraph, Bookmark, Hyperlink, Field, AutoNumber, Shape, Table, Picture, Equation, Note, Ole, Chart, Form, Memo))
     ]
     if not nested_blocks:
         return
@@ -210,6 +216,14 @@ def _emit_nested_block(lines: list[str], block: object, *, owner: str) -> None:
             ]
         )
         _line(lines, f"nested = AutoNumber({kwargs})", indent=1)
+    elif is_dataclass(block) and not isinstance(block, type):
+        variable = f"nested_{len(lines)}"
+        kwargs = ", ".join(f"{item.name}={_py(getattr(block, item.name))}" for item in fields(block) if item.name != "nested_blocks")
+        _line(lines, f"{variable} = {type(block).__name__}({kwargs})", indent=1)
+        _emit_nested_block_position(lines, block, target=variable)
+        _emit_nested_blocks(lines, block, target=variable)
+        _line(lines, f"{owner}.nested_blocks.append({variable})", indent=1)
+        return
     else:
         return
     _emit_nested_block_position(lines, block)
@@ -551,7 +565,7 @@ def _generate_semantic_hancom_script(
             "from pathlib import Path",
             "",
             "from jakal_hwpx import HancomDocument",
-            "from jakal_hwpx.hancom_document import AutoNumber, Bookmark, Field, Hyperlink, Paragraph",
+            "from jakal_hwpx.hancom_document import AutoNumber, Bookmark, Field, Hyperlink, Paragraph, Shape, Table, Picture, Equation, Note, Ole, Chart, Form, Memo",
             "",
             f"_DEFAULT_OUTPUT = {_py(output_name)}",
             "",
@@ -1069,7 +1083,7 @@ def _generate_authoring_hancom_script(
             "from pathlib import Path",
             "",
             "from jakal_hwpx import HancomDocument",
-            "from jakal_hwpx.hancom_document import AutoNumber, Bookmark, Field, Hyperlink, Paragraph",
+            "from jakal_hwpx.hancom_document import AutoNumber, Bookmark, Field, Hyperlink, Paragraph, Shape, Table, Picture, Equation, Note, Ole, Chart, Form, Memo",
             "",
             f"_DEFAULT_OUTPUT = {_py(output_name)}",
         ]

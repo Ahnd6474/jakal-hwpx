@@ -17,10 +17,12 @@ from ._hancom_models import (
 from .hwp_binary import (
     TAG_BULLET,
     TAG_CHAR_SHAPE,
+    TAG_FACE_NAME,
     TAG_MEMO_SHAPE,
     TAG_NUMBERING,
     TAG_PARA_SHAPE,
     TAG_STYLE,
+    FaceNameRecord,
     TypedRecord,
     _build_memo_shape_native_metadata_payload,
 )
@@ -105,7 +107,7 @@ def _extract_style_definition(style) -> StyleDefinition:
 
 def _extract_paragraph_style(style) -> ParagraphStyle:
     line_spacing_types = style.element.xpath(".//hh:lineSpacing/@type", namespaces=NS)
-    return ParagraphStyle(
+    result = ParagraphStyle(
         style_id=style.style_id,
         alignment_horizontal=style.alignment_horizontal,
         alignment_vertical=style.element.xpath("./hh:align/@vertical", namespaces=NS)[0]
@@ -145,10 +147,43 @@ def _extract_paragraph_style(style) -> ParagraphStyle:
             "eAsianNum",
         ),
     )
+    # Modern HWPX puts distances in a HwpUnitChar switch case; the legacy
+    # default uses doubled distances. Keep the existing public view unchanged
+    # while retaining the effective branch for Word export.
+    cases = style.element.xpath("./hp:switch/hp:case", namespaces=NS)
+    branch = next((case for case in cases if any(
+        key.rsplit("}", 1)[-1] == "required-namespace" and value == "http://www.hancom.co.kr/hwpml/2016/HwpUnitChar"
+        for key, value in case.attrib.items()
+    )), None)
+    scale = 1.0
+    if branch is None:
+        defaults = style.element.xpath("./hp:switch/hp:default", namespaces=NS)
+        if defaults:
+            branch, scale = defaults[0], 0.5
+    if branch is not None and not result.margins:
+        margins = _extract_hwpx_margin_map(branch)
+        margins = {key: str(float(value) * scale) if key != "unit" else value for key, value in margins.items()}
+        setattr(result, "_docx_paragraph_margins", (dict(result.margins), margins))
+    tabs = style.header_part.readonly_root_element.xpath(".//hh:tabPr[@id=$id]", namespaces=NS, id=result.tab_pr_id or "0")
+    if tabs:
+        tab_stops = []
+        for item in tabs[0].xpath("./hh:tabItem | ./hp:switch/hp:case/hh:tabItem | ./hp:switch/hp:default/hh:tabItem", namespaces=NS):
+            parent = item.getparent()
+            name = etree.QName(parent).localname
+            if name in {"case", "default"}:
+                supported = next((candidate for candidate in parent.getparent().xpath("./hp:case", namespaces=NS)
+                                  if any(key.rsplit("}", 1)[-1] == "required-namespace" and value == "http://www.hancom.co.kr/hwpml/2016/HwpUnitChar"
+                                         for key, value in candidate.attrib.items())), None)
+                if (name == "case" and parent is not supported) or (name == "default" and supported is not None):
+                    continue
+            scale = 1 if item.get("unit") == "HWPUNIT" else 0.5
+            tab_stops.append({"pos": round(int(item.get("pos", "0")) * scale), "type": item.get("type", "LEFT"), "leader": item.get("leader", "NONE")})
+        setattr(result, "_docx_tab_stops", tab_stops)
+    return result
 
 
-def _extract_character_style(style) -> CharacterStyle:
-    return CharacterStyle(
+def _extract_character_style(style, font_lookup: dict[tuple[str, str], str] | None = None) -> CharacterStyle:
+    result = CharacterStyle(
         style_id=style.style_id,
         text_color=style.text_color,
         shade_color=style.element.get("shadeColor"),
@@ -167,7 +202,31 @@ def _extract_character_style(style) -> CharacterStyle:
             "symbol",
             "user",
         ),
+        font_ratios={
+            key: int(value)
+            for key, value in _extract_hwpx_attribute_map(
+                style.element, "./hh:ratio", *_HWP_CHAR_FONT_ORDER
+            ).items()
+        },
+        bold=bool(style.element.xpath("./hh:bold", namespaces=NS)),
+        italic=bool(style.element.xpath("./hh:italic", namespaces=NS)),
+        underline=_extract_hwpx_attribute_map(style.element, "./hh:underline", "type", "shape", "color"),
+        strikeout=_extract_hwpx_attribute_map(style.element, "./hh:strikeout", "shape", "color"),
+        script_position=("SUPERSCRIPT" if style.element.xpath("./hh:supscript", namespaces=NS) else
+                         "SUBSCRIPT" if style.element.xpath("./hh:subscript", namespaces=NS) else "NORMAL"),
+        native_hwpx_xml=etree.tostring(style.element),
     )
+    if font_lookup is None:
+        font_lookup = {
+            (family.get("lang", "").lower(), font.get("id", "")): font.get("face", "")
+            for family in style.header_part.readonly_root_element.xpath(".//hh:fontface", namespaces=NS)
+            for font in family
+        }
+    for lang, ref in result.font_refs.items():
+        face = font_lookup.get((lang, ref))
+        if face:
+            result.font_names[lang] = face
+    return result
 
 
 def _extract_hwpx_margin_map(element: etree._Element) -> dict[str, str]:
@@ -272,6 +331,7 @@ def _build_hwp_placeholder_paragraph_styles(
             if candidate is not None:
                 style_ids.add(candidate)
     payloads = docinfo_model.para_shape_records()
+    style_ids.update(range(len(payloads)))
     styles: list[ParagraphStyle] = []
     for style_id in sorted(style_ids):
         payload = bytes(payloads[style_id].payload) if 0 <= style_id < len(payloads) else None
@@ -289,12 +349,20 @@ def _build_hwp_placeholder_character_styles(docinfo_model, style_definitions: li
         if value is not None
     }
     payloads = docinfo_model.char_shape_records()
+    style_ids.update(range(len(payloads)))
+    counts = docinfo_model.id_mappings_record().counts
+    faces = docinfo_model.records_by_tag_id(TAG_FACE_NAME)
     styles: list[CharacterStyle] = []
     for style_id in sorted(style_ids):
         payload = bytes(payloads[style_id].payload) if 0 <= style_id < len(payloads) else None
         style = CharacterStyle(style_id=str(style_id), native_hwp_payload=payload)
         if payload is not None:
             _apply_hwp_character_style_payload(style, payload)
+            for language_index, language in enumerate(_HWP_CHAR_FONT_ORDER, start=1):
+                first = sum(counts[1:language_index])
+                local_id = int(style.font_refs.get(language, "0"))
+                if language_index < len(counts) and local_id < counts[language_index] and first + local_id < len(faces):
+                    style.font_names[language] = str(FaceNameRecord.from_record(faces[first + local_id]).fields().get("name", ""))
         styles.append(style)
     return styles
 
@@ -495,16 +563,41 @@ def _apply_hwp_character_style_payload(style: CharacterStyle, payload: bytes) ->
             key: str(int.from_bytes(values[index * 2 : (index + 1) * 2], "little", signed=False))
             for index, key in enumerate(_HWP_CHAR_FONT_ORDER)
         }
+    if len(values) >= 21:
+        style.font_ratios = {
+            key: values[14 + index]
+            for index, key in enumerate(_HWP_CHAR_FONT_ORDER)
+        }
     if len(values) >= 46:
         style.height = str(int.from_bytes(values[42:46], "little", signed=False))
     if len(values) >= 50:
         attributes = int.from_bytes(values[46:50], "little", signed=False)
+        style.italic = bool(attributes & 0x00000001)
+        style.bold = bool(attributes & 0x00000002)
+        underline_type = {0: "NONE", 1: "BOTTOM", 3: "TOP"}.get((attributes >> 2) & 0x03)
+        underline_shape = {0: "SOLID", 1: "DASH", 2: "DOT", 7: "DOUBLE_SLIM", 11: "WAVE"}.get(
+            (attributes >> 4) & 0x0F
+        )
+        if underline_type is not None and underline_shape is not None:
+            style.underline = {"type": underline_type, "shape": underline_shape}
+        strike_code = (attributes >> 18) & 0x07
+        if strike_code in (0, 1):
+            style.strikeout = {"shape": "SOLID" if strike_code else "NONE"}
+        if not (attributes & (1 << 15) and attributes & (1 << 16)):
+            style.script_position = (
+                "SUPERSCRIPT" if attributes & (1 << 15) else
+                "SUBSCRIPT" if attributes & (1 << 16) else "NORMAL"
+            )
         style.use_font_space = "1" if attributes & 0x20000000 else "0"
         style.use_kerning = "1" if attributes & 0x40000000 else "0"
-    if len(values) >= 58:
-        style.text_color = _parse_hwp_colorref(values[54:58])
+    if len(values) >= 56:
+        style.text_color = _parse_hwp_colorref(values[52:56])
     if len(values) >= 64:
         style.shade_color = "none" if values[60:64] == b"\xff\xff\xff\xff" else _parse_hwp_colorref(values[60:64])
+    if len(values) >= 60 and style.underline:
+        style.underline["color"] = _parse_hwp_colorref(values[56:60])
+    if len(values) >= 74 and style.strikeout:
+        style.strikeout["color"] = _parse_hwp_colorref(values[70:74])
 
 
 def _build_hwp_character_style_payload(style: CharacterStyle, fallback_payload: bytes | None = None) -> bytes:
@@ -516,10 +609,38 @@ def _build_hwp_character_style_payload(style: CharacterStyle, fallback_payload: 
         if value is None:
             continue
         payload[index * 2 : (index + 1) * 2] = int(value).to_bytes(2, "little", signed=False)
+    for index, key in enumerate(_HWP_CHAR_FONT_ORDER):
+        ratio = style.font_ratios.get(key)
+        if ratio is not None:
+            if not 50 <= ratio <= 200:
+                raise ValueError(f"HWP font ratio must be between 50 and 200: {ratio}")
+            payload[14 + index] = ratio
     height = _coerce_int(style.height)
     if height is not None:
         payload[42:46] = int(height).to_bytes(4, "little", signed=False)
     attributes = int.from_bytes(payload[46:50], "little", signed=False)
+    for mask, enabled in ((1, style.italic), (2, style.bold)):
+        if enabled is not None:
+            attributes = (attributes | mask) if enabled else (attributes & ~mask)
+    if style.underline:
+        underline_type = {"NONE": 0, "BOTTOM": 1, "TOP": 3}.get(style.underline.get("type", "NONE"), 0)
+        underline_shape = {"SOLID": 0, "DASH": 1, "DOT": 2, "DOUBLE_SLIM": 7, "WAVE": 11}.get(
+            style.underline.get("shape", "SOLID"), 0
+        )
+        attributes = (attributes & ~0xFC) | (underline_type << 2) | (underline_shape << 4)
+        if style.underline.get("color"):
+            payload[56:60] = _build_hwp_colorref(style.underline["color"])
+    if style.strikeout:
+        strikeout = 0 if style.strikeout.get("shape", "NONE") == "NONE" else 1
+        attributes = (attributes & ~(0x07 << 18)) | (strikeout << 18)
+        if style.strikeout.get("color") and len(payload) >= 74:
+            payload[70:74] = _build_hwp_colorref(style.strikeout["color"])
+    if style.script_position is not None:
+        attributes &= ~((1 << 15) | (1 << 16))
+        if style.script_position == "SUPERSCRIPT":
+            attributes |= 1 << 15
+        elif style.script_position == "SUBSCRIPT":
+            attributes |= 1 << 16
     use_font_space = _coerce_bool(style.use_font_space)
     if use_font_space is not None:
         attributes = (attributes | 0x20000000) if use_font_space else (attributes & ~0x20000000)
@@ -528,7 +649,7 @@ def _build_hwp_character_style_payload(style: CharacterStyle, fallback_payload: 
         attributes = (attributes | 0x40000000) if use_kerning else (attributes & ~0x40000000)
     payload[46:50] = int(attributes).to_bytes(4, "little", signed=False)
     if style.text_color is not None:
-        payload[54:58] = _build_hwp_colorref(style.text_color)
+        payload[52:56] = _build_hwp_colorref(style.text_color)
     if style.shade_color is not None:
         payload[60:64] = b"\xff\xff\xff\xff" if str(style.shade_color).lower() == "none" else _build_hwp_colorref(style.shade_color)
     return bytes(payload)
@@ -712,6 +833,7 @@ def _merge_hwp_style_defaults_into_paragraphs(document: HancomDocument) -> None:
 
 def _sync_hwp_docinfo_styles(document: HwpDocument, hancom_document: HancomDocument) -> None:
     docinfo_model = document.docinfo_model()
+    _sync_hwp_font_faces(docinfo_model, hancom_document.character_styles)
     initial_style_count = len(docinfo_model.style_records())
     _assign_missing_hwp_style_ids(
         hancom_document.paragraph_styles,
@@ -928,6 +1050,51 @@ def _sync_hwp_docinfo_styles(document: HwpDocument, hancom_document: HancomDocum
         )
 
     document.binary_document().replace_docinfo_model(docinfo_model)
+
+
+def _sync_hwp_font_faces(docinfo_model, styles: list[CharacterStyle]) -> None:
+    """Resolve per-language HWP FaceID references for imported font names."""
+    id_mappings = docinfo_model.id_mappings_record()
+    parent = id_mappings
+    for style in styles:
+        if style.native_hwp_payload is not None:
+            continue
+        for language_index, language in enumerate(_HWP_CHAR_FONT_ORDER, start=1):
+            face_name = style.font_names.get(language)
+            if not face_name:
+                continue
+            counts = id_mappings.counts
+            first = sum(counts[1:language_index])
+            count = counts[language_index]
+            records = docinfo_model.records_by_tag_id(TAG_FACE_NAME)
+            local_id = next(
+                (
+                    index for index, record in enumerate(records[first:first + count])
+                    if face_name.casefold() in {
+                        str(FaceNameRecord.from_record(record).fields().get("name", "")).casefold(),
+                        str(FaceNameRecord.from_record(record).fields().get("default_font_name", "")).casefold(),
+                    }
+                ),
+                None,
+            )
+            if local_id is None:
+                encoded = face_name.encode("utf-16-le")
+                if len(encoded) // 2 > 0xFFFF:
+                    raise ValueError("HWP font name is too long.")
+                payload = b"\x00" + (len(encoded) // 2).to_bytes(2, "little") + encoded
+                record = TypedRecord(tag_id=TAG_FACE_NAME, level=1, payload=payload)
+                insert_after = records[first + count - 1] if count else None
+                if insert_after is not None:
+                    parent.children.insert(parent.children.index(insert_after) + 1, record)
+                else:
+                    next_face = records[first] if first < len(records) else None
+                    if next_face is not None:
+                        parent.children.insert(parent.children.index(next_face), record)
+                    else:
+                        parent.children.append(record)
+                local_id = count
+                id_mappings.set_count(language_index, count + 1)
+            style.font_refs[language] = str(local_id)
 
 
 def _assign_missing_hwp_style_ids(nodes, *, existing_ids: set[int], max_id: int | None = None) -> None:

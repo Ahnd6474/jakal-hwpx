@@ -32,6 +32,7 @@ from .hancom_document import (
     _apply_hwpx_picture_block,
     _apply_hwpx_shape_block,
     _apply_hwpx_table_block,
+    _apply_hwpx_hyperlink_runs,
     _block_owned_text_for_write,
     _build_hwpx_memo_parameters,
     _has_nested_blocks,
@@ -98,12 +99,13 @@ def _write_section_to_hwpx(document: HwpxDocument, section_index: int, section: 
             )
             _apply_hwpx_picture_block(appended, block)
         elif isinstance(block, Hyperlink):
-            document.append_hyperlink(
+            field = document.append_hyperlink(
                 block.target,
                 display_text=_block_owned_text_for_write(block),
                 section_index=section_index,
                 paragraph_index=paragraph_index,
             )
+            _apply_hwpx_hyperlink_runs(field, block)
         elif isinstance(block, Bookmark):
             document.append_bookmark(
                 block.name,
@@ -272,12 +274,13 @@ def _append_non_paragraph_block_to_hwpx(
         )
         _apply_hwpx_picture_block(appended, block)
     elif isinstance(block, Hyperlink):
-        document.append_hyperlink(
+        field = document.append_hyperlink(
             block.target,
             display_text=_block_owned_text_for_write(block),
             section_index=section_index,
             paragraph_index=paragraph_index,
         )
+        _apply_hwpx_hyperlink_runs(field, block)
     elif isinstance(block, Bookmark):
         document.append_bookmark(
             block.name,

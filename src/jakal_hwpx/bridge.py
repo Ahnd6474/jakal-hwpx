@@ -46,6 +46,8 @@ class HwpHwpxBridge:
             return cls.from_hwp(source_path, converter=converter)
         if source_format == "hwpx":
             return cls.from_hwpx(source_path, converter=converter)
+        if source_format == "docx":
+            return cls.from_hancom(HancomDocument.read_docx(source_path, converter=converter), converter=converter)
         raise ValueError(f"Unsupported bridge source: {source_path}")
 
     @classmethod
@@ -190,10 +192,15 @@ class HwpHwpxBridge:
         return self._workspace
 
 
-def _detect_source_format(path: Path) -> Literal["hwp", "hwpx"] | None:
+def _detect_source_format(path: Path) -> Literal["hwp", "hwpx", "docx"] | None:
     if not path.exists():
         raise FileNotFoundError(path)
+    if path.suffix.lower() == ".docx":
+        return "docx"
     if zipfile.is_zipfile(path):
+        with zipfile.ZipFile(path) as package:
+            if "word/document.xml" in package.namelist():
+                return "docx"
         return "hwpx"
     if olefile.isOleFile(str(path)):
         return "hwp"

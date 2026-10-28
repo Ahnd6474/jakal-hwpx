@@ -525,6 +525,12 @@ class HwpDocument:
         self.to_hwpx_document(force_refresh=False).save(target_path)
         return target_path
 
+    def to_docx_document(self, *, converter=None, preserve_formatting: bool | None = None):
+        return self.to_hancom_document(force_refresh=True).to_docx_document(converter=converter, preserve_formatting=preserve_formatting)
+
+    def save_as_docx(self, path: str | Path, *, converter=None, preserve_formatting: bool | None = None) -> Path:
+        return self.to_hancom_document(force_refresh=True).write_to_docx(path, converter=converter, preserve_formatting=preserve_formatting)
+
     def save(self, path: str | Path | None = None) -> Path:
         if path is not None:
             target_path = Path(path).expanduser().resolve()

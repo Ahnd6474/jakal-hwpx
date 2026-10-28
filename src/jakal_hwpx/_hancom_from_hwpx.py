@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from ._hancom_models import HancomBlock
+from ._hancom_models import HancomBlock, Picture, Equation, Hyperlink
+from ._hwpx_element_helpers import _text_node_plain_text
 
 # Imported after hancom_document finishes defining shared conversion helpers.
 from .hancom_document import (
@@ -33,7 +34,7 @@ def _extract_hwpx_paragraph_blocks(section, paragraph: etree._Element, paragraph
             local_name = etree.QName(child).localname
             if local_name == "t":
                 if skipped_field_id is None:
-                    text = (child.text or "").replace("\r", "")
+                    text = _text_node_plain_text(child).replace("\r", "")
                     if text:
                         blocks.append(
                             _mark_hwpx_source_paragraph(
@@ -91,7 +92,10 @@ def _extract_hwpx_paragraph_blocks(section, paragraph: etree._Element, paragraph
         for memo in _merge_hwpx_memos_with_carriers(memo_blocks, memo_carriers):
             blocks.append(_mark_hwpx_source_paragraph(memo, paragraph_index))
     blocks.extend(_extract_missing_hwpx_descendant_blocks(section, paragraph, paragraph_index, seen_nodes))
-    return _sort_hwpx_blocks_by_source_order(blocks)
+    blocks = _sort_hwpx_blocks_by_source_order(blocks)
+    if blocks and isinstance(blocks[0], (Picture, Equation, Hyperlink)):
+        blocks.insert(0, _mark_hwpx_source_paragraph(_build_hwpx_paragraph_block(paragraph, ""), paragraph_index, order=-1))
+    return blocks
 
 _extract_hwpx_paragraph_blocks.__module__ = "jakal_hwpx.hancom_document"
 

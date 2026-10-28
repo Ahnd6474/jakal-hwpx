@@ -2,9 +2,10 @@
 
 `jakal-hwpx` is a Python library for reading, editing, and writing both `HWPX` and `HWP` documents.
 
-The package exposes three main layers:
+The package exposes a shared document API and format-specific implementations:
 
-- `HancomDocument`: a format-neutral document model for most authoring and conversion work
+- `Document`: the shared document API (`HancomDocument` remains a compatibility alias)
+- `WordDocument(Document)`: retains Word details and dispatches shared edits to a Word backend
 - `HwpxDocument`: direct HWPX package and XML editing
 - `HwpDocument`: direct native HWP object and binary editing
 
@@ -29,12 +30,12 @@ Package name on PyPI is `jakal-hwpx`. Import path is `jakal_hwpx`.
 
 ## Quick start
 
-For most application code, start with `HancomDocument`.
+For most application code, start with `Document`.
 
 ```python
-from jakal_hwpx import HancomDocument
+from jakal_hwpx import Document
 
-doc = HancomDocument.blank()
+doc = Document.blank()
 doc.metadata.title = "Quarterly report"
 doc.append_paragraph("Sales summary")
 doc.append_table(
@@ -50,12 +51,53 @@ doc.write_to_hwp("build/report.hwp")
 Reading an existing document uses the same model:
 
 ```python
-from jakal_hwpx import HancomDocument
+from jakal_hwpx import Document
 
-doc = HancomDocument.open("input.hwp")
+doc = Document.open("input.hwp")
 doc.append_paragraph("Review complete")
 doc.save("build/output.hwpx")
 ```
+
+### Word documents
+
+Install Word support with `pip install "jakal-hwpx[docx]"`.
+`Document.open("input.docx")` returns a `WordDocument`, which retains the complete
+original DOCX package alongside its common model view.
+
+```python
+from jakal_hwpx import Document, WordDocument
+
+doc = Document.open("input.docx")
+assert isinstance(doc, WordDocument)
+doc.append_paragraph("Review complete")
+doc.replace_text("Old text", "New text")
+doc.save("build/output.docx")
+doc.save("build/output.hwpx")  # Python conversion through the common model
+doc.save("build/output.hwp")   # Python conversion through the common model
+
+with doc.edit_word() as word:
+    word.paragraphs[0].runs[0].bold = True
+```
+
+Untouched DOCX output is byte-identical. Shared edits preserve unrelated parts,
+and Word-specific details can be edited through the python-docx backend.
+HWP/HWPX output is generated in Python without Hancom Office. The common model
+retains supported content and formatting; unsupported Word features produce
+`UserWarning` messages during conversion. An external converter remains opt-in.
+See [WordDocument](docs/word-document.md) for supported edits, requirements, and visual limits.
+
+HWP and HWPX can also be exported to editable Word documents in Python:
+
+```python
+Document.open("input.hwpx").save("build/from_hwpx.docx")
+Document.open("input.hwp").save("build/from_hwp.docx")
+word = Document.open("input.hwpx").to_docx_document()  # WordDocument
+```
+
+The low-level `HwpxDocument` and `HwpDocument` classes also provide
+`save_as_docx()` and `to_docx_document()`. This maps supported shared content and
+formatting; native equations and unsupported embedded objects require an explicit
+external converter. See the [DOCX export limits](docs/word-document.md#hwphwpx에서-docx-내보내기).
 
 ## Direct HWPX authoring
 
@@ -113,7 +155,7 @@ The older explicit APIs still exist and remain the lowest-level stable surface:
 
 | Layer | Use it for |
 |---|---|
-| `HancomDocument` | format-neutral authoring, conversion, block-level editing |
+| `Document` | format-neutral authoring, conversion, block-level editing |
 | `HwpxDocument` | direct HWPX package editing, XML placement, validation, control surgery |
 | `HwpDocument` | direct native HWP object editing and low-level HWP inspection |
 | `HwpBinaryDocument` | record tree, streams, DocInfo, and section model inspection |
@@ -146,7 +188,7 @@ python scripts/check_release.py --profile release
 
 - [HWPX_MODULE.md](https://github.com/Ahnd6474/jakal-hwpx/blob/main/HWPX_MODULE.md): public module and API index
 - [docs/README.md](https://github.com/Ahnd6474/jakal-hwpx/blob/main/docs/README.md): docs directory index
-- [docs/hancom-document.md](https://github.com/Ahnd6474/jakal-hwpx/blob/main/docs/hancom-document.md): `HancomDocument`
+- [docs/hancom-document.md](https://github.com/Ahnd6474/jakal-hwpx/blob/main/docs/hancom-document.md): `Document`
 - [docs/hwpx-document.md](https://github.com/Ahnd6474/jakal-hwpx/blob/main/docs/hwpx-document.md): `HwpxDocument`
 - [docs/hwp-document.md](https://github.com/Ahnd6474/jakal-hwpx/blob/main/docs/hwp-document.md): `HwpDocument`
 - [docs/bridge-and-binary.md](https://github.com/Ahnd6474/jakal-hwpx/blob/main/docs/bridge-and-binary.md): bridge and binary internals

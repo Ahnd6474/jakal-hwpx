@@ -160,8 +160,11 @@ def test_hwp_document_bridge_section_settings_roundtrip_to_native_hwp(tmp_path: 
 
     reopened = HwpDocument.open(output_path).to_hwpx_document()
     reopened_settings = reopened.section_settings(0)
-    assert reopened_settings.page_width == 123456
-    assert reopened_settings.page_height == 98765
+    # HWP uses oriented dimensions; HWPX stores paper dimensions before its
+    # NARROWLY rotation. Compare the same physical page, not the raw numbers.
+    assert reopened_settings.landscape == "NARROWLY"
+    assert reopened_settings.page_width == 98765
+    assert reopened_settings.page_height == 123456
     assert reopened_settings.margins()["left"] == 1111
     assert reopened_settings.margins()["right"] == 2222
     assert reopened_settings.margins()["top"] == 3333

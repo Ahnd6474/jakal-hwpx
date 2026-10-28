@@ -9,6 +9,8 @@ from typing import Callable
 
 from lxml import etree
 
+from ._hwpx_element_helpers import _set_text_node_content, _text_node_plain_text
+
 from ._hancom_models import (  # noqa: F401 - compatibility re-exports
     _HWP_NATIVE_FIELD_TYPE_BY_SEMANTIC_TYPE,
     _HWPX_CHART_CARRIER_PREFIX,
@@ -114,6 +116,10 @@ from .document import HwpxDocument
 from .hwp_binary import (
     TAG_CTRL_DATA,
     TAG_CTRL_HEADER,
+    TAG_PARA_CHAR_SHAPE,
+    TAG_LIST_HEADER,
+    TAG_PARA_HEADER,
+    TAG_PAGE_DEF,
     ParagraphHeaderRecord,
     SectionParagraphModel,
 )
@@ -133,7 +139,7 @@ from .namespaces import NS, qname
 
 HancomConverter = Callable[[str | Path, str | Path, str], Path]
 
-class HancomDocument:
+class Document:
     def __init__(
         self,
         *,
@@ -153,6 +159,7 @@ class HancomDocument:
         self.numbering_definitions: list[NumberingDefinition] = []
         self.bullet_definitions: list[BulletDefinition] = []
         self.memo_shape_definitions: list[MemoShapeDefinition] = []
+        self.import_warnings: list[str] = []
 
     @classmethod
     def blank(cls, *, converter: HancomConverter | None = None) -> "HancomDocument":
@@ -162,11 +169,16 @@ class HancomDocument:
     def open(cls, path: str | Path, *, converter: HancomConverter | None = None) -> "HancomDocument":
         candidate = Path(path)
         suffix = candidate.suffix.lower()
+        if suffix == ".docx":
+            return cls.read_docx(candidate, converter=converter)
         if zipfile.is_zipfile(candidate):
+            with zipfile.ZipFile(candidate) as package:
+                if "word/document.xml" in package.namelist():
+                    return cls.read_docx(candidate, converter=converter)
             return cls.read_hwpx(candidate, converter=converter)
         if suffix == ".hwp":
             return cls.read_hwp(candidate, converter=converter)
-        raise ValueError(f"Unsupported Hancom document path: {candidate}. Expected .hwp or .hwpx.")
+        raise ValueError(f"Unsupported Hancom document path: {candidate}. Expected .hwp, .hwpx, or .docx.")
 
     def bridge(self, *, converter: HancomConverter | None = None):
         from .bridge import HwpHwpxBridge
@@ -175,11 +187,41 @@ class HancomDocument:
 
     @classmethod
     def read_hwpx(cls, path: str | Path, *, converter: HancomConverter | None = None) -> "HancomDocument":
-        return cls.from_hwpx_document(HwpxDocument.open(path), converter=converter)
+        instance = cls.from_hwpx_document(HwpxDocument.open(path), converter=converter)
+        instance._capture_docx_conversion_source(Path(path))
+        return instance
 
     @classmethod
     def read_hwp(cls, path: str | Path, *, converter: HancomConverter | None = None) -> "HancomDocument":
-        return cls.from_hwp_document(HwpDocument.open(path, converter=converter), converter=converter)
+        instance = cls.from_hwp_document(HwpDocument.open(path, converter=converter), converter=converter)
+        instance._capture_docx_conversion_source(Path(path))
+        return instance
+
+    def _docx_export_state(self):
+        return tuple(getattr(self, key) for key in (
+            "metadata", "sections", "style_definitions", "paragraph_styles", "character_styles",
+            "numbering_definitions", "bullet_definitions", "memo_shape_definitions",
+        ))
+
+    def _capture_docx_conversion_source(self, path: Path) -> None:
+        from copy import deepcopy
+
+        self._docx_conversion_source = (path.read_bytes(), self.source_format, deepcopy(self._docx_export_state()))
+
+    @classmethod
+    def read_docx(cls, path: str | Path, *, converter: HancomConverter | None = None) -> "HancomDocument":
+        """Read a Word document into the shared model (requires the ``docx`` extra).
+
+        Unsupported features are reported through UserWarning and import_warnings.
+        The original DOCX package is retained for format-preserving DOCX output.
+        """
+        from ._hancom_from_docx import populate_from_docx
+        from .word_document import WordDocument
+
+        factory = WordDocument if cls is Document else cls
+        instance = factory(sections=[], source_format="docx", converter=converter)
+        populate_from_docx(instance, Path(path))
+        return instance
 
     @classmethod
     def from_hwpx_document(
@@ -196,7 +238,14 @@ class HancomDocument:
         )
         instance.style_definitions = [_extract_style_definition(style) for style in document.styles()]
         instance.paragraph_styles = [_extract_paragraph_style(style) for style in document.paragraph_styles()]
-        instance.character_styles = [_extract_character_style(style) for style in document.character_styles()]
+        font_lookup = {
+            (family.get("lang", "").lower(), font.get("id", "")): font.get("face", "")
+            for family in document.header.readonly_root_element.xpath(".//hh:fontface", namespaces=NS)
+            for font in family
+        }
+        instance.character_styles = [_extract_character_style(style, font_lookup=font_lookup) for style in document.character_styles()]
+        instance._hwpx_ref_resources = [etree.tostring(node) for node in document.header.readonly_root_element.xpath("./hh:refList/*", namespaces=NS)
+                                        if etree.QName(node).localname not in {"fontfaces", "charProperties", "paraProperties", "styles"}]
         instance.memo_shape_definitions = [_extract_hwpx_memo_shape(memo_shape) for memo_shape in document.memo_shapes()]
         for section in document.sections:
             instance.sections.append(_extract_hwpx_section(section))
@@ -240,6 +289,36 @@ class HancomDocument:
         block = Paragraph(text)
         section.blocks.append(block)
         return block
+
+    def replace_text(self, old: str, new: str, *, count: int = -1) -> int:
+        """Replace projected text; format specializations override this operation."""
+        if not old:
+            raise ValueError("old must be non-empty.")
+        changed = 0
+        remaining = count
+        for section in self.sections:
+            for block in section.blocks:
+                targets = []
+                if isinstance(block, Paragraph):
+                    targets.append((block, "text"))
+                elif isinstance(block, Hyperlink):
+                    targets.append((block, "display_text"))
+                elif isinstance(block, Table):
+                    for row in block.cell_texts:
+                        for index, text in enumerate(row):
+                            amount = text.count(old) if remaining < 0 else min(text.count(old), remaining)
+                            row[index] = text.replace(old, new, remaining)
+                            changed += amount
+                            if remaining >= 0:
+                                remaining -= amount
+                for target, attribute in targets:
+                    text = getattr(target, attribute) or ""
+                    amount = text.count(old) if remaining < 0 else min(text.count(old), remaining)
+                    setattr(target, attribute, text.replace(old, new, remaining))
+                    changed += amount
+                    if remaining >= 0:
+                        remaining -= amount
+        return changed
 
     def append_table(
         self,
@@ -774,6 +853,13 @@ class HancomDocument:
         use_kerning: str | None = None,
         sym_mark: str | None = None,
         font_refs: dict[str, str] | None = None,
+        font_names: dict[str, str] | None = None,
+        font_ratios: dict[str, int] | None = None,
+        bold: bool | None = None,
+        italic: bool | None = None,
+        underline: dict[str, str] | None = None,
+        strikeout: dict[str, str] | None = None,
+        script_position: str | None = None,
     ) -> CharacterStyle:
         node = CharacterStyle(
             style_id=style_id,
@@ -784,6 +870,13 @@ class HancomDocument:
             use_kerning=use_kerning,
             sym_mark=sym_mark,
             font_refs=dict(font_refs or {}),
+            font_names=dict(font_names or {}),
+            font_ratios=dict(font_ratios or {}),
+            bold=bold,
+            italic=italic,
+            underline=dict(underline or {}),
+            strikeout=dict(strikeout or {}),
+            script_position=script_position,
         )
         self.character_styles.append(node)
         return node
@@ -881,7 +974,9 @@ class HancomDocument:
         self.memo_shape_definitions.append(node)
         return node
 
-    def to_hwpx_document(self) -> HwpxDocument:
+    def to_hwpx_document(self, *, preserve_formatting: bool | None = None, converter: HancomConverter | None = None) -> HwpxDocument:
+        if preserve_formatting:
+            raise ValueError("Formatting-preserving conversion requires a WordDocument.")
         document = HwpxDocument.blank()
         self.metadata.apply_to_hwpx_document(document)
         _apply_styles(document, self)
@@ -902,10 +997,46 @@ class HancomDocument:
             _write_section_to_hwpx(document, section_index, section)
             if uses_source_paragraphs and section.settings.page_numbers:
                 _apply_page_numbers_to_source_paragraphs(document, section_index, section.settings)
+        for section in document.sections:
+            for text_node in section.root_element.xpath(".//hp:t", namespaces=NS):
+                if not len(text_node) and any(char in (text_node.text or "") for char in "\t\r\n"):
+                    _set_text_node_content(text_node, text_node.text or "")
+                    section.mark_modified()
         return document
 
-    def write_to_hwpx(self, path: str | Path, *, validate: bool = True) -> Path:
-        return self.to_hwpx_document().save(path, validate=validate)
+    def write_to_hwpx(self, path: str | Path, *, validate: bool = True, preserve_formatting: bool | None = None, converter: HancomConverter | None = None) -> Path:
+        return self.to_hwpx_document(preserve_formatting=preserve_formatting, converter=converter).save(path, validate=validate)
+
+    def to_docx_document(self, *, converter: HancomConverter | None = None, preserve_formatting: bool | None = None):
+        """Export the current shared model as an editable WordDocument.
+
+        The default path is portable Python. An explicitly supplied converter
+        receives a current HWPX snapshot and the ``DOCX`` output format.
+        """
+        from ._hancom_to_docx import build_docx
+
+        effective_converter = converter or self._converter
+        directory = self._ensure_temp_dir()
+        output = directory / "exported.docx"
+        if preserve_formatting is False or (preserve_formatting is None and effective_converter is None):
+            output.write_bytes(build_docx(self))
+        else:
+            if effective_converter is None:
+                raise ValueError("Formatting-preserving DOCX export requires an explicit converter.")
+            original = getattr(self, "_docx_conversion_source", None)
+            if original is not None and original[2] == self._docx_export_state():
+                source = directory / ("docx-source." + original[1])
+                source.write_bytes(original[0])
+            else:
+                source = self.to_hwpx_document().save(directory / "docx-source.hwpx")
+            output.unlink(missing_ok=True)
+            output = Path(effective_converter(source, output, "DOCX"))
+            if not output.is_file():
+                raise ValueError("The DOCX converter did not produce an output file.")
+        return Document.read_docx(output)
+
+    def write_to_docx(self, path: str | Path, *, converter: HancomConverter | None = None, preserve_formatting: bool | None = None) -> Path:
+        return self.to_docx_document(converter=converter, preserve_formatting=preserve_formatting).write_to_docx(path)
 
     def save(
         self,
@@ -913,16 +1044,21 @@ class HancomDocument:
         *,
         validate: bool = True,
         converter: HancomConverter | None = None,
+        preserve_formatting: bool | None = None,
     ) -> Path:
         target = Path(path)
         suffix = target.suffix.lower()
+        if suffix == ".docx":
+            return self.write_to_docx(target, converter=converter, preserve_formatting=preserve_formatting)
         if suffix == ".hwpx":
-            return self.write_to_hwpx(target, validate=validate)
+            return self.write_to_hwpx(target, validate=validate, preserve_formatting=preserve_formatting, converter=converter)
         if suffix == ".hwp":
-            return self.write_to_hwp(target, converter=converter)
-        raise ValueError(f"Unsupported Hancom document path: {target}. Expected .hwp or .hwpx.")
+            return self.write_to_hwp(target, converter=converter, preserve_formatting=preserve_formatting)
+        raise ValueError(f"Unsupported Hancom document path: {target}. Expected .hwp, .hwpx, or .docx.")
 
-    def to_hwp_document(self, *, converter: HancomConverter | None = None) -> HwpDocument:
+    def to_hwp_document(self, *, converter: HancomConverter | None = None, preserve_formatting: bool | None = None) -> HwpDocument:
+        if preserve_formatting:
+            raise ValueError("Formatting-preserving conversion requires a WordDocument.")
         effective_converter = converter or self._converter
         document = HwpDocument.blank(converter=effective_converter)
         document.ensure_section_count(max(len(self.sections), 1))
@@ -933,11 +1069,14 @@ class HancomDocument:
         docinfo = document.docinfo_model()
         paragraph_attribute_limits = (len(docinfo.para_shape_records()), len(docinfo.style_records()))
         for section_index, section in enumerate(self.sections):
+            width, height, landscape = section.settings.page_width, section.settings.page_height, section.settings.landscape
+            if landscape == "NARROWLY":
+                width, height, landscape = height, width, "LANDSCAPE"
             document.apply_section_settings(
                 section_index=section_index,
-                page_width=section.settings.page_width,
-                page_height=section.settings.page_height,
-                landscape=section.settings.landscape,
+                page_width=width,
+                page_height=height,
+                landscape=landscape,
                 margins=section.settings.margins or None,
                 visibility=section.settings.visibility or None,
                 grid=section.settings.grid or None,
@@ -996,8 +1135,8 @@ class HancomDocument:
                     binary_document.end_section_model_batch()
         return document
 
-    def write_to_hwp(self, path: str | Path, *, converter: HancomConverter | None = None) -> Path:
-        document = self.to_hwp_document(converter=converter)
+    def write_to_hwp(self, path: str | Path, *, converter: HancomConverter | None = None, preserve_formatting: bool | None = None) -> Path:
+        document = self.to_hwp_document(converter=converter, preserve_formatting=preserve_formatting)
         return document.save(path)
 
     def _ensure_section(self, section_index: int) -> HancomSection:
@@ -1116,7 +1255,7 @@ def _extract_hwp_section_settings(section) -> SectionSettings:
         for key, value in settings.items()
         if key in {"left", "right", "top", "bottom", "header", "footer", "gutter"}
     }
-    return SectionSettings(
+    result = SectionSettings(
         page_width=page_width or None,
         page_height=page_height or None,
         landscape="LANDSCAPE" if (page_width or 0) > (page_height or 0) else "WIDELY",
@@ -1131,6 +1270,13 @@ def _extract_hwp_section_settings(section) -> SectionSettings:
         numbering_shape_id=_normalize_hwp_setting_scalar(section_definition.get("numbering_shape_id")),
         memo_shape_id=_normalize_hwp_setting_scalar(section_definition.get("memo_shape_id")),
     )
+    page = next((node for node in section.model().iter_nodes() if node.tag_id == TAG_PAGE_DEF), None)
+    if page is not None and len(page.payload) >= 36:
+        native_margins = {key: int.from_bytes(page.payload[offset:offset + 4], "little")
+                          for key, offset in (("left", 8), ("right", 12), ("top", 16), ("bottom", 20),
+                                              ("header", 24), ("footer", 28), ("gutter", 32))}
+        setattr(result, "_docx_native_margins", (dict(result.margins), native_margins))
+    return result
 
 
 def _normalize_hwp_text(value: str) -> str:
@@ -1164,7 +1310,21 @@ def _build_hwp_paragraph_block(paragraph, text: str) -> Paragraph:
     header = getattr(paragraph, "header", None)
     style_id = getattr(header, "style_id", None) if header is not None else None
     para_shape_id = getattr(header, "para_shape_id", None) if header is not None else None
-    return Paragraph(
+    shapes = next((node for node in header.children if node.tag_id == TAG_PARA_CHAR_SHAPE), None) if header else None
+    runs = []
+    if shapes is not None:
+        entries = list(struct.iter_unpack("<II", shapes.payload)) if len(shapes.payload) % 8 == 0 else []
+        raw = paragraph.raw_text.encode("utf-16-le", errors="surrogatepass")
+        for index, (start, char_id) in enumerate(entries):
+            end = entries[index + 1][0] if index + 1 < len(entries) else len(raw) // 2
+            value = raw[start * 2:end * 2].decode("utf-16-le", errors="replace")
+            visible = "".join(text for kind, text in _tokenize_hwp_paragraph_raw_text(value) if kind == "text")
+            visible = visible.encode("utf-16-le", errors="surrogatepass").decode("utf-16-le", errors="replace")
+            runs.append((_xml_safe_scalar(visible.replace("\r", "")), str(char_id)))
+        if runs:
+            runs[0] = (runs[0][0].lstrip(), runs[0][1])
+            runs[-1] = (runs[-1][0].rstrip(), runs[-1][1])
+    result = Paragraph(
         text=text,
         style_id=str(style_id) if style_id is not None else None,
         para_pr_id=str(para_shape_id) if para_shape_id is not None else None,
@@ -1173,6 +1333,11 @@ def _build_hwp_paragraph_block(paragraph, text: str) -> Paragraph:
         hwp_split_flags=getattr(header, "split_flags", None),
         hwp_control_mask=getattr(header, "control_mask", None),
     )
+    if runs and "".join(value for value, _ in runs) == text:
+        setattr(result, "_docx_runs", runs)
+        if len(runs) == 1:
+            result.char_pr_id = runs[0][1]
+    return result
 
 
 def _tokenize_hwp_paragraph_raw_text(raw_text: str) -> list[tuple[str, str]]:
@@ -1224,6 +1389,57 @@ def _find_matching_control_index(controls: list[object], start_index: int, contr
 
 
 
+
+
+def _attach_hwp_docx_table(control, block: Table) -> None:
+    """Retain native cell formatting as hints for the portable Word writer."""
+    from .hwp_document import _build_control_wrapper
+
+    definitions = control.document.docinfo_model().border_fill_records()
+    fills, borders, rich = {}, {}, {}
+    widths = (0.1, 0.12, 0.15, 0.2, 0.25, 0.3, 0.4, 0.5, 0.6, 0.7, 1.0, 1.5, 2.0, 3.0, 4.0, 5.0)
+    for cell in control.cells():
+        if not 0 < cell.border_fill_id <= len(definitions):
+            continue
+        payload = definitions[cell.border_fill_id - 1].payload
+        if len(payload) >= 40 and int.from_bytes(payload[32:36], "little") & 1:
+            fills[(cell.row, cell.column)] = "#" + payload[36:39].hex().upper()
+        values = {}
+        for side, offset in (("left", 2), ("right", 8), ("top", 14), ("bottom", 20)):
+            if len(payload) >= offset + 6:
+                values[side] = {
+                    "type": {0: "NONE", 1: "SOLID", 2: "DASH", 3: "DOT", 8: "DOUBLE_SLIM"}.get(payload[offset], "SOLID"),
+                    "width": str(widths[min(payload[offset + 1], len(widths) - 1)]),
+                    "color": "#" + payload[offset + 2:offset + 5].hex().upper(),
+                }
+        borders[(cell.row, cell.column)] = values
+    address = None
+    nested = []
+    section_model = control.document.section_model(control.section_index)
+
+    def finish() -> None:
+        if address is not None:
+            row, col = address
+            if row < block.rows and col < block.cols:
+                rich[address] = (block.cell_texts[row][col], list(nested))
+
+    for child in control.control_node.children:
+        if child.tag_id == TAG_LIST_HEADER and len(child.payload) == 47:
+            finish()
+            address = (int.from_bytes(child.payload[10:12], "little"), int.from_bytes(child.payload[8:10], "little"))
+            nested = []
+        elif child.tag_id == TAG_PARA_HEADER and address is not None:
+            paragraph = SectionParagraphModel(section_index=control.section_index, index=len(nested), header=child)
+            controls = []
+            for node in child.children:
+                if node.tag_id == TAG_CTRL_HEADER:
+                    wrapper = _build_control_wrapper(control.document, section_model, paragraph, node, len(controls))
+                    if wrapper is not None:
+                        controls.append(wrapper)
+            nested.extend(_extract_hwp_nested_paragraph_blocks(paragraph, controls, paragraph.index))
+    finish()
+    setattr(block, "_docx_cell_content", rich)
+    setattr(block, "_docx_table_details", {"cell_fill_colors": fills, "cell_border_styles": borders})
 
 
 def _extract_hwp_table_column_widths(table) -> list[int]:
@@ -1599,6 +1815,25 @@ def _apply_hwpx_shape_specific_fields(shape, block: Shape) -> None:
 
 
 def _apply_hwpx_table_block(table, block: Table) -> None:
+    for (row, column), (row_span, col_span) in (block.cell_spans or {}).items():
+        table.merge_cells(row, column, row + row_span - 1, column + col_span - 1)
+    for cell in table.cells():
+        size = cell.element.find(qname("hp", "cellSz"))
+        if size is None:
+            continue
+        if block.col_widths:
+            size.set("width", str(sum(block.col_widths[cell.column:cell.column + cell.col_span])))
+        if block.row_heights:
+            heights = block.row_heights[cell.row:cell.row + cell.row_span]
+            if all(height > 0 for height in heights):
+                size.set("height", str(sum(heights)))
+    size = table.element.find(qname("hp", "sz"))
+    if size is not None:
+        if block.col_widths:
+            size.set("width", str(sum(block.col_widths)))
+        if block.row_heights and all(height > 0 for height in block.row_heights):
+            size.set("height", str(sum(block.row_heights)))
+    table.section.mark_modified()
     if block.layout:
         table.set_layout(**_hwpx_layout_kwargs(block.layout))
     if block.out_margins:
@@ -1614,10 +1849,74 @@ def _apply_hwpx_table_block(table, block: Table) -> None:
         table.set_repeat_header(block.repeat_header)
     for (row, column), border_fill_id in (block.cell_border_fill_ids or {}).items():
         table.cell(row, column).set_border_fill_id(border_fill_id)
+    for row, column in set(block.cell_fill_colors or {}) | set(block.cell_border_styles or {}):
+        color = (block.cell_fill_colors or {}).get((row, column))
+        borders = (block.cell_border_styles or {}).get((row, column), {})
+        border_fill_id = _ensure_hwpx_table_border_fill(table.document, color, borders)
+        table.cell(row, column).set_border_fill_id(border_fill_id)
     for (row, column), margins in (block.cell_margins or {}).items():
         table.cell(row, column).set_margins(**_normalize_int_map(margins))
     for (row, column), vertical_align in (block.cell_vertical_aligns or {}).items():
         table.cell(row, column).set_vertical_align(vertical_align)
+    for (row, column), (baseline, blocks) in getattr(block, "_docx_cell_content", {}).items():
+        if row >= block.rows or column >= block.cols or block.cell_texts[row][column] != baseline:
+            continue
+        cell = table.cell(row, column)
+        sublist = cell.element.find(qname("hp", "subList"))
+        if sublist is None:
+            continue
+        rich = _build_hwpx_nested_sublist(table.document, blocks, vertical_align=cell.vertical_align)
+        for child in list(sublist):
+            sublist.remove(child)
+        for child in list(rich):
+            sublist.append(child)
+        table.section.mark_modified()
+
+
+def _ensure_hwpx_table_border_fill(
+    document: HwpxDocument,
+    fill_color: str | None,
+    borders: dict[str, dict[str, str | int]],
+) -> int:
+    key = (fill_color, tuple((side, tuple(sorted(spec.items()))) for side, spec in sorted(borders.items())))
+    cache = getattr(document, "_docx_table_border_fill_cache", None)
+    if cache is None:
+        cache = {}
+        setattr(document, "_docx_table_border_fill_cache", cache)
+    if key in cache:
+        return cache[key]
+    ref_list = document.header.root_element.find(qname("hh", "refList"))
+    border_fills = ref_list.find(qname("hh", "borderFills"))
+    if border_fills is None:
+        border_fills = etree.Element(qname("hh", "borderFills"), itemCnt="0")
+        char_properties = ref_list.find(qname("hh", "charProperties"))
+        ref_list.insert(ref_list.index(char_properties) if char_properties is not None else 0, border_fills)
+    existing = [int(node.get("id", "0")) for node in border_fills]
+    style_id = max(existing, default=0) + 1
+    node = etree.SubElement(
+        border_fills, qname("hh", "borderFill"), id=str(style_id),
+        threeD="0", shadow="0", centerLine="NONE", breakCellSeparateLine="0",
+    )
+    etree.SubElement(node, qname("hh", "slash"), type="NONE", Crooked="0", isCounter="0")
+    etree.SubElement(node, qname("hh", "backSlash"), type="NONE", Crooked="0", isCounter="0")
+    line_types = {"single": "SOLID", "dashed": "DASH", "dotted": "DOT", "double": "DOUBLE_SLIM", "none": "NONE", "nil": "NONE"}
+    for side in ("left", "right", "top", "bottom"):
+        spec = borders.get(side, {})
+        line_type = line_types.get(str(spec.get("style", "none")), "SOLID")
+        width_mm = max(0.1, int(spec.get("size", 4)) * 0.3527778 / 8)
+        color = str(spec.get("color", "000000")).lstrip("#")
+        etree.SubElement(
+            node, qname("hh", f"{side}Border"), type=line_type,
+            width=f"{width_mm:.2f} mm", color=f"#{color.upper()}",
+        )
+    etree.SubElement(node, qname("hh", "diagonal"), type="NONE", width="0.1 mm", color="#000000")
+    if fill_color:
+        brush = etree.SubElement(node, qname("hc", "fillBrush"))
+        etree.SubElement(brush, qname("hc", "winBrush"), faceColor=fill_color, hatchColor="#000000", alpha="0")
+    border_fills.set("itemCnt", str(len(border_fills)))
+    document.header.mark_modified()
+    cache[key] = style_id
+    return style_id
 
 
 def _apply_hwpx_picture_block(picture, block: Picture) -> None:
@@ -1663,6 +1962,9 @@ def _apply_hwpx_picture_block(picture, block: Picture) -> None:
 
 
 def _apply_hwpx_equation_block(equation, block: Equation) -> None:
+    unsupported = getattr(block, "_unsupported_word_math", None)
+    if unsupported:
+        raise ValueError(unsupported)
     if block.layout:
         equation.set_layout(**_hwpx_layout_kwargs(block.layout))
     if block.out_margins:
@@ -2016,6 +2318,10 @@ def _extract_hwpx_text_container_blocks(section, element: etree._Element) -> lis
     blocks: list[HancomBlock] = []
     for paragraph_index, paragraph in enumerate(paragraphs):
         blocks.extend(_extract_hwpx_nested_paragraph_blocks(section, paragraph, paragraph_index))
+    if local_name not in {"header", "footer", "footNote", "endNote", "hiddenComment"} and all(
+        isinstance(block, Paragraph) and not block.text for block in blocks
+    ):
+        return []
     return _sort_hwpx_nested_blocks_by_source_order(blocks)
 
 
@@ -2027,7 +2333,7 @@ def _extract_hwpx_nested_paragraph_blocks(section, paragraph: etree._Element, pa
             local_name = etree.QName(child).localname
             if local_name == "t":
                 if skipped_field_id is None:
-                    text = (child.text or "").replace("\r", "")
+                    text = _text_node_plain_text(child).replace("\r", "")
                     if text:
                         blocks.append(
                             _mark_hwpx_nested_paragraph(
@@ -2061,6 +2367,10 @@ def _extract_hwpx_nested_paragraph_blocks(section, paragraph: etree._Element, pa
                     )
                 if node_local_name == "fieldBegin":
                     skipped_field_id = node.get("id") or node.get("fieldid")
+    if not blocks:
+        blocks.append(_mark_hwpx_nested_paragraph(_build_hwpx_paragraph_block(paragraph, ""), paragraph_index))
+    elif isinstance(blocks[0], (Picture, Equation, Hyperlink)):
+        blocks.insert(0, _mark_hwpx_nested_paragraph(_build_hwpx_paragraph_block(paragraph, ""), paragraph_index, order=-1))
     return _sort_hwpx_nested_blocks_by_source_order(blocks)
 
 
@@ -2081,6 +2391,8 @@ def _extract_missing_hwpx_descendant_blocks(
     memo_blocks: list[Memo] = []
     memo_carriers: list[Memo] = []
     for node in paragraph.xpath(expression, namespaces=NS):
+        if _hwpx_node_is_inside_table_cell(node):
+            continue  # Cell sublists own their controls; do not lift them into the body.
         if _hwpx_node_is_inside_text_container(node) and etree.QName(node).localname in _HWPX_NESTED_INLINE_BLOCK_NAMES:
             continue
         node_key = _hwpx_node_key(node)
@@ -2180,6 +2492,9 @@ _HWPX_NESTED_INLINE_BLOCK_NAMES = {
     "fieldBegin",
     "autoNum",
     "newNum",
+    "tbl", "pic", "equation", "rect", "line", "ellipse", "arc", "polygon", "curve",
+    "connectLine", "textart", "container", "ole", "chart", "footNote", "endNote", "hiddenComment",
+    "checkBtn", "radioBtn", "btn", "edit", "comboBox", "listBox", "scrollBar",
 }
 
 
@@ -2226,7 +2541,15 @@ def _extract_hwpx_run_node(section, node: etree._Element) -> HancomBlock | list[
     if local_name == "fieldBegin":
         field = _build_field_wrapper(section, node)
         if (field.field_type or "").upper() == "HYPERLINK":
-            return Hyperlink(target=field.hyperlink_target or "", display_text=field.display_text or None)
+            result = Hyperlink(target=field.hyperlink_target or "", display_text=field.display_text or None)
+            runs = list(node.xpath("ancestor::hp:p[1]/hp:run", namespaces=NS))
+            begin = node.xpath("ancestor::hp:run[1]", namespaces=NS)[0]
+            endings = node.xpath("ancestor::hp:p[1]//hp:fieldEnd[@beginIDRef=$id]/ancestor::hp:run[1]", namespaces=NS, id=field.control_id)
+            if endings and begin in runs and endings[0] in runs:
+                styled = [Paragraph("".join(_text_node_plain_text(text) for text in run.xpath("./hp:t", namespaces=NS)), char_pr_id=run.get("charPrIDRef"))
+                          for run in runs[runs.index(begin) + 1:runs.index(endings[0])]]
+                setattr(result, "_docx_hyperlink_runs", (result.display_text, styled))
+            return result
         return _extract_field(field)
     if local_name in {"checkBtn", "radioBtn", "btn", "edit", "comboBox", "listBox", "scrollBar"}:
         return _extract_hwpx_form(_build_form_wrapper(section, node))
@@ -2290,12 +2613,14 @@ def _mark_hwpx_source_paragraph(block, paragraph_index: int, *, order: int | Non
 
 
 def _build_hwpx_paragraph_block(paragraph, text: str, *, char_pr_id: str | None = None) -> Paragraph:
-    return Paragraph(
+    result = Paragraph(
         text=text,
         style_id=paragraph.get("styleIDRef"),
         para_pr_id=paragraph.get("paraPrIDRef"),
         char_pr_id=char_pr_id or _extract_hwpx_paragraph_char_pr_id(paragraph),
     )
+    setattr(result, "_hwpx_paragraph_attributes", {key: paragraph.get(key, "0") for key in ("pageBreak", "columnBreak", "merged")})
+    return result
 
 
 def _extract_hwpx_paragraph_char_pr_id(paragraph) -> str | None:
@@ -2319,12 +2644,12 @@ def _extract_hwpx_table(table) -> Table:
             cell_texts[cell.row][cell.column] = cell.text
             if cell.row_span != 1 or cell.col_span != 1:
                 cell_spans[(cell.row, cell.column)] = (cell.row_span, cell.col_span)
-    return Table(
+    result = Table(
         rows=table.row_count,
         cols=table.column_count,
         cell_texts=cell_texts,
         cell_border_fill_ids={(cell.row, cell.column): cell.border_fill_id for cell in cells} or None,
-        cell_margins={(cell.row, cell.column): cell.margins for cell in cells} or None,
+        cell_margins={(cell.row, cell.column): cell.margins for cell in cells if cell.element.get("hasMargin") == "1"} or None,
         cell_vertical_aligns={
             (cell.row, cell.column): cell.vertical_align for cell in cells if cell.vertical_align != "CENTER"
         }
@@ -2338,6 +2663,46 @@ def _extract_hwpx_table(table) -> Table:
         page_break=table.page_break,
         repeat_header=table.repeat_header,
     )
+    # Keep rich cell content for Word output, while cell_texts remains the public
+    # editable view. Export only uses this content while the cell text matches.
+    rich = {}
+    widths = [0] * result.cols
+    heights = [0] * result.rows
+    fills = {}
+    borders = {}
+    definitions = {node.get("id"): node for node in table.document.header.readonly_root_element.xpath(".//hh:borderFill", namespaces=NS)}
+    for cell in cells:
+        content = []
+        for index, paragraph in enumerate(cell.element.xpath("./hp:subList/hp:p", namespaces=NS)):
+            content.extend(_extract_hwpx_nested_paragraph_blocks(table.section, paragraph, index))
+        rich[(cell.row, cell.column)] = (cell.text, content)
+        size = cell.element.find(qname("hp", "cellSz"))
+        if size is not None:
+            if cell.col_span == 1 and cell.column < len(widths):
+                widths[cell.column] = int(size.get("width", "0"))
+            if cell.row_span == 1 and cell.row < len(heights):
+                heights[cell.row] = max(heights[cell.row], int(size.get("height", "0")))
+        definition = definitions.get(str(cell.border_fill_id))
+        if definition is not None:
+            colors = definition.xpath("./hc:fillBrush/hc:winBrush/@faceColor", namespaces=NS)
+            if colors and colors[0] not in {"none", "NONE"}:
+                fills[(cell.row, cell.column)] = colors[0]
+            values = {}
+            for side in ("left", "right", "top", "bottom"):
+                edge = definition.find(qname("hh", side + "Border"))
+                if edge is not None:
+                    values[side] = dict(edge.attrib)
+            if values:
+                borders[(cell.row, cell.column)] = values
+    # These details are Word-export hints, not changes to the existing shared
+    # authoring DSL or its native HWP/HWPX serialization behavior.
+    setattr(result, "_docx_table_details", {
+        "col_widths": widths if all(widths) else None,
+        "row_heights": heights if any(heights) else None,
+        "cell_fill_colors": fills, "cell_border_styles": borders,
+    })
+    setattr(result, "_docx_cell_content", rich)
+    return result
 
 
 def _extract_hwpx_picture(picture) -> Picture:
@@ -2985,6 +3350,7 @@ def _section_uses_source_paragraphs(section: HancomSection) -> bool:
 
 def _write_grouped_section_to_hwpx(document: HwpxDocument, section_index: int, section: HancomSection) -> None:
     paragraph_map: dict[int, int] = {}
+    styled_paragraphs: set[int] = set()
     ordered_items = [
         block
         for _, block in sorted(
@@ -3019,7 +3385,11 @@ def _write_grouped_section_to_hwpx(document: HwpxDocument, section_index: int, s
         if isinstance(block, HeaderFooter):
             _append_header_footer_block_to_hwpx(document, section_index, paragraph_index, block)
         elif isinstance(block, Paragraph):
-            _apply_hwpx_paragraph_style_block(document, section_index, paragraph_index, block)
+            _apply_hwpx_paragraph_style_block(
+                document, section_index, paragraph_index, block,
+                apply_character_style=paragraph_index not in styled_paragraphs,
+            )
+            styled_paragraphs.add(paragraph_index)
             if block.text:
                 _append_text_to_hwpx_paragraph(
                     document,
@@ -3076,7 +3446,7 @@ def _has_nested_blocks(block: object) -> bool:
 
 
 def _is_supported_nested_hwpx_block(value: object) -> bool:
-    return isinstance(value, (Paragraph, Bookmark, Hyperlink, Field, AutoNumber))
+    return isinstance(value, (Paragraph, Bookmark, Hyperlink, Field, AutoNumber, Table, Picture, Equation, Note, Shape, Ole, Chart, Form, Memo))
 
 
 def _build_hwpx_nested_sublist(document: HwpxDocument, blocks: list[HancomBlock], *, vertical_align: str = "CENTER") -> etree._Element:
@@ -3098,17 +3468,33 @@ def _build_hwpx_nested_sublist(document: HwpxDocument, blocks: list[HancomBlock]
     if not grouped:
         grouped[0] = []
 
-    for _paragraph_index, paragraph_blocks in sorted(grouped.items()):
-        first_paragraph = next((block for block in paragraph_blocks if isinstance(block, Paragraph)), None)
-        paragraph = etree.SubElement(sublist, qname("hp", "p"))
-        paragraph.set("id", document._next_control_number(".//hp:p/@id"))
-        paragraph.set("paraPrIDRef", first_paragraph.para_pr_id if isinstance(first_paragraph, Paragraph) and first_paragraph.para_pr_id else "0")
-        paragraph.set("styleIDRef", first_paragraph.style_id if isinstance(first_paragraph, Paragraph) and first_paragraph.style_id else "0")
-        paragraph.set("pageBreak", "0")
-        paragraph.set("columnBreak", "0")
-        paragraph.set("merged", "0")
-        for block in _sort_hwpx_nested_blocks_by_source_order(paragraph_blocks):
-            _append_nested_block_to_hwpx_paragraph(document, paragraph, block)
+    # Build on attached staging paragraphs so normal object writers can create
+    # package relationships and globally unique control IDs, including nested
+    # tables and pictures. Detach only after the complete sublist exists.
+    section = document.sections[0]
+    staged = []
+    try:
+        for _paragraph_index, paragraph_blocks in sorted(grouped.items()):
+            document.append_paragraph("", section_index=0)
+            paragraph_index = len(section.paragraphs()) - 1
+            paragraph = document._paragraph_element(0, paragraph_index)
+            staged.append(paragraph)
+            first = next((block for block in paragraph_blocks if isinstance(block, Paragraph)), None)
+            if first is not None:
+                _apply_hwpx_paragraph_style_block(document, 0, paragraph_index, first)
+            for block in _sort_hwpx_nested_blocks_by_source_order(paragraph_blocks):
+                if isinstance(block, Paragraph):
+                    if block.text:
+                        _append_text_to_hwpx_paragraph(document, 0, paragraph_index, block.text, char_pr_id=block.char_pr_id)
+                elif not getattr(block, "source_text_owned_by_container", False):
+                    _append_non_paragraph_block_to_hwpx(document, 0, paragraph_index, block)
+        for paragraph in staged:
+            sublist.append(paragraph)
+    finally:
+        for paragraph in staged:
+            if paragraph.getparent() is section.root_element:
+                section.root_element.remove(paragraph)
+        section.mark_modified()
     return sublist
 
 
@@ -3215,6 +3601,23 @@ def _hwpx_hyperlink_parameters(target: str) -> dict[str, int | str]:
     return parameters
 
 
+def _apply_hwpx_hyperlink_runs(field, block: Hyperlink) -> None:
+    rich = getattr(block, "_docx_hyperlink_runs", None)
+    if not rich or rich[0] != block.display_text:
+        return
+    begin = field.element.xpath("ancestor::hp:run[1]", namespaces=NS)[0]
+    paragraph = begin.getparent()
+    end = field.element.xpath("ancestor::hp:p[1]//hp:fieldEnd[@beginIDRef=$id]/ancestor::hp:run[1]", namespaces=NS, id=field.control_id)[0]
+    for node in list(paragraph)[paragraph.index(begin) + 1:paragraph.index(end)]:
+        paragraph.remove(node)
+    for segment in rich[1]:
+        run = etree.Element(qname("hp", "run"), charPrIDRef=segment.char_pr_id or "0")
+        text = etree.SubElement(run, qname("hp", "t"))
+        _set_text_node_content(text, segment.text)
+        end.addprevious(run)
+    field.section.mark_modified()
+
+
 def _apply_hwpx_nested_text_blocks(document: HwpxDocument, wrapper, block: object, *, vertical_align: str = "CENTER") -> None:
     nested = _nested_blocks(block)
     if not nested:
@@ -3277,10 +3680,16 @@ def _append_control_host_paragraph(document: HwpxDocument, section_index: int) -
     return len(document.sections[section_index].paragraphs()) - 1
 
 
-def _apply_hwpx_paragraph_style_block(document: HwpxDocument, section_index: int, paragraph_index: int, block: Paragraph) -> None:
+def _apply_hwpx_paragraph_style_block(
+    document: HwpxDocument, section_index: int, paragraph_index: int, block: Paragraph,
+    *, apply_character_style: bool = True,
+) -> None:
+    attributes = getattr(block, "_hwpx_paragraph_attributes", None)
+    if attributes:
+        document._paragraph_element(section_index, paragraph_index).attrib.update(attributes)
     style_id = _resolve_hwpx_style_id(document, block)
     para_pr_id = _resolve_hwpx_para_pr_id(document, block)
-    char_pr_id = _resolve_hwpx_char_pr_id(document, block)
+    char_pr_id = _resolve_hwpx_char_pr_id(document, block) if apply_character_style else None
     if style_id is None and para_pr_id is None and char_pr_id is None:
         return
     document.apply_style_to_paragraph(
@@ -3339,11 +3748,31 @@ def _apply_section_settings(
     apply_page_numbers: bool = True,
 ) -> None:
     target = document.section_settings(section_index)
+    # Hancom needs a column definition alongside section properties; otherwise
+    # it can reset the first section's custom page setup to A4 on open.
+    section = document.sections[section_index]
+    if not section.root_element.xpath("./hp:p[1]//hp:colPr", namespaces=NS):
+        column_control = etree.Element(qname("hp", "ctrl"))
+        column_properties = etree.SubElement(column_control, qname("hp", "colPr"))
+        for name, value in {
+            "id": "", "type": "NEWSPAPER", "layout": "LEFT",
+            "colCount": "1", "sameSz": "1", "sameGap": "0",
+        }.items():
+            column_properties.set(name, value)
+        target.element.addnext(column_control)
+        section.mark_modified()
     if settings.page_width is not None or settings.page_height is not None or settings.landscape is not None:
+        width, height, landscape = settings.page_width, settings.page_height, settings.landscape
+        # The shared model's LANDSCAPE alias uses oriented dimensions (as HWP
+        # and DOCX do). HWPX stores paper dimensions before rotating the page.
+        if landscape == "LANDSCAPE":
+            width, height, landscape = height, width, "NARROWLY"
+        elif landscape == "PORTRAIT":
+            landscape = "WIDELY"
         target.set_page_size(
-            width=settings.page_width,
-            height=settings.page_height,
-            landscape=settings.landscape,
+            width=width,
+            height=height,
+            landscape=landscape,
         )
     if settings.margins:
         target.set_margins(**settings.margins)
@@ -3533,6 +3962,15 @@ def _apply_header_footer_blocks(document: HwpxDocument, section_index: int, bloc
 
 
 def _apply_styles(document: HwpxDocument, hancom_document: HancomDocument) -> None:
+    for raw in getattr(hancom_document, "_hwpx_ref_resources", []):
+        node = etree.fromstring(raw)
+        ref_list = document.header.root_element.find(qname("hh", "refList"))
+        existing = ref_list.find(node.tag)
+        if existing is None:
+            ref_list.append(node)
+        else:
+            ref_list.replace(existing, node)
+        document.header.mark_modified()
     for style in hancom_document.paragraph_styles:
         appended = document.append_paragraph_style(
             style_id=style.style_id,
@@ -3554,6 +3992,19 @@ def _apply_styles(document: HwpxDocument, hancom_document: HancomDocument) -> No
             appended.header_part.mark_modified()
         if style.line_spacing is not None:
             appended.set_line_spacing(style.line_spacing, spacing_type=style.line_spacing_type)
+        tab_stops = getattr(style, "_docx_tab_stops", None)
+        if tab_stops:
+            ref_list = document.header.root_element.find(qname("hh", "refList"))
+            tab_properties = ref_list.find(qname("hh", "tabProperties"))
+            if tab_properties is None:
+                tab_properties = etree.SubElement(ref_list, qname("hh", "tabProperties"), itemCnt="0")
+            tab_id = str(max((int(node.get("id", "0")) for node in tab_properties), default=-1) + 1)
+            tab = etree.SubElement(tab_properties, qname("hh", "tabPr"), id=tab_id, autoTabLeft="0", autoTabRight="0")
+            for stop in tab_stops:
+                etree.SubElement(tab, qname("hh", "tabItem"), pos=str(stop["pos"]), type=str(stop["type"]), leader=str(stop["leader"]), unit="HWPUNIT")
+            tab_properties.set("itemCnt", str(len(tab_properties)))
+            appended.element.set("tabPrIDRef", tab_id)
+            document.header.mark_modified()
         if style.margins:
             appended.set_margin(
                 intent=style.margins.get("intent"),
@@ -3595,6 +4046,60 @@ def _apply_styles(document: HwpxDocument, hancom_document: HancomDocument) -> No
             text_color=style.text_color,
             height=style.height,
         )
+        if style.native_hwpx_xml is not None:
+            from copy import deepcopy
+
+            original = etree.fromstring(style.native_hwpx_xml)
+            appended.element.attrib.update(original.attrib)
+            for child in list(appended.element):
+                appended.element.remove(child)
+            for child in original:
+                appended.element.append(deepcopy(child))
+            if style.text_color is not None:
+                appended.set_text_color(style.text_color)
+            if style.height is not None:
+                appended.set_height(style.height)
+        for name, enabled in (("bold", style.bold), ("italic", style.italic)):
+            if enabled is None:
+                continue
+            for node in appended.element.findall(qname("hh", name)):
+                appended.element.remove(node)
+            if enabled:
+                node = etree.Element(qname("hh", name))
+                underline = appended.element.find(qname("hh", "underline"))
+                if underline is not None:
+                    underline.addprevious(node)
+                else:
+                    appended.element.append(node)
+        for name, attributes in (("underline", style.underline), ("strikeout", style.strikeout)):
+            if attributes:
+                node = appended.element.find(qname("hh", name))
+                if node is None:
+                    node = etree.SubElement(appended.element, qname("hh", name))
+                node.attrib.update(attributes)
+        if style.script_position is not None:
+            for node in appended.element.xpath("./hh:supscript | ./hh:subscript", namespaces=NS):
+                appended.element.remove(node)
+            if style.script_position in {"SUPERSCRIPT", "SUBSCRIPT"}:
+                etree.SubElement(appended.element, qname("hh", "supscript" if style.script_position == "SUPERSCRIPT" else "subscript"))
+        font_refs = dict(style.font_refs)
+        if style.font_names:
+            fontfaces = document.header.root_element.find(".//" + qname("hh", "fontfaces"))
+            if fontfaces is None:
+                fontfaces = etree.Element(qname("hh", "fontfaces"), itemCnt="0")
+                document.header.root_element.find(qname("hh", "refList")).insert(0, fontfaces)
+            for lang, face_name in style.font_names.items():
+                family = fontfaces.find(f"{qname('hh', 'fontface')}[@lang='{lang.upper()}']")
+                if family is None:
+                    family = etree.SubElement(fontfaces, qname("hh", "fontface"), lang=lang.upper(), fontCnt="0")
+                fonts = list(family)
+                font = next((font for font in fonts if font.get("face") == face_name), None)
+                if font is None:
+                    font = etree.SubElement(family, qname("hh", "font"), id=str(len(fonts)), face=face_name, type="TTF", isEmbedded="0")
+                font_refs[lang] = font.get("id", "0")
+                family.set("fontCnt", str(len(family)))
+            fontfaces.set("itemCnt", str(len(fontfaces)))
+        document.header.mark_modified()
         if any(value is not None for value in (style.shade_color, style.use_font_space, style.use_kerning, style.sym_mark)):
             appended.set_effects(
                 shade_color=style.shade_color,
@@ -3602,16 +4107,23 @@ def _apply_styles(document: HwpxDocument, hancom_document: HancomDocument) -> No
                 use_kerning=_coerce_bool(style.use_kerning),
                 sym_mark=style.sym_mark,
             )
-        if style.font_refs:
+        if font_refs:
             appended.set_font_refs(
-                hangul=style.font_refs.get("hangul"),
-                latin=style.font_refs.get("latin"),
-                hanja=style.font_refs.get("hanja"),
-                japanese=style.font_refs.get("japanese"),
-                other=style.font_refs.get("other"),
-                symbol=style.font_refs.get("symbol"),
-                user=style.font_refs.get("user"),
+                hangul=font_refs.get("hangul"),
+                latin=font_refs.get("latin"),
+                hanja=font_refs.get("hanja"),
+                japanese=font_refs.get("japanese"),
+                other=font_refs.get("other"),
+                symbol=font_refs.get("symbol"),
+                user=font_refs.get("user"),
             )
+        if style.font_ratios:
+            ratio = appended.element.find(qname("hh", "ratio"))
+            if ratio is None:
+                ratio = etree.SubElement(appended.element, qname("hh", "ratio"))
+            for lang, value in style.font_ratios.items():
+                ratio.set(lang, str(value))
+            appended.header_part.mark_modified()
         if style.style_id is None:
             style.style_id = appended.style_id
 
@@ -3641,6 +4153,9 @@ def _apply_styles(document: HwpxDocument, hancom_document: HancomDocument) -> No
         )
         if memo_shape.memo_shape_id is None:
             memo_shape.memo_shape_id = appended.memo_shape_id
+# Backward-compatible name; new application code uses Document.
+HancomDocument = Document
+
 # Direction-specific converters are imported late so they can reuse the shared
 # format-neutral helper layer without exposing circular imports to callers.
 from ._hancom_from_hwp import _extract_hwp_control  # noqa: E402, F401

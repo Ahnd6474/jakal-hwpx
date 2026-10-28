@@ -18,6 +18,7 @@ from .hancom_document import (
     Picture,
     Shape,
     Table,
+    _attach_hwp_docx_table,
     _extract_hwp_table_column_widths,
     _normalize_hwp_text,
 )
@@ -61,7 +62,7 @@ def _extract_hwp_control(control) -> HancomBlock | None:
             }
             for cell in cells
         }
-        return Table(
+        block = Table(
             rows=control.row_count,
             cols=control.column_count,
             cell_texts=cell_texts,
@@ -79,6 +80,8 @@ def _extract_hwp_control(control) -> HancomBlock | None:
                 "bottom": control.table_margins[3],
             },
         )
+        _attach_hwp_docx_table(control, block)
+        return block
     if isinstance(control, HwpPictureObject):
         size = control.size() if hasattr(control, "size") else {"width": 7200, "height": 7200}
         path = control.bindata_path()

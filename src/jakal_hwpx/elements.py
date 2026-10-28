@@ -241,6 +241,8 @@ class TableCellXml:
         bottom: int | str | None = None,
     ) -> None:
         _set_margin_values(self.element, "./hp:cellMargin", left=left, right=right, top=top, bottom=bottom)
+        if any(value is not None for value in (left, right, top, bottom)):
+            self.element.set("hasMargin", "1")
         self.table.section.mark_modified()
 
     def set_vertical_align(self, value: str) -> None:

@@ -7,7 +7,9 @@
 | 문서 | 설명 |
 |---|---|
 | [architecture.md](./architecture.md) | 공개 façade와 내부 모델·codec·package 계층의 책임 경계를 설명합니다. 유지보수나 기여 작업을 시작할 때 봅니다. |
-| [hancom-document.md](./hancom-document.md) | `HancomDocument` 기준의 공통 문서 모델을 설명합니다. 새 문서를 만들거나 HWP/HWPX를 같은 코드로 다룰 때 먼저 볼 문서입니다. |
+| [hancom-document.md](./hancom-document.md) | `Document` 공통 문서 모델과 `HancomDocument` 호환 별칭을 설명합니다. |
+| [word-document.md](./word-document.md) | `WordDocument(Document)`의 원본 보존, Word 전용 편집, 파이썬 기반 HWP/HWPX 변환을 설명합니다. |
+| [docx-fidelity-benchmark.md](./docx-fidelity-benchmark.md) | 직접 생성한 대표 DOCX와 현재 변환 재현 범위를 기록합니다. |
 | [hwpx-document.md](./hwpx-document.md) | `HwpxDocument`의 HWPX package, XML part, selector, append API, validation API를 설명합니다. HWPX 내부 구조를 직접 다룰 때 봅니다. |
 | [hwp-document.md](./hwp-document.md) | `HwpDocument`의 HWP 전용 객체 API를 설명합니다. 기존 `.hwp`를 직접 편집하거나 HWP native wrapper를 써야 할 때 봅니다. |
 | [bridge-and-binary.md](./bridge-and-binary.md) | `HwpHwpxBridge`와 `HwpBinaryDocument`를 설명합니다. 변환 경로를 고정하거나 HWP stream/record를 조사할 때 봅니다. |

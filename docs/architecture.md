@@ -9,7 +9,9 @@ the smallest internal module that owns the relevant responsibility instead of ex
 |---|---|
 | `document.py` | Public `HwpxDocument` editing API and validation façade |
 | `hwp_document.py` | Public native HWP document façade |
-| `hancom_document.py` | Public format-neutral conversion API |
+| `shared_document.py`, `hancom_document.py` | Public `Document` base and legacy `HancomDocument` compatibility alias |
+| `word_document.py` | `WordDocument(Document)`: Word backend, native edits, DOCX preservation, pure Python HWP/HWPX output and optional converter dispatch |
+| `hancom_converter.py` | Isolated optional Hancom Office converter |
 | `hwp_binary.py` | Public record model and `HwpBinaryDocument` API |
 
 Existing imports from these modules remain supported. Internal implementations imported by a façade are deliberately
@@ -27,6 +29,10 @@ re-exported where older callers may already depend on them.
 | `_hancom_styles.py` | HWP/HWPX style and DocInfo payload conversion |
 | `_hancom_from_hwp.py`, `_hancom_to_hwp.py` | Native HWP conversion dispatch by direction |
 | `_hancom_from_hwpx.py`, `_hancom_to_hwpx.py` | HWPX conversion dispatch by direction |
+| `_hancom_from_docx.py` | Word content projection into shared model views |
+| `_hancom_to_docx.py` | Portable Word export from HWP/HWPX/shared models, with grouped runs and rich HWPX table cells |
+| `_equation_conversion.py` | Structured OMML ↔ HWP equation mapping for fractions, scripts and radicals; explicit rejection of unsupported math |
+| `_docx_preservation.py` | Original Word package, surgical common edits, native backend changes and untouched-part preservation |
 | `_hwp_constants.py` | Native HWP tags, flags, templates, and binary constants |
 | `_hwp_payload_codecs.py` | Pure native HWP payload decoders |
 | `_hwp_graphic_payloads.py` | Native graphic layout, line, fill, crop, and OLE payload builders |
@@ -49,6 +55,13 @@ Low-level codec and model modules do not import the public façade that consumes
 shared compatibility helpers they consume. Public modules may import and re-export internal names, while new low-level
 modules should depend only on constants, parts, record types, and models. This keeps the module initialization graph
 acyclic without breaking historical imports.
+
+`Document.open()` selects `WordDocument` for DOCX. Shared operations dispatch to the Word
+implementation, which updates its python-docx backend and refreshes shared views. Word-specific
+details remain in the source package rather than being reconstructed from the common projection.
+DOCX output writes this package; HWP/HWPX output uses the common model and native
+Python writers by default. An explicitly supplied converter can handle features
+outside the common model. `to_common_document()` exposes the portable projection.
 
 When adding functionality:
 

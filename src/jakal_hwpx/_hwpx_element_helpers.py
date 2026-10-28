@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections import Counter
 from copy import deepcopy
 import json
+import re
 
 from lxml import etree
 
@@ -539,8 +540,40 @@ def _set_crop_values(
     _set_optional_attributes(node, left=left, right=right, top=top, bottom=bottom)
 
 
+def _text_node_plain_text(node: etree._Element) -> str:
+    chunks = [node.text or ""]
+    for child in node:
+        if child.tag == qname("hp", "tab"):
+            chunks.append("\t")
+        elif child.tag == qname("hp", "lineBreak"):
+            chunks.append("\n")
+        else:
+            chunks.append("".join(child.itertext()))
+        chunks.append(child.tail or "")
+    return "".join(chunks)
+
+
+def _set_text_node_content(node: etree._Element, text: str) -> None:
+    """Encode control characters as HWPX inline elements, not XML literals."""
+    previous_properties = [(child.tag, dict(child.attrib)) for child in node]
+    for child in list(node):
+        node.remove(child)
+    chunks = re.split(r"([\t\n])", text.replace("\r\n", "\n").replace("\r", "\n"))
+    control_tags = [qname("hp", "tab" if char == "\t" else "lineBreak") for char in chunks[1::2]]
+    preserve_properties = control_tags == [tag for tag, _ in previous_properties]
+    node.text = chunks[0]
+    for index in range(1, len(chunks), 2):
+        tag = "tab" if chunks[index] == "\t" else "lineBreak"
+        child = etree.SubElement(node, qname("hp", tag))
+        if tag == "tab":
+            child.attrib.update({"width": "0", "leader": "0", "type": "0"})
+        if preserve_properties:
+            child.attrib.update(previous_properties[(index - 1) // 2][1])
+        child.tail = chunks[index + 1]
+
+
 def _extract_text(element: etree._Element) -> str:
-    return "".join(node.text or "" for node in _text_nodes(element))
+    return "".join(_text_node_plain_text(node) for node in _text_nodes(element))
 
 
 def _replace_text(element: etree._Element, old: str, new: str, count: int = -1) -> int:
@@ -549,25 +582,26 @@ def _replace_text(element: etree._Element, old: str, new: str, count: int = -1) 
     remaining = count
     replaced = 0
     for node in _text_nodes(element):
-        current = node.text or ""
+        plain_inline_content = all(child.tag in {qname("hp", "tab"), qname("hp", "lineBreak")} for child in node)
+        current = _text_node_plain_text(node) if plain_inline_content else node.text or ""
         if old not in current:
             continue
         if remaining < 0:
             changed = current.count(old)
-            node.text = current.replace(old, new)
+            updated = current.replace(old, new)
         else:
-            changed = 0
-            updated = current
-            while changed < remaining and old in updated:
-                updated = updated.replace(old, new, 1)
-                changed += 1
-            node.text = updated
+            changed = min(current.count(old), remaining)
+            updated = current.replace(old, new, remaining)
             remaining -= changed
+        if changed:
+            if plain_inline_content:
+                _set_text_node_content(node, updated)
+            else:
+                node.text = updated
+            _invalidate_paragraph_layout(node)
         replaced += changed
         if changed and remaining == 0:
             break
-    if replaced:
-        _invalidate_paragraph_layout(element)
     return replaced
 
 
@@ -654,7 +688,7 @@ def _ensure_run_with_text(paragraph: etree._Element, text: str) -> etree._Elemen
     run = etree.SubElement(paragraph, qname("hp", "run"))
     run.set("charPrIDRef", _default_char_pr_id(paragraph))
     text_node = etree.SubElement(run, qname("hp", "t"))
-    text_node.text = text
+    _set_text_node_content(text_node, text)
     return run
 
 
@@ -685,7 +719,7 @@ def _replace_paragraph_text_preserving_controls(
     run = etree.SubElement(paragraph, qname("hp", "run"))
     run.set("charPrIDRef", resolved_char_pr_id)
     text_node = etree.SubElement(run, qname("hp", "t"))
-    text_node.text = text
+    _set_text_node_content(text_node, text)
 
 
 def _preserved_structure_signature(paragraph: etree._Element) -> Counter[str]:

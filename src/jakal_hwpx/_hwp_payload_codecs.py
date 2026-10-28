@@ -436,25 +436,28 @@ def _parse_character_shape_payload(payload: bytes) -> dict[str, object]:
             "bit_30": bool(attribute_high & 0x4000),
             "bit_31": bool(attribute_high & 0x8000),
         }
-    if len(values) >= 54:
+    # HWP 5.0 CharShape stores two one-byte shadow offsets before the colors.
+    if len(values) >= 52:
         result["shadow_offset"] = {
-            "x": int.from_bytes(values[50:52], "little", signed=True),
-            "y": int.from_bytes(values[52:54], "little", signed=True),
+            "x": int.from_bytes(values[50:51], "little", signed=True),
+            "y": int.from_bytes(values[51:52], "little", signed=True),
         }
-    if len(values) >= 58:
-        result["text_color"] = _parse_hwp_colorref_or_none(values[54:58])
+    if len(values) >= 56:
+        result["text_color"] = _parse_hwp_colorref_or_none(values[52:56])
     if len(values) >= 60:
+        result["underline_color"] = _parse_hwp_colorref_or_none(values[56:60])
         result["tail_gap_58_60"] = values[58:60]
     if len(values) >= 64:
         result["shade_color"] = _parse_hwp_colorref_or_none(values[60:64])
     if len(values) >= 68:
         result["shadow_color"] = _parse_hwp_colorref_or_none(values[64:68])
-    if len(values) >= 72:
-        result["border_fill_id"] = int.from_bytes(values[68:72], "little", signed=False)
-    if len(values) > 72:
-        result["tail_reserved"] = values[72:]
-    elif len(values) > 68:
-        result["tail_reserved"] = values[68:]
+    if len(values) >= 70:
+        result["border_fill_id"] = int.from_bytes(values[68:70], "little", signed=False)
+    if len(values) >= 74:
+        result["strikeout_color"] = _parse_hwp_colorref_or_none(values[70:74])
+        result["tail_reserved"] = values[72:]  # legacy decoded-field key
+    if len(values) > 74:
+        result["tail_reserved"] = values[74:]
     result["probable_effect_flags"] = {
         "attribute_bit_0": bool(attribute_raw & 0x00000001),
         "attribute_bit_1": bool(attribute_raw & 0x00000002),
