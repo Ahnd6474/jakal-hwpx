@@ -21,6 +21,9 @@ def build_docx(document: Document) -> bytes:
     WordFile = document_factory()
 
     word = WordFile()
+    from .features import clean_control_markers, restore_resources, synchronize_bindings
+
+    restore_resources(word, getattr(document, "_word_resources", {}))
     writer = _Writer(document, word)
     for name, value in (
         ("title", document.metadata.title), ("subject", document.metadata.subject),
@@ -74,6 +77,8 @@ def build_docx(document: Document) -> bytes:
     if not document.sections:
         word.add_paragraph()
     stream = BytesIO()
+    clean_control_markers(word)
+    synchronize_bindings(word)
     word.save(stream)
     return stream.getvalue()
 
@@ -91,6 +96,10 @@ def _element(parent: Any, tag: str, **attributes: Any) -> Any:
     node = OxmlElement("w:" + tag)
     for key, value in attributes.items():
         node.set(qn("w:" + key), str(value))
+    if parent.tag in {qn("w:rPr"), qn("w:pPr"), qn("w:tcPr"), qn("w:tblPr")}:
+        for previous in list(parent):
+            if previous.tag == node.tag:
+                parent.remove(previous)
     parent.append(node)
     return node
 
@@ -212,6 +221,17 @@ class _Writer:
 
     def paragraph_style(self, paragraph: Any, block: Paragraph) -> None:
         from docx.enum.text import WD_ALIGN_PARAGRAPH, WD_LINE_SPACING
+        from .features import parse
+
+        native = getattr(block, "_word_extra", {}).get("pPr")
+        if native:
+            existing = paragraph._p.pPr
+            if existing is not None:
+                paragraph._p.remove(existing)
+            properties = parse(native)
+            for section in properties.findall("{http://schemas.openxmlformats.org/wordprocessingml/2006/main}sectPr"):
+                properties.remove(section)
+            paragraph._p.insert(0, properties)
 
         definition = self.styles.get(block.style_id)
         target_style = self.word_styles.get(block.style_id)
@@ -229,7 +249,10 @@ class _Writer:
             "CENTER": WD_ALIGN_PARAGRAPH.CENTER, "JUSTIFY": WD_ALIGN_PARAGRAPH.JUSTIFY,
             "DISTRIBUTE": WD_ALIGN_PARAGRAPH.DISTRIBUTE, "DISTRIBUTE_SPACE": WD_ALIGN_PARAGRAPH.DISTRIBUTE,
         }.get(style.alignment_horizontal or "")
-        if alignment is not None:
+        raw_alignment = paragraph._p.xpath("./w:pPr/w:jc/@w:val") if native else []
+        raw_equivalent = {"thaiDistribute": "DISTRIBUTE", "distribute": "DISTRIBUTE", "mediumKashida": "JUSTIFY",
+                          "highKashida": "JUSTIFY", "lowKashida": "JUSTIFY"}.get(raw_alignment[0]) if raw_alignment else None
+        if alignment is not None and raw_equivalent != style.alignment_horizontal:
             paragraph.alignment = alignment
         margins = style.margins
         native = getattr(style, "_docx_paragraph_margins", None)
@@ -264,12 +287,15 @@ class _Writer:
 
             fmt.tab_stops.clear_all()
             for stop in style._docx_tab_stops:
-                alignment = {"LEFT": WD_TAB_ALIGNMENT.LEFT, "CENTER": WD_TAB_ALIGNMENT.CENTER, "RIGHT": WD_TAB_ALIGNMENT.RIGHT,
+                tab_alignment = {"LEFT": WD_TAB_ALIGNMENT.LEFT, "CENTER": WD_TAB_ALIGNMENT.CENTER, "RIGHT": WD_TAB_ALIGNMENT.RIGHT,
                              "DECIMAL": WD_TAB_ALIGNMENT.DECIMAL, "BAR": WD_TAB_ALIGNMENT.BAR}.get(stop["type"], WD_TAB_ALIGNMENT.LEFT)
                 leader = {"NONE": WD_TAB_LEADER.SPACES, "DOT": WD_TAB_LEADER.DOTS, "DASH": WD_TAB_LEADER.DASHES,
                           "SOLID": WD_TAB_LEADER.LINES, "DOUBLE_SLIM": WD_TAB_LEADER.HEAVY}.get(stop["leader"], WD_TAB_LEADER.SPACES)
-                fmt.tab_stops.add_tab_stop(_length(stop["pos"]), alignment, leader)
-        if style.heading.get("type", "NONE") != "NONE":
+                fmt.tab_stops.add_tab_stop(_length(stop["pos"]), tab_alignment, leader)
+        native_list = getattr(style, "_word_native_list", None)
+        if native_list:
+            self.list_label(paragraph, Field("JAKAL_LIST_LABEL", parameters=native_list))
+        elif style.heading.get("type", "NONE") != "NONE":
             self.warn("Automatic numbering/bullets are not mapped to Word list definitions.")
 
     def character_style(self, run: Any, block: Paragraph) -> None:
@@ -280,21 +306,36 @@ class _Writer:
         style: CharacterStyle | None = self.characters.get(block.char_pr_id or (definition.char_pr_id if definition else None))
         if style is None:
             return
-        run.bold, run.italic = style.bold, style.italic
-        if style.height is not None:
+        from .features import parse
+
+        extra = getattr(block, "_word_extra", {}).get("character", getattr(style, "_word_extra", {}))
+        properties = extra.get("rPr")
+        mapped = extra.get("mapped", {})
+
+        def changed(attribute):
+            return not properties or attribute not in mapped or getattr(style, attribute) != mapped[attribute]
+        if properties:
+            if run._r.rPr is not None:
+                run._r.remove(run._r.rPr)
+            run._r.insert(0, parse(properties))
+        if changed("bold"):
+            run.bold = style.bold
+        if changed("italic"):
+            run.italic = style.italic
+        if style.height is not None and changed("height"):
             run.font.size = Pt(float(style.height) / 100)
         latin = style.font_names.get("latin") or next(iter(style.font_names.values()), None)
-        if latin:
+        if latin and changed("font_names"):
             run.font.name = latin
-        if style.font_names.get("hangul"):
+        if style.font_names.get("hangul") and changed("font_names"):
             run._r.get_or_add_rPr().get_or_add_rFonts().set(qn("w:eastAsia"), style.font_names["hangul"])
         color = _color(style.text_color)
-        if color:
+        if color and changed("text_color"):
             run.font.color.rgb = RGBColor.from_string(color)
         shade = _color(style.shade_color)
-        if shade:
+        if shade and changed("shade_color"):
             _element(run._r.get_or_add_rPr(), "shd", val="clear", fill=shade)
-        if style.underline:
+        if style.underline and changed("underline"):
             shape = style.underline.get("shape", "SOLID")
             value = "none" if style.underline.get("type", "BOTTOM") == "NONE" else {
                 "SOLID": "single", "DOUBLE_SLIM": "double", "DASH": "dash", "DOT": "dotted", "WAVE": "wave",
@@ -303,19 +344,20 @@ class _Writer:
             if _color(style.underline.get("color")):
                 attrs["color"] = str(_color(style.underline["color"]))
             _element(run._r.get_or_add_rPr(), "u", **attrs)
-        if style.strikeout:
+        if style.strikeout and changed("strikeout"):
             run.font.strike = style.strikeout.get("shape", "NONE") != "NONE"
-        if style.script_position is not None:
+        if style.script_position is not None and changed("script_position"):
             run.font.superscript = style.script_position == "SUPERSCRIPT"
             if style.script_position == "SUBSCRIPT":
                 run.font.subscript = True
-        if style.font_ratios.get("latin"):
+        if style.font_ratios.get("latin") and changed("font_ratios"):
             _element(run._r.get_or_add_rPr(), "w", val=style.font_ratios["latin"])
 
     def blocks(self, container: Any, blocks: list[Any], *, first: Any = None, nested: bool = False) -> None:
         paragraph = None
         group: Any = object()
         from ...hancom_document import _is_owned_text_shadow_paragraph
+        from .features import wrap_controls
 
         for position, block in enumerate(blocks):
             if isinstance(block, HeaderFooter):
@@ -332,6 +374,7 @@ class _Writer:
                 if first is not None and not first.text:
                     first._p.getparent().remove(first._p)
                 self.table(container, block)
+                wrap_controls(container.tables[-1]._tbl, getattr(block, "_word_extra", {}).get("controls", []), level="block")
                 first = container.paragraphs[-1] if hasattr(container, "_tc") and not container.paragraphs[-1].text else None
                 paragraph, group = None, object()
                 continue
@@ -342,9 +385,14 @@ class _Writer:
                 group = index
                 if isinstance(block, Paragraph):
                     self.paragraph_style(paragraph, block)
+                wrap_controls(paragraph._p, getattr(block, "_word_extra", {}).get("controls", []), level="block")
             following = blocks[position + 1] if position + 1 < len(blocks) else None
             if nested or not _is_owned_text_shadow_paragraph(block, following):
+                before = set(paragraph._p)
                 self.inline(paragraph, block)
+                for node in list(paragraph._p):
+                    if node not in before:
+                        wrap_controls(node, getattr(block, "_word_extra", {}).get("controls", []), level="inline")
 
     def inline(self, paragraph: Any, block: Any) -> None:
         from docx.oxml.ns import qn
@@ -358,19 +406,9 @@ class _Writer:
             else:
                 self.character_style(paragraph.add_run(block.text), block)
         elif isinstance(block, Picture):
-            try:
-                shape = paragraph.add_run().add_picture(BytesIO(block.data), width=_length(block.width), height=_length(block.height))
-            except Exception as error:
-                raise ValueError(f"Cannot export picture {block.name!r} to Word; use a supported image format or external converter.") from error
-            shape._inline.docPr.set("descr", block.shape_comment or block.name)
-            crop = block.crop
-            cropped = bool(crop and (
-                crop.get("left", 0) or crop.get("top", 0) or
-                crop.get("right", 0) not in {0, block.original_width or block.width} or
-                crop.get("bottom", 0) not in {0, block.original_height or block.height}
-            ))
-            if cropped or float(block.rotation.get("angle", "0")) or block.layout.get("treatAsChar") == "0":
-                self.warn("Picture crop, rotation and floating placement are exported as an inline image.")
+            from .pictures import append_picture
+
+            append_picture(paragraph, block)
         elif isinstance(block, Hyperlink):
             from docx.text.run import Run
 
@@ -390,9 +428,26 @@ class _Writer:
             _element(paragraph._p, "bookmarkStart", id=self.bookmark_id, name=block.name)
             _element(paragraph._p, "bookmarkEnd", id=self.bookmark_id)
         elif isinstance(block, Field):
+            if block.field_type == "JAKAL_WORD_FIELD_BOUNDARY":
+                from .fields import append_boundary
+
+                append_boundary(paragraph, block)
+                return
+            if block.field_type == "BOOKMARK":
+                self.bookmark_id += 1
+                _element(paragraph._p, "bookmarkStart", id=self.bookmark_id, name=block.name or "")
+                rich = getattr(block, "_docx_hyperlink_runs", None)
+                segments = rich[1] if rich and rich[0] == block.display_text else [Paragraph(block.display_text or "")]
+                for segment in segments:
+                    self.character_style(paragraph.add_run(segment.text), segment)
+                _element(paragraph._p, "bookmarkEnd", id=self.bookmark_id)
+                return
             if block.field_type == "JAKAL_LIST_LABEL" and block.parameters.get("RenderedLabel") == block.display_text:
                 self.list_label(paragraph, block)
                 return
+            if block.field_type == "JAKAL_LIST_LABEL":
+                for number in paragraph._p.xpath("./w:pPr/w:numPr"):
+                    number.getparent().remove(number)
             instruction = block.parameters.get("WordInstruction")
             if not instruction:
                 instruction = {
@@ -415,8 +470,9 @@ class _Writer:
                 paragraph.add_run(block.display_text or "")
                 self.warn("Unknown field retains its displayed text; no equivalent Word instruction is available.")
         elif isinstance(block, AutoNumber):
-            if block.kind == "autoNum" and block.number_type == "PAGE":
-                field = _element(paragraph._p, "fldSimple", instr="PAGE", dirty="false")
+            if block.kind == "autoNum" and block.number_type in {"PAGE", "TOTAL_PAGE"}:
+                instruction = getattr(block, "_word_extra", {}).get("instruction", "PAGE" if block.number_type == "PAGE" else "NUMPAGES")
+                field = _element(paragraph._p, "fldSimple", instr=instruction, dirty="false")
                 from docx.text.run import Run
 
                 run = Run(_element(field, "r"), paragraph)
@@ -431,6 +487,10 @@ class _Writer:
             paragraph._p.append(hwp_to_omml(block.script))
         elif isinstance(block, Note):
             self.note(paragraph, block)
+        elif isinstance(block, Shape) and getattr(block, "_word_extra", {}).get("textbox"):
+            from .textboxes import append_textbox
+
+            append_textbox(self, paragraph, block)
         elif isinstance(block, (Shape, Memo)):
             paragraph.add_run(block.text)
             self.warn(type(block).__name__ + " is exported as body text; its native control/placement is not preserved.")
@@ -536,69 +596,9 @@ class _Writer:
                     setattr(paragraph.paragraph_format, attribute, _length(margins[key]))
 
     def table(self, container: Any, block: Table) -> None:
-        from docx.enum.table import WD_CELL_VERTICAL_ALIGNMENT
+        from .tables import write_table
 
-        details = getattr(block, "_docx_table_details", {})
-        widths = block.col_widths or details.get("col_widths")
-        heights = block.row_heights or details.get("row_heights")
-        fills = block.cell_fill_colors if block.cell_fill_colors is not None else details.get("cell_fill_colors", {})
-        border_styles = block.cell_border_styles if block.cell_border_styles is not None else details.get("cell_border_styles", {})
-        if container is self.word or hasattr(container, "_tc"):
-            table = container.add_table(rows=block.rows, cols=block.cols)
-        else:
-            table = container.add_table(rows=block.rows, cols=block.cols, width=_length(sum(widths or [36000])))
-        if widths:
-            table.autofit = False
-            for column, width in zip(table.columns, widths):
-                column.width = _length(width)
-            for row in table.rows:
-                for cell, width in zip(row.cells, widths):
-                    cell.width = _length(width)
-        for (row, col), (rows, cols) in (block.cell_spans or {}).items():
-            table.cell(row, col).merge(table.cell(row + rows - 1, col + cols - 1))
-        seen: set[Any] = set()
-        for row in range(block.rows):
-            if heights and row < len(heights) and heights[row] > 0:
-                table.rows[row].height = _length(heights[row])
-            if row == 0 and block.repeat_header:
-                _element(table.rows[row]._tr.get_or_add_trPr(), "tblHeader")
-            for col in range(block.cols):
-                cell = table.cell(row, col)
-                if cell._tc in seen:
-                    continue
-                seen.add(cell._tc)
-                value = block.cell_texts[row][col] if row < len(block.cell_texts) and col < len(block.cell_texts[row]) else ""
-                rich = getattr(block, "_docx_cell_content", {}).get((row, col))
-                if rich and rich[0] == value:
-                    self.blocks(cell, rich[1], first=cell.paragraphs[0], nested=True)
-                else:
-                    cell.paragraphs[0].add_run(value)
-                pr = cell._tc.get_or_add_tcPr()
-                fill = _color(fills.get((row, col)))
-                if fill:
-                    _element(pr, "shd", val="clear", fill=fill)
-                margins = dict(block.table_margins or {})
-                margins.update((block.cell_margins or {}).get((row, col), {}))
-                if margins:
-                    node = _element(pr, "tcMar")
-                    for side, margin_value in margins.items():
-                        if side in {"left", "right", "top", "bottom"}:
-                            _element(node, side, w=round(margin_value / 5), type="dxa")
-                alignment = (block.cell_vertical_aligns or {}).get((row, col), "CENTER")
-                cell.vertical_alignment = {"TOP": WD_CELL_VERTICAL_ALIGNMENT.TOP, "CENTER": WD_CELL_VERTICAL_ALIGNMENT.CENTER,
-                                           "BOTTOM": WD_CELL_VERTICAL_ALIGNMENT.BOTTOM}.get(alignment, WD_CELL_VERTICAL_ALIGNMENT.CENTER)
-                borders = border_styles.get((row, col), {})
-                if borders:
-                    node = _element(pr, "tcBorders")
-                    for side, values in borders.items():
-                        if side not in {"left", "right", "top", "bottom"}:
-                            continue
-                        value = str(values.get("style", values.get("type", "SOLID")))
-                        shape = {"SOLID": "single", "NONE": "nil", "DASH": "dashed", "DOT": "dotted", "DOUBLE_SLIM": "double",
-                                 "single": "single", "none": "nil", "nil": "nil", "dashed": "dashed", "dotted": "dotted", "double": "double"}.get(value, "single")
-                        width = float(str(values.get("width", "0.1")).replace("mm", ""))
-                        size = int(values["size"]) if "size" in values else max(2, round(width * 72 / 25.4 * 8))
-                        _element(node, side, val=shape, sz=size, color=_color(str(values.get("color", "000000"))) or "000000")
+        write_table(self, container, block)
 
 
 def _word_character_style(style: CharacterStyle) -> CharacterStyle:

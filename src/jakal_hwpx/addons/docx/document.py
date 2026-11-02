@@ -248,4 +248,6 @@ class WordDocument(Document):
                     block.text = f"{block.list_marker}\t{block.text}"
         for name in ("style_definitions", "paragraph_styles", "character_styles", "numbering_definitions", "bullet_definitions", "memo_shape_definitions", "import_warnings"):
             setattr(result, name, deepcopy(getattr(self, name)))
+        result._word_feature_model = getattr(self, "_word_feature_model", False)
+        result._word_resources = deepcopy(getattr(self, "_word_resources", {}))
         return result

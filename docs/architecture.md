@@ -12,7 +12,7 @@ the smallest internal module that owns the relevant responsibility instead of ex
 | `shared_document.py`, `hancom_document.py` | Public `Document` base and legacy `HancomDocument` compatibility alias |
 | `word_document.py` | `WordDocument(Document)`: Word backend, native edits, DOCX preservation, pure Python HWP/HWPX output and optional converter dispatch |
 | `hancom_converter.py` | Isolated optional Hancom Office converter |
-| `hwp_binary.py` | Public record model and `HwpBinaryDocument` API |
+| `hwp_binary.py` | `HwpBinaryDocument` stream API and compatibility re-exports of record families |
 
 Existing imports from these modules remain supported. Internal implementations imported by a façade are deliberately
 re-exported where older callers may already depend on them.
@@ -27,13 +27,35 @@ re-exported where older callers may already depend on them.
 | `_hwpx_validation.py` | HWPX package validation, reference checks, and strict linting |
 | `_hancom_models.py` | Format-neutral dataclasses and semantic field behavior |
 | `_hancom_styles.py` | HWP/HWPX style and DocInfo payload conversion |
+| `_hancom_conversion_common.py` | Scalar normalization, text ownership, and shared nested-block helpers |
+| `_hancom_hwp_read.py` | Native HWP section, paragraph, control, and nested-table projection helpers |
+| `_hancom_hwpx_read.py` | HWPX source order, nested text containers, fields, and carrier decoding |
+| `_hancom_hwpx_graphics.py` | HWPX table, picture, equation, shape, and OLE model mapping |
+| `_hancom_hwpx_write.py` | HWPX paragraph grouping, nested block output, and field serialization |
+| `_hancom_hwpx_settings.py` | HWPX section/page settings, borders, page numbers, and notes |
+| `_hancom_hwpx_styles.py` | Shared styles and reference resources written into HWPX |
 | `_hancom_from_hwp.py`, `_hancom_to_hwp.py` | Native HWP conversion dispatch by direction |
 | `_hancom_from_hwpx.py`, `_hancom_to_hwpx.py` | HWPX conversion dispatch by direction |
 | `_hancom_from_docx.py` | Word content projection into shared model views |
 | `_hancom_to_docx.py` | Portable Word export from HWP/HWPX/shared models, with grouped runs and rich HWPX table cells |
 | `_equation_conversion.py` | Structured OMML ↔ HWP equation mapping for fractions, scripts and radicals; explicit rejection of unsupported math |
 | `_docx_preservation.py` | Original Word package, surgical common edits, native backend changes and untouched-part preservation |
+| `addons/docx/tables.py` | Bidirectional Word/shared-model table projection and serialization |
+| `addons/docx/projection.py` | Accepted-view normalization for revisions, controls, bookmarks, and complex fields |
 | `_hwp_constants.py` | Native HWP tags, flags, templates, and binary constants |
+| `_hwp_record_base.py` | Raw records, common record nodes, binary headers, and immutable metadata |
+| `_hwp_docinfo_records.py` | DocInfo styles, mappings, document properties, and BinData record types |
+| `_hwp_control_records.py` | Section, page, field, bookmark, numbering, header/footer, and note controls |
+| `_hwp_graphic_records.py` | Graphic, equation, table, picture, shape, and OLE control records |
+| `_hwp_component_records.py` | Page, equation, and shape component record types |
+| `_hwp_paragraph_records.py` | Paragraph header/text records and length-preserving text edits |
+| `_hwp_control_payloads.py` | Control ids, markers, field payloads, and semantic metadata codecs |
+| `_hwp_table_payloads.py` | Table cell normalization, spans, measurements, and binary payload builders |
+| `_hwp_section_helpers.py` | Blank-section cloning, paragraph insertion, and control-tree operations |
+| `_hwp_nested_controls.py` | Header/footer, note, and synthetic paragraph line-layout helpers |
+| `_hwp_binary_authoring.py` | Native HWP object creation, profile-backed insertion, and embedded media mixin |
+| `_hwp_binary_sections.py` | Native HWP section count, page layout, borders, numbering, and notes mixin |
+| `_hwp_validation.py` | Native HWP strict validation of DocInfo, binary references, control subtrees, and metadata |
 | `_hwp_payload_codecs.py` | Pure native HWP payload decoders |
 | `_hwp_graphic_payloads.py` | Native graphic layout, line, fill, crop, and OLE payload builders |
 | `_hwp_page_payloads.py` | Native section, page, numbering, border, and note payload codecs |
@@ -55,6 +77,14 @@ Low-level codec and model modules do not import the public façade that consumes
 shared compatibility helpers they consume. Public modules may import and re-export internal names, while new low-level
 modules should depend only on constants, parts, record types, and models. This keeps the module initialization graph
 acyclic without breaking historical imports.
+
+Shared conversion helpers now live in the feature modules above. Their cross-feature dependencies are imported inside
+the operations that need them, so recursive table/text-container conversion does not create an import-time cycle.
+These modules do not import `hancom_document` at runtime. Native HWP record families, tree models, nested controls,
+and authoring/section mixins import their implementation dependencies directly rather than through `hwp_binary`.
+Only record cloning and paragraph text decoding defer access to the tree layer; section helpers use type-only tree
+references unless constructing a model. Public record classes keep their historical `__module__` for pickle
+compatibility. Mixin host requirements are declared under `TYPE_CHECKING`.
 
 `Document.open()` selects `WordDocument` for DOCX. Shared operations dispatch to the Word
 implementation, which updates its python-docx backend and refreshes shared views. Word-specific

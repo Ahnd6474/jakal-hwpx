@@ -152,7 +152,9 @@ def test_lists_inside_cells_are_not_lost_or_duplicated(tmp_path: Path) -> None:
     paragraph.style = "List Number"
     paragraph.text = "Nested list"
     word, native = _cycle(word, tmp_path)
-    assert "1.\tNested list" in native.get_document_text()
+    assert "Nested list" in native.get_document_text()
+    headings = native.header.root_element.xpath(".//hh:paraPr/hh:heading[@type='NUMBER']", namespaces=NS)
+    assert headings  # The counter is native, rather than a cached label in text.
     paragraph = word.tables[0].cell(0, 0).paragraphs[0]
     assert paragraph.text == "Nested list"
     assert paragraph._p.pPr.numPr is not None
@@ -162,7 +164,7 @@ def test_native_normalized_fields_restore_after_parameter_loss_and_run_merging(t
     word = WordFile()
     word.add_paragraph("List body", style="List Number")
     _, native = _cycle(word, tmp_path)
-    field = native.fields()[0]
+    field = next(field for field in native.fields() if field.parameter_map().get("JakalFieldKind") == "JAKAL_LIST_LABEL")
     assert field.name.startswith("jakal:word-effect:v1:")
     parameters = field.element.find("hp:parameters", NS)
     for child in list(parameters):
@@ -175,7 +177,7 @@ def test_native_normalized_fields_restore_after_parameter_loss_and_run_merging(t
         runs[0].extend(list(run))
         paragraph.remove(run)
     native.sections[0].mark_modified()
-    assert field.display_text == "1.\t"
+    assert field.display_text == ""
     path = native.save(tmp_path / "normalized.hwpx")
     result = WordFile(Document.open(path).save(tmp_path / "normalized.docx"))
     assert result.paragraphs[0].text == "List body"
@@ -277,9 +279,10 @@ def test_accepted_revisions_and_content_controls_keep_visible_content_and_source
     word, native = _cycle(word, tmp_path)
     assert "Before accepted visible" in native.get_document_text()
     assert "deleted" not in native.get_document_text()
-    assert word.paragraphs[0].text == "Before accepted visible"
+    assert "".join(word.paragraphs[0]._p.xpath(".//w:t/text()")) == "Before accepted visible"
     assert word.paragraphs[0].runs[1].bold
-    assert word.tables[0].cell(0, 0).text == "Wrapped table"
+    assert word.element.xpath(".//w:sdt/w:sdtContent/w:tbl/w:tr/w:tc/w:p/w:r/w:t/text()") == ["Wrapped table"]
+    assert len(word.element.xpath(".//w:sdt")) == 2
 
 
 def test_hyperlink_inside_content_control_can_still_save_and_edit_original_word(tmp_path: Path) -> None:

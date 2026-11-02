@@ -335,9 +335,13 @@ class HwpxValidationMixin:
             style.style_id for style in self.character_styles() if style.style_id is not None
         } if not self.is_distribution_protected else set()
         manifest_ids = {item.get("id") for item in self.content_hpf.manifest_items() if item.get("id")}
+        if not self.is_distribution_protected:
+            for reference in self.header.readonly_root_element.xpath(".//hc:img/@binaryItemIDRef", namespaces=NS):
+                if reference not in manifest_ids:
+                    errors.append(_issue("binary_reference", f"header fill references unknown manifest id {reference}",
+                                         part_path="Contents/header.xml"))
         bookmark_names: set[str] = set()
         field_begin_ids: dict[str, str] = {}
-        field_id_map: dict[str, str] = {}
 
         for bookmark in self.bookmarks():
             if not bookmark.name:
@@ -352,10 +356,10 @@ class HwpxValidationMixin:
                 if field.control_id in field_begin_ids:
                     errors.append(_issue("field_reference", f"duplicate fieldBegin id: {field.control_id}"))
                 field_begin_ids[field.control_id] = field.field_id or ""
-            if field.field_id:
-                if field.field_id in field_id_map:
-                    errors.append(_issue("field_reference", f"duplicate fieldid: {field.field_id}"))
-                field_id_map[field.field_id] = field.control_id or ""
+            # Native Hancom saves may share fieldid across separate controls.
+            # beginIDRef pairs field ends with the unique fieldBegin id; check
+            # that link and each pair's fieldid below, rather than treating a
+            # repeated fieldid as a broken reference.
             if (field.field_type or "").upper() == _MEMO_CARRIER_FIELD_TYPE:
                 parameters = field.parameter_map()
                 if not _bool_like_literal_is_valid(parameters.get("Visible")):
@@ -509,7 +513,16 @@ class HwpxValidationMixin:
                         )
                     )
         for field in self.cross_references():
-            target = field.get_parameter("BookmarkName") or field.get_parameter("Path") or field.name
+            target = field.get_parameter("BookmarkName") or field.get_parameter("Path")
+            native_path = field.get_parameter("RefPath")
+            if not target and native_path:
+                # Native Hancom CROSSREF uses ?bookmark; for a local target.
+                # Other paths refer to another document, outside this package.
+                if not native_path.startswith("?"):
+                    continue
+                target = native_path[1:].split(";", 1)[0]
+            if not target:
+                target = field.name
             if target and target not in bookmark_names:
                 errors.append(_issue("cross_reference", f"cross reference points to unknown bookmark: {target}"))
         return errors
@@ -867,6 +880,8 @@ class HwpxValidationMixin:
             )
 
         referenced_binary_item_ids: set[str] = set()
+        if not self.is_distribution_protected:
+            referenced_binary_item_ids.update(self.header.readonly_root_element.xpath(".//hc:img/@binaryItemIDRef", namespaces=NS))
         for section in self.sections:
             values = section.readonly_root_element.xpath(
                 ".//hc:img/@binaryItemIDRef | " + _graphic_attribute_xpath("binaryItemIDRef"),

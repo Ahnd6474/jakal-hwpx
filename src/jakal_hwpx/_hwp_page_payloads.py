@@ -125,7 +125,7 @@ _NOTE_LINE_WIDTH_CODES = {
 _NOTE_LINE_WIDTH_VALUES = {value: key for key, value in _NOTE_LINE_WIDTH_CODES.items()}
 
 
-def _parse_section_definition_payload(payload: bytes) -> dict[str, object]:
+def _parse_section_definition_payload(payload: bytes) -> dict[str, int]:
     body = payload[4:].ljust(26, b"\x00")
     attributes = int.from_bytes(body[0:4], "little")
     return {

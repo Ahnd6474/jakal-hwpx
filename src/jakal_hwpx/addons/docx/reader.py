@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import warnings
 import json
+import re
 from io import BytesIO
 from copy import deepcopy
 from pathlib import Path
@@ -30,6 +31,8 @@ from ..._hancom_models import (
     StyleDefinition,
     Table,
 )
+from .projection import accept_visible_content as _accept_visible_content
+from .projection import paragraph_nodes as _paragraph_nodes
 
 if TYPE_CHECKING:
     from ...hancom_document import HancomDocument
@@ -47,9 +50,18 @@ def populate_from_docx(target: HancomDocument, path: Path) -> None:
     from docx.table import Table as DocxTable
 
     reader = _DocxReader(target)
+    from .features import capture_controls, capture_resources
+
+    reader.source_path = path
+    reader.controls = capture_controls(source.element)
+    target._word_resources = capture_resources(source)
+    target._word_feature_model = True
     reader.source_paths = {projected: raw.getroottree().getelementpath(raw)
                            for projected, raw in zip(source.element.iter(), original.element.iter())}
-    reader.numbering_root = source.part.numbering_part.element
+    # numbering.xml is optional. python-docx's accessor tries to create it
+    # through an unimplemented factory when a valid, list-free file omits it.
+    reader.numbering_root = next((rel.target_part.element for rel in source.part.rels.values()
+                                  if rel.reltype.endswith("/numbering") and not rel.is_external), None)
     for relationship in source.part.rels.values():
         if relationship.reltype.endswith("/theme") and not relationship.is_external:
             from lxml import etree
@@ -105,6 +117,8 @@ def populate_from_docx(target: HancomDocument, path: Path) -> None:
                 block = reader.table(item)
                 _mark_source(block, paragraph_index * 100000, 0)
                 setattr(block, "_docx_source_path", reader.source_paths.get(item._tbl))
+                if reader.controls.get(item._tbl):
+                    setattr(block, "_word_extra", {**getattr(block, "_word_extra", {}), "controls": reader.controls[item._tbl]})
                 section.blocks.append(block)
             else:
                 # A bare section-break carrier is structural, not an extra blank
@@ -115,67 +129,15 @@ def populate_from_docx(target: HancomDocument, path: Path) -> None:
         reader.headers(source_section, section, inherited_headers, source.settings)
     if not target.sections:
         target.sections.append(HancomSection())
+    definitions = {style.style_id: style for style in target.style_definitions}
+    for style in source.styles:
+        if style.style_id in reader._named_styles and hasattr(style, "next_paragraph_style"):
+            following = style.next_paragraph_style
+            if following is not None:
+                definitions[reader._named_styles[style.style_id]].next_style_id = reader._named_styles.get(following.style_id)
     from .preservation import capture_docx_source
 
     capture_docx_source(target, original, path)
-
-
-def _accept_visible_content(root: Any) -> None:
-    """Project Word's accepted view without discarding wrapped runs or tables."""
-    from docx.oxml.ns import qn
-
-    for node in list(root.iter()):
-        parent = node.getparent()
-        if parent is None:
-            continue
-        if node.tag in {qn("w:del"), qn("w:moveFrom")}:
-            parent.remove(node)
-        elif node.tag in {qn("w:ins"), qn("w:moveTo"), qn("w:sdt"), qn("w:customXml")}:
-            content = node.find(qn("w:sdtContent")) if node.tag == qn("w:sdt") else node
-            if content is not None:
-                for child in list(content):
-                    node.addprevious(child)
-            parent.remove(node)
-
-
-def _paragraph_nodes(paragraph: Any):
-    """Fold same-paragraph complex fields into the simple-field representation."""
-    from docx.oxml import OxmlElement
-    from docx.oxml.ns import qn
-
-    stack: list[tuple[Any, list[str], list[Any], bool]] = []
-    for node in paragraph:
-        controls = node.findall(qn("w:fldChar")) if node.tag == qn("w:r") else []
-        instructions = node.findall(qn("w:instrText")) if node.tag == qn("w:r") else []
-        for control in controls:
-            kind = control.get(qn("w:fldCharType"))
-            if kind == "begin":
-                stack.append((OxmlElement("w:fldSimple"), [], [], False))
-            elif kind == "separate" and stack:
-                field, command, children, _ = stack[-1]
-                stack[-1] = field, command, children, True
-            elif kind == "end" and stack:
-                field, command, children, _ = stack.pop()
-                field.set(qn("w:instr"), "".join(command).strip())
-                field.extend(deepcopy(child) for child in children)
-                if stack:
-                    if stack[-1][3]:
-                        stack[-1][2].append(field)
-                else:
-                    yield field
-        if instructions and stack:
-            stack[-1][1].extend(item.text or "" for item in instructions)
-        if controls or instructions:
-            continue
-        if stack:
-            if stack[-1][3]:
-                stack[-1][2].append(node)
-        else:
-            yield node
-    # A field spanning paragraphs cannot be folded locally. Its cached visible
-    # contents still survive rather than losing the rest of the paragraph.
-    for _field, _command, children, _separated in stack:
-        yield from children
 
 
 def _units(length: int) -> int:
@@ -308,6 +270,9 @@ class _DocxReader:
         self.note_formats: dict[str, str] = {}
         self.note_counts: dict[str, int] = {}
         self.pending_breaks: dict[Any, str] = {}
+        self.source_path = Path(".")
+        self.controls: dict[Any, list[dict[str, Any]]] = {}
+        self.table_context: dict[str, Any] = {}
 
     def warn(self, message: str) -> None:
         if message not in self.target.import_warnings:
@@ -319,14 +284,12 @@ class _DocxReader:
         for expression, feature in (
             (".//w:altChunk", "embedded document content"),
             (".//w:commentRangeStart | .//w:commentReference", "comments"),
-            (".//w:pict | .//w:object", "legacy drawings or embedded objects"),
+            (".//w:pict[not(.//w:txbxContent)] | .//w:object", "legacy drawings or embedded objects"),
         ):
             if element.xpath(expression):
                 self.warn(f"DOCX import does not preserve {feature}.")
         if element.xpath(".//w:ins | .//w:del | .//w:moveFrom | .//w:moveTo"):
             self.warn("Tracked revisions are projected as the accepted visible content; revision history remains in the original DOCX.")
-        if element.xpath(".//w:sdt | .//w:customXml"):
-            self.warn("Content controls are projected as their visible editable content; bindings remain in the original DOCX.")
 
     def paragraph(self, source: Any, index: int) -> list[HancomBlock]:
         from docx.drawing import Drawing
@@ -365,10 +328,15 @@ class _DocxReader:
         def add_text(text: str, char_id: str | None) -> None:
             if not text:
                 return
-            if blocks and isinstance(blocks[-1], Paragraph) and blocks[-1].char_pr_id == char_id:
+            controls = self.controls.get(node, [])
+            if (blocks and isinstance(blocks[-1], Paragraph) and blocks[-1].char_pr_id == char_id
+                    and getattr(blocks[-1], "_word_extra", {}).get("controls", []) == controls):
                 blocks[-1].text += text
             else:
-                append(Paragraph(text, style_id=style_id, para_pr_id=para_id, char_pr_id=char_id))
+                block = Paragraph(text, style_id=style_id, para_pr_id=para_id, char_pr_id=char_id)
+                if controls:
+                    setattr(block, "_word_extra", {"controls": controls})
+                append(block)
 
         word_ns = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
         math_ns = "http://schemas.openxmlformats.org/officeDocument/2006/math"
@@ -407,13 +375,20 @@ class _DocxReader:
                     hyperlink = Hyperlink(target, display_text=item.text)
                     styled = [Paragraph(run.text, char_pr_id=self.character_style(source, run)) for run in item.runs]
                     setattr(hyperlink, "_docx_hyperlink_runs", (item.text, styled))
+                    images = []
+                    for run in item.runs:
+                        for drawing in run._r.xpath("./w:drawing"):
+                            picture = self.picture(Drawing(drawing, run))
+                            if picture is not None:
+                                getattr(picture, "_word_extra")["hyperlink"] = target
+                                images.append(picture)
                     append(hyperlink)
+                    for picture in images:
+                        append(picture)
                 else:
                     add_text(item.text, None)
                 for run in item.runs:
                     self.character_style(source, run)
-                    if run._r.xpath(".//w:drawing"):
-                        self.warn("DOCX import does not preserve images inside hyperlinks.")
                 continue
             char_id = self.character_style(source, item)
             for content in item._r:
@@ -431,7 +406,15 @@ class _DocxReader:
                         append(carrier)
                     else:
                         add_text("\n", char_id)
-                elif name == "drawing":
+                elif name in {"drawing", "pict"}:
+                    from .textboxes import read_textbox
+
+                    textbox = read_textbox(content, source, self)
+                    if textbox is not None:
+                        append(textbox)
+                        continue
+                    if name == "pict":
+                        continue
                     picture = self.picture(Drawing(content, item))
                     if picture is not None:
                         append(picture)
@@ -464,10 +447,23 @@ class _DocxReader:
                                 char_pr_id=next((b.char_pr_id for b in blocks if isinstance(b, Paragraph)), None))
             setattr(field, "_docx_hyperlink_runs", (label, [Paragraph(label, char_pr_id=carrier.char_pr_id)]))
             blocks[0:0] = [carrier, field]
-            self.warn("DOCX list labels use displayed fields in HWP/HWPX; automatic numbering resumes when converted back to DOCX.")
+            from .native_effects import NUMBER_FORMATS
+
+            if self._list_definition.get("Format") not in {"bullet", *NUMBER_FORMATS}:
+                self.warn("This Word list number format retains its displayed label; no equivalent native Hancom counter is available.")
         for order, block in enumerate(blocks):
             _mark_source(block, index * 100000 + segments.get(id(block), 0), order)
             setattr(block, "_docx_source_path", self.source_paths.get(source._p))
+            if isinstance(block, Paragraph):
+                from .features import xml
+
+                setattr(block, "_word_extra", {**getattr(block, "_word_extra", {}), "pPr": xml(source._p.pPr)})
+                character = next((style for style in self.target.character_styles if style.style_id == block.char_pr_id), None)
+                if character is not None and getattr(character, "_word_extra", None):
+                    getattr(block, "_word_extra")["character"] = deepcopy(getattr(character, "_word_extra"))
+                controls = getattr(block, "_word_extra", {}).get("controls", self.controls.get(source._p, []))
+                if controls:
+                    getattr(block, "_word_extra")["controls"] = controls
         if pending_break:
             setattr(blocks[0], "_hwpx_paragraph_attributes", {"pageBreak" if pending_break == "page" else "columnBreak": "1"})
         return blocks
@@ -478,9 +474,29 @@ class _DocxReader:
 
         instruction = node.get(qn("w:instr"), "").strip()
         command = instruction.split(maxsplit=1)[0].upper() if instruction else ""
+        if command == "JAKAL_FIELD_BOUNDARY":
+            data = instruction.split(maxsplit=1)[1]
+            record = json.loads(data)
+            if record["side"] == "begin":
+                kind = record.get("instruction", "").strip().split(maxsplit=1)
+                self.warn("Complex Word field " + (kind[0] if kind else "(empty)")
+                          + " retains its visible content and field structure; HWPX does not recalculate this outer field.")
+            return Field("JAKAL_WORD_FIELD_BOUNDARY", "", parameters={"Record": data})
         cached = "".join(Run(child, source).text for child in node if child.tag == qn("w:r"))
-        if command == "PAGE" and not instruction[4:].strip():
-            result_number = AutoNumber(kind="autoNum", number=cached.strip() or 1, number_type="PAGE")
+        if command == "JAKAL_BOOKMARK":
+            result = Field("BOOKMARK", cached, name=instruction.split(maxsplit=1)[1], parameters={"Prop": 2})
+            styled = [Paragraph(Run(child, source).text, char_pr_id=self.character_style(source, Run(child, source)))
+                      for child in node if child.tag == qn("w:r")]
+            setattr(result, "_docx_hyperlink_runs", (cached, styled))
+            return result
+        if command in {"PAGE", "NUMPAGES"}:
+            result_number = AutoNumber(kind="autoNum", number=int(cached.strip()) if cached.strip().isdigit() else 1,
+                                       number_type="PAGE" if command == "PAGE" else "TOTAL_PAGE")
+            setattr(result_number, "_word_extra", {"instruction": instruction})
+            format_match = re.search(r"\\\*\s+(ROMAN|roman|ALPHABETIC|alphabetic|Arabic)", instruction)
+            if format_match:
+                setattr(result_number, "_docx_number_format", {"ROMAN": "ROMAN_CAPITAL", "roman": "ROMAN_SMALL",
+                    "ALPHABETIC": "LATIN_CAPITAL", "alphabetic": "LATIN_SMALL", "Arabic": "DIGIT"}[format_match[1]])
             first = node.find(qn("w:r"))
             if first is not None:
                 setattr(result_number, "_docx_char_pr_id", self.character_style(source, Run(first, source)))
@@ -491,7 +507,10 @@ class _DocxReader:
         styled = [Paragraph(Run(child, source).text, char_pr_id=self.character_style(source, Run(child, source)))
                   for child in node if child.tag == qn("w:r")]
         setattr(result, "_docx_hyperlink_runs", (cached, styled))
-        self.warn("Word field " + (command or "(empty)") + " retains its cached display in HWPX and restores its instruction in DOCX; HWPX does not recalculate it.")
+        from .native_effects import native_field
+
+        if native_field(instruction) is None:
+            self.warn("Word field " + (command or "(empty)") + " retains its cached display in HWPX and restores its instruction in DOCX; HWPX does not recalculate it.")
         return result
 
     def note(self, node: Any, source: Any) -> Note | None:
@@ -550,7 +569,7 @@ class _DocxReader:
         result.nested_blocks.extend(nested)
         return result
 
-    def reference_run_properties(self, paragraph: Any, run: Any) -> str:
+    def reference_run_properties(self, paragraph: Any, run: Any, *, font_names: dict | None = None) -> str:
         """Flatten run/style/default properties so references survive new styles/themes."""
         from docx.oxml import OxmlElement
         from docx.oxml.ns import qn
@@ -559,6 +578,7 @@ class _DocxReader:
         properties = [run._r.rPr]
         properties.extend(style.element.rPr for style in _style_chain(run.style))
         properties.extend(style.element.rPr for style in _style_chain(paragraph.style))
+        properties.append(self.table_context.get("rPr"))
         properties.append(self.default_run_properties)
         resolved = OxmlElement("w:rPr")
         for source in properties:
@@ -572,12 +592,20 @@ class _DocxReader:
                     resolved.append(deepcopy(child))
                 elif child.tag in {qn("w:rFonts"), qn("w:lang")}:
                     for name, value in child.attrib.items():
+                        if child.tag == qn("w:rFonts"):
+                            attribute = etree.QName(name).localname
+                            partner = attribute.removesuffix("Theme") if attribute.endswith("Theme") else attribute + "Theme"
+                            if attribute == "cstheme":
+                                partner = "cs"
+                            if existing.get(qn("w:" + partner)) is not None:
+                                continue
                         if name not in existing.attrib:
                             existing.set(name, value)
-        style_id = self.character_style(paragraph, run)
-        style = next(style for style in self.target.character_styles if style.style_id == style_id)
+        if font_names is None:
+            style_id = self.character_style(paragraph, run)
+            font_names = next(style.font_names for style in self.target.character_styles if style.style_id == style_id)
         fonts = resolved.find(qn("w:rFonts"))
-        if style.font_names:
+        if font_names:
             if fonts is None:
                 fonts = OxmlElement("w:rFonts")
                 resolved.insert(0, fonts)
@@ -648,6 +676,7 @@ class _DocxReader:
         root.extend([deepcopy(abstract), deepcopy(number)])
         suffix = level_definition.find(qn("w:suff"))
         self._list_definition = {"NumberingXML": etree.tostring(root, encoding="unicode"), "Level": str(level),
+                                 "Format": number_format,
                                  "Suffix": {"space": " ", "nothing": ""}.get(suffix.get(qn("w:val")) if suffix is not None else "", "\t")}
         if number_format == "bullet":
             return marker.replace("\uf0b7", "•").replace("\uf0a7", "▪") or "•"
@@ -683,6 +712,13 @@ class _DocxReader:
         formats = [style.paragraph_format for style in _style_chain(source.style)]
         if include_direct:
             formats.insert(0, source.paragraph_format)
+        if self.table_context.get("pPr") is not None:
+            from docx.oxml import OxmlElement
+            from docx.text.parfmt import ParagraphFormat
+
+            table_paragraph = OxmlElement("w:p")
+            table_paragraph.append(deepcopy(self.table_context["pPr"]))
+            formats.append(ParagraphFormat(table_paragraph))
         if self.default_paragraph_format is not None:
             formats.append(self.default_paragraph_format)
 
@@ -690,7 +726,8 @@ class _DocxReader:
             return next((getattr(fmt, name) for fmt in formats if getattr(fmt, name) is not None), None)
 
         alignment = effective("alignment")
-        alignment_name = {0: "LEFT", 1: "CENTER", 2: "RIGHT", 3: "JUSTIFY", 4: "DISTRIBUTE"}.get(alignment, "LEFT")
+        alignment_name = {0: "LEFT", 1: "CENTER", 2: "RIGHT", 3: "JUSTIFY", 4: "DISTRIBUTE",
+                          5: "JUSTIFY", 7: "JUSTIFY", 8: "JUSTIFY", 9: "DISTRIBUTE"}.get(alignment, "LEFT")
         if alignment is not None and alignment_name is None:
             self.warn("DOCX import does not preserve this paragraph alignment; using the default.")
         style = ParagraphStyle(alignment_horizontal=alignment_name)
@@ -791,6 +828,7 @@ class _DocxReader:
         properties = [run._r.rPr]
         properties.extend(style.element.rPr for style in _style_chain(run.style))
         properties.extend(style.element.rPr for style in _style_chain(paragraph.style))
+        properties.append(self.table_context.get("rPr"))
         properties.append(self.default_run_properties)
         properties = [prop for prop in properties if prop is not None]
 
@@ -801,8 +839,10 @@ class _DocxReader:
                     return element.get(qn("w:val"))
             return None
 
-        color = value("color")
-        color = f"#{color.upper()}" if color and len(color) == 6 and all(c in "0123456789abcdefABCDEF" for c in color) else None
+        from .formatting import color as resolve_color
+
+        color_node = next((node for prop in properties if (node := prop.find(qn("w:color"))) is not None), None)
+        color = resolve_color(color_node, self.theme)
         size = value("sz")
         height = int(size) * 50 if size is not None else None
         def enabled(tag: str) -> bool | None:
@@ -840,6 +880,7 @@ class _DocxReader:
         if underline not in (None, "none", *underline_shapes):
             self.warn(f"DOCX underline style {underline!r} is approximated in model conversion.")
         highlight = value("highlight")
+        shading = next((node for prop in properties if (node := prop.find(qn("w:shd"))) is not None), None)
         text_scale = value("w")
         font_ratios = {}
         if text_scale is not None:
@@ -854,12 +895,15 @@ class _DocxReader:
             bold=enabled("b"), italic=enabled("i"),
             underline={"type": "BOTTOM" if underline not in (None, "none") else "NONE", "shape": underline_shapes.get(underline or "", "SOLID"), "color": color or "#000000"},
             strikeout={"shape": "SOLID" if enabled("strike") or enabled("dstrike") else "NONE", "color": color or "#000000"},
-            shade_color=shades.get(highlight) if highlight else None,
+            shade_color=shades.get(highlight) if highlight else resolve_color(shading, self.theme, fill=True),
             script_position={"superscript": "SUPERSCRIPT", "subscript": "SUBSCRIPT"}.get(value("vertAlign") or "", "NORMAL"),
         )
-        if any(prop.xpath("./w:spacing | ./w:position | ./w:shd | ./w:color[@w:themeColor]") for prop in properties):
-            self.warn("DOCX conversion may approximate character spacing, positioning, shading, or theme colors.")
-        key = json.dumps({"color": color, "height": height, "fonts": fonts, "ratios": font_ratios, "bold": style.bold, "italic": style.italic, "underline": style.underline, "strikeout": style.strikeout, "shade": style.shade_color, "position": style.script_position}, sort_keys=True)
+        resolved = self.reference_run_properties(paragraph, run, font_names=fonts)
+        from dataclasses import asdict
+
+        setattr(style, "_word_extra", {"rPr": resolved, "mapped": {key: asdict(style)[key] for key in (
+            "bold", "italic", "height", "font_names", "font_ratios", "text_color", "shade_color", "underline", "strikeout", "script_position")}})
+        key = json.dumps({"color": color, "height": height, "fonts": fonts, "ratios": font_ratios, "bold": style.bold, "italic": style.italic, "underline": style.underline, "strikeout": style.strikeout, "shade": style.shade_color, "position": style.script_position, "rPr": resolved}, sort_keys=True)
         if key not in self._character_styles:
             style_id = str(len(self._character_styles) + 1)
             style.style_id = style_id
@@ -868,101 +912,17 @@ class _DocxReader:
         return self._character_styles[key]
 
     def picture(self, drawing: Any) -> Picture | None:
-        image_ids = drawing._drawing.xpath(".//pic:blipFill/a:blip/@r:embed")
-        if not image_ids:
-            self.warn("DOCX import does not preserve linked images, charts, SmartArt, or other non-picture drawings.")
-            return None
-        image_part = drawing.part.related_parts[image_ids[0]]
-        extents = drawing._drawing.xpath("./wp:inline/wp:extent | ./wp:anchor/wp:extent")
-        width = _units(int(extents[0].get("cx"))) if extents else 7200
-        height = _units(int(extents[0].get("cy"))) if extents else 7200
-        if drawing._drawing.xpath("./wp:anchor | .//a:srcRect | .//a:xfrm[@rot]"):
-            self.warn("DOCX import retains picture data and size; floating placement, crop, and rotation are not preserved.")
-        descriptions = drawing._drawing.xpath("./wp:inline/wp:docPr/@descr | ./wp:anchor/wp:docPr/@descr")
-        return Picture(
-            name=Path(str(image_part.partname)).name, data=image_part.blob,
-            extension=Path(str(image_part.partname)).suffix.lstrip("."),
-            width=width, height=height, shape_comment=descriptions[0] if descriptions else None,
-            layout={"treatAsChar": "1"},
-        )
+        from .pictures import read_picture
+
+        result = read_picture(drawing, self.source_path)
+        if result is None:
+            self.warn("DOCX import does not preserve charts, SmartArt, or other non-picture drawings.")
+        return result
 
     def table(self, source: Any) -> Table:
-        from docx.oxml.ns import qn
+        from .tables import read_table
 
-        rows, cols = len(source.rows), len(source.columns)
-        if not rows or not cols:
-            raise ValueError("DOCX contains a table with no rows or columns.")
-        if source._tbl.xpath("./w:tblPr/w:tblStyle"):
-            self.warn("DOCX table styles are not fully preserved; direct cell borders and shading are retained.")
-        texts = [["" for _ in range(cols)] for _ in range(rows)]
-        coordinates: dict[Any, list[tuple[int, int]]] = {}
-        vertical_aligns: dict[tuple[int, int], str] = {}
-        cell_margins: dict[tuple[int, int], dict[str, int]] = {}
-        cell_fill_colors: dict[tuple[int, int], str] = {}
-        cell_border_styles: dict[tuple[int, int], dict[str, dict[str, str | int]]] = {}
-        table_margins = {}
-        table_borders = {}
-        for style in reversed(list(_style_chain(source.style))):
-            properties = style.element.find(qn("w:tblPr"))
-            if properties is not None:
-                table_margins.update(_cell_margins(properties.find(qn("w:tblCellMar"))))
-                table_borders.update(_border_styles(properties.find(qn("w:tblBorders"))))
-        table_margins.update(_cell_margins(source._tbl.tblPr.find(qn("w:tblCellMar"))))
-        table_borders.update(_border_styles(source._tbl.tblPr.find(qn("w:tblBorders"))))
-        rich_cells = {}
-        for row_index, row in enumerate(source.rows):
-            for column, cell in enumerate(row.cells, start=row.grid_cols_before):
-                if column >= cols:
-                    raise ValueError("DOCX table cells exceed the declared column grid.")
-                positions = coordinates.setdefault(cell._tc, [])
-                if not positions:
-                    texts[row_index][column] = cell.text
-                    rich_cells[(row_index, column)] = (cell.text, self.container_blocks(cell))
-                    align = {0: "TOP", 1: "CENTER", 3: "BOTTOM"}.get(cell.vertical_alignment)
-                    vertical_aligns[(row_index, column)] = align or "TOP"
-                    properties = cell._tc.tcPr
-                    overrides = _cell_margins(properties.find(qn("w:tcMar")) if properties is not None else None)
-                    if overrides:
-                        cell_margins[(row_index, column)] = {**table_margins, **overrides} if table_margins else overrides
-                    borders = _border_styles(properties.find(qn("w:tcBorders")) if properties is not None else None)
-                    if table_borders or borders:
-                        cell_border_styles[(row_index, column)] = {**table_borders, **borders}
-                        if any(
-                            spec.get("style") not in {"single", "dashed", "dotted", "double", "none", "nil"}
-                            for spec in cell_border_styles[(row_index, column)].values()
-                        ):
-                            self.warn("DOCX table border style is approximated as a solid line.")
-                    shading = properties.find(qn("w:shd")) if properties is not None else None
-                    if shading is not None:
-                        color = shading.get(qn("w:fill"), "")
-                        if len(color) == 6 and all(char in "0123456789abcdefABCDEF" for char in color):
-                            cell_fill_colors[(row_index, column)] = f"#{color.upper()}"
-                        elif color not in ("", "auto") or shading.get(qn("w:themeFill")):
-                            self.warn("DOCX theme or patterned table cell shading is not preserved.")
-                positions.append((row_index, column))
-        spans = {}
-        for positions in coordinates.values():
-            first_row, first_col = positions[0]
-            row_span = max(row for row, _ in positions) - first_row + 1
-            col_span = max(col for _, col in positions) - first_col + 1
-            if row_span > 1 or col_span > 1:
-                spans[(first_row, first_col)] = (row_span, col_span)
-        widths = [column.width for column in source.columns]
-        heights = [row.height for row in source.rows]
-        result = Table(
-            rows=rows, cols=cols, cell_texts=texts,
-            col_widths=[_units(width) for width in widths] if all(w is not None for w in widths) else None,
-            row_heights=[_units(height) if height is not None else 0 for height in heights] if any(h is not None for h in heights) else None,
-            cell_spans=spans or None, cell_vertical_aligns=vertical_aligns or None,
-            table_margins=table_margins or None, cell_margins=cell_margins or None,
-            cell_fill_colors=cell_fill_colors or None, cell_border_styles=cell_border_styles or None,
-            repeat_header=bool(source.rows[0]._tr.xpath("./w:trPr/w:tblHeader[not(@w:val='0' or @w:val='false' or @w:val='off')]")),
-        )
-        setattr(result, "_docx_cell_content", rich_cells)
-        pending = self.pending_breaks.pop(source._tbl.getparent(), None)
-        if pending:
-            setattr(result, "_hwpx_paragraph_attributes", {"pageBreak" if pending == "page" else "columnBreak": "1"})
-        return result
+        return read_table(self, source)
 
     def container_blocks(self, container: Any) -> list[HancomBlock]:
         from docx.table import Table as WordTable
@@ -987,6 +947,9 @@ class _DocxReader:
                     continue  # Reading absent stories must not create Word parts.
                 if not story.is_linked_to_previous:
                     self.check_unsupported(story._element)
+                    from .features import capture_controls
+
+                    self.controls.update(capture_controls(story._element))
                     _accept_visible_content(story._element)
                     inherited[key] = "\n".join(paragraph.text for paragraph in story.paragraphs)
                 text = inherited.get(key, "")

@@ -3,9 +3,27 @@ from __future__ import annotations
 import struct
 from collections.abc import Iterator
 from dataclasses import dataclass, field
+from typing import cast
 
-# Imported after hwp_binary defines the raw and typed record classes.
-from .hwp_binary import (
+# Record families depend on the shared base instead of the public facade.
+from ._hwp_component_records import (
+    ArcShapeComponentRecord,
+    ContainerShapeComponentRecord,
+    CurveShapeComponentRecord,
+    EllipseShapeComponentRecord,
+    EqEditRecord,
+    FootnoteShapeRecord,
+    LineShapeComponentRecord,
+    OleShapeComponentRecord,
+    PageBorderFillRecord,
+    PageDefRecord,
+    PictureShapeComponentRecord,
+    PolygonShapeComponentRecord,
+    RectangleShapeComponentRecord,
+    ShapeComponentRecord,
+    TextArtShapeComponentRecord,
+)
+from ._hwp_constants import (
     TAG_BIN_DATA,
     TAG_BORDER_FILL,
     TAG_BULLET,
@@ -47,72 +65,73 @@ from .hwp_binary import (
     TAG_TAB_DEF,
     TAG_TRACK_CHANGE,
     TAG_TRACK_CHANGE_AUTHOR,
-    ArcShapeComponentRecord,
+)
+from ._hwp_control_payloads import (
+    _decode_control_id_payload,
+)
+from ._hwp_control_records import (
     AutoNumberControlRecord,
-    BinDataRecord,
     BookmarkControlRecord,
+    ControlDataRecord,
+    ControlHeaderRecord,
+    FieldControlRecord,
+    HeaderFooterControlRecord,
+    HyperlinkControlRecord,
+    NoteControlRecord,
+    PageHidingControlRecord,
+    PageNumberControlRecord,
+    PageStartsOnControlRecord,
+    SectionDefinitionControlRecord,
+)
+from ._hwp_docinfo_records import (
+    BinDataRecord,
     BorderFillRecord,
     BulletRecord,
     CharShapeRecord,
     ChartDataRecord,
     CompatibleDocumentRecord,
-    ContainerShapeComponentRecord,
-    ControlDataRecord,
-    ControlHeaderRecord,
-    CurveShapeComponentRecord,
     DocDataRecord,
     DocumentPropertiesRecord,
-    EllipseShapeComponentRecord,
-    EqEditRecord,
-    EquationControlRecord,
     FaceNameRecord,
-    FieldControlRecord,
-    FootnoteShapeRecord,
     FormObjectRecord,
-    GraphicControlRecord,
-    HeaderFooterControlRecord,
-    HwpDocumentProperties,
-    HwpBinaryEditError,
-    HwpRecord,
-    HyperlinkControlRecord,
     IdMappingsRecord,
-    InvalidHwpFileError,
     LayoutCompatibilityRecord,
-    LineShapeComponentRecord,
     ListHeaderRecord,
     MemoListRecord,
     MemoShapeRecord,
-    NoteControlRecord,
     NumberingRecord,
-    OleControlRecord,
-    OleShapeComponentRecord,
-    PageBorderFillRecord,
-    PageDefRecord,
-    PageHidingControlRecord,
-    PageNumberControlRecord,
-    PageStartsOnControlRecord,
-    ParagraphHeaderRecord,
-    ParagraphTextRecord,
     ParaShapeRecord,
-    PictureControlRecord,
-    PictureShapeComponentRecord,
-    PolygonShapeComponentRecord,
-    RectangleShapeComponentRecord,
-    RecordNode,
-    SectionDefinitionControlRecord,
-    ShapeComponentRecord,
-    ShapeControlRecord,
     StyleRecord,
     TabDefRecord,
-    TableControlRecord,
-    TextArtShapeComponentRecord,
     TrackChangeAuthorRecord,
     TrackChangeRecord,
+)
+from ._hwp_graphic_records import (
+    EquationControlRecord,
+    GraphicControlRecord,
+    OleControlRecord,
+    PictureControlRecord,
+    ShapeControlRecord,
+    TableControlRecord,
+)
+from ._hwp_paragraph_records import (
+    ParagraphHeaderRecord,
+    ParagraphTextRecord,
+)
+from ._hwp_record_base import (
+    HwpDocumentProperties,
+    HwpRecord,
+    RecordNode,
     TypedRecord,
     UnknownRecord,
-    _decode_control_id_payload,
+)
+from ._hwp_section_helpers import (
     _find_paragraph_control_node,
     _find_section_definition_control_node,
+)
+from .exceptions import (
+    HwpBinaryEditError,
+    InvalidHwpFileError,
 )
 
 
@@ -326,28 +345,28 @@ class DocInfoModel:
         return [node for node in self.iter_nodes() if isinstance(node, BinDataRecord)]
 
     def face_name_records(self) -> list[FaceNameRecord]:
-        return self.records_by_tag_id(TAG_FACE_NAME)
+        return cast(list[FaceNameRecord], self.records_by_tag_id(TAG_FACE_NAME))
 
     def border_fill_records(self) -> list[BorderFillRecord]:
-        return self.records_by_tag_id(TAG_BORDER_FILL)
+        return cast(list[BorderFillRecord], self.records_by_tag_id(TAG_BORDER_FILL))
 
     def char_shape_records(self) -> list[CharShapeRecord]:
-        return self.records_by_tag_id(TAG_CHAR_SHAPE)
+        return cast(list[CharShapeRecord], self.records_by_tag_id(TAG_CHAR_SHAPE))
 
     def tab_def_records(self) -> list[TabDefRecord]:
-        return self.records_by_tag_id(TAG_TAB_DEF)
+        return cast(list[TabDefRecord], self.records_by_tag_id(TAG_TAB_DEF))
 
     def numbering_records(self) -> list[NumberingRecord]:
-        return self.records_by_tag_id(TAG_NUMBERING)
+        return cast(list[NumberingRecord], self.records_by_tag_id(TAG_NUMBERING))
 
     def bullet_records(self) -> list[BulletRecord]:
-        return self.records_by_tag_id(TAG_BULLET)
+        return cast(list[BulletRecord], self.records_by_tag_id(TAG_BULLET))
 
     def para_shape_records(self) -> list[ParaShapeRecord]:
-        return self.records_by_tag_id(TAG_PARA_SHAPE)
+        return cast(list[ParaShapeRecord], self.records_by_tag_id(TAG_PARA_SHAPE))
 
     def style_records(self) -> list[StyleRecord]:
-        return self.records_by_tag_id(TAG_STYLE)
+        return cast(list[StyleRecord], self.records_by_tag_id(TAG_STYLE))
 
     def face_name_fields(self) -> list[dict[str, object]]:
         return [record.fields() for record in self.face_name_records()]
@@ -374,22 +393,22 @@ class DocInfoModel:
         return [record.fields(style_id=index) for index, record in enumerate(self.style_records())]
 
     def doc_data_records(self) -> list[DocDataRecord]:
-        return self.records_by_tag_id(TAG_DOC_DATA)
+        return cast(list[DocDataRecord], self.records_by_tag_id(TAG_DOC_DATA))
 
     def compatible_document_records(self) -> list[CompatibleDocumentRecord]:
-        return self.records_by_tag_id(TAG_COMPATIBLE_DOCUMENT)
+        return cast(list[CompatibleDocumentRecord], self.records_by_tag_id(TAG_COMPATIBLE_DOCUMENT))
 
     def layout_compatibility_records(self) -> list[LayoutCompatibilityRecord]:
-        return self.records_by_tag_id(TAG_LAYOUT_COMPATIBILITY)
+        return cast(list[LayoutCompatibilityRecord], self.records_by_tag_id(TAG_LAYOUT_COMPATIBILITY))
 
     def memo_shape_records(self) -> list[MemoShapeRecord]:
-        return self.records_by_tag_id(TAG_MEMO_SHAPE)
+        return cast(list[MemoShapeRecord], self.records_by_tag_id(TAG_MEMO_SHAPE))
 
     def track_change_records(self) -> list[TrackChangeRecord]:
-        return self.records_by_tag_id(TAG_TRACK_CHANGE)
+        return cast(list[TrackChangeRecord], self.records_by_tag_id(TAG_TRACK_CHANGE))
 
     def track_change_author_records(self) -> list[TrackChangeAuthorRecord]:
-        return self.records_by_tag_id(TAG_TRACK_CHANGE_AUTHOR)
+        return cast(list[TrackChangeAuthorRecord], self.records_by_tag_id(TAG_TRACK_CHANGE_AUTHOR))
 
     def next_bin_data_id(self) -> int:
         id_record = self.id_mappings_record()

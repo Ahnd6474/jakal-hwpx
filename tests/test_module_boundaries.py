@@ -1,10 +1,22 @@
 from __future__ import annotations
 
 import pickle
+from importlib import import_module
+
+import pytest
 
 from jakal_hwpx import (
     _hancom_models,
     _hancom_styles,
+    _hancom_hwp_read,
+    _hancom_hwpx_read,
+    _hancom_hwpx_graphics,
+    _hancom_hwpx_write,
+    _hancom_hwpx_settings,
+    _hancom_hwpx_styles,
+    _hwp_binary_authoring,
+    _hwp_binary_sections,
+    _hwp_validation,
     _hancom_from_hwp,
     _hancom_from_hwpx,
     _hancom_to_hwp,
@@ -54,6 +66,15 @@ def test_public_facades_reexport_extracted_implementations() -> None:
     assert hancom_document._extract_hwpx_paragraph_blocks is _hancom_from_hwpx._extract_hwpx_paragraph_blocks
     assert hancom_document._append_hancom_block_to_hwp is _hancom_to_hwp._append_hancom_block_to_hwp
     assert hancom_document._write_section_to_hwpx is _hancom_to_hwpx._write_section_to_hwpx
+    assert hancom_document._extract_hwp_section is _hancom_hwp_read._extract_hwp_section
+    assert hancom_document._extract_hwpx_section is _hancom_hwpx_read._extract_hwpx_section
+    assert hancom_document._apply_hwpx_table_block is _hancom_hwpx_graphics._apply_hwpx_table_block
+    assert hancom_document._write_grouped_section_to_hwpx is _hancom_hwpx_write._write_grouped_section_to_hwpx
+    assert hancom_document._apply_section_settings is _hancom_hwpx_settings._apply_section_settings
+    assert hancom_document._apply_styles is _hancom_hwpx_styles._apply_styles
+    assert hwp_document._issue is _hwp_validation._issue
+    assert hwp_binary.HwpBinaryDocument.append_table is _hwp_binary_authoring.HwpBinaryAuthoringMixin.append_table
+    assert hwp_binary.HwpBinaryDocument.set_section_page_settings is _hwp_binary_sections.HwpBinarySectionMixin.set_section_page_settings
     assert document._build_blank_document_state is _hwpx_factory._build_blank_document_state
     assert document._normalize_path is _hwpx_common._normalize_path
     assert document._canonical_append_block_type is _hwpx_document_controls._canonical_append_block_type
@@ -79,6 +100,43 @@ def test_extracted_factories_still_build_public_document_models() -> None:
     assert set(part_order) == set(parts)
     assert zip_infos == {}
     assert duplicates == []
+
+
+def test_native_record_families_keep_public_class_identities() -> None:
+    for module_name in (
+        "_hwp_record_base", "_hwp_docinfo_records", "_hwp_control_records",
+        "_hwp_graphic_records", "_hwp_component_records", "_hwp_paragraph_records",
+        "_hwp_table_payloads",
+    ):
+        module = import_module(f"jakal_hwpx.{module_name}")
+        for name, value in vars(module).items():
+            if isinstance(value, type) and value.__module__ == "jakal_hwpx.hwp_binary":
+                assert getattr(hwp_binary, name) is value
+
+
+@pytest.mark.parametrize("tag_id,payload", [
+    (hwp_binary.TAG_PARA_TEXT, "본문\r".encode("utf-16-le")),
+    (hwp_binary.TAG_ID_MAPPINGS, bytes(18 * 4)),
+    (hwp_binary.TAG_LIST_HEADER, bytes(20)),
+    (hwp_binary.TAG_SHAPE_COMPONENT_PICTURE, bytes(80)),
+    (hwp_binary.TAG_CTRL_HEADER, hwp_binary._build_auto_number_payload("autoNum", number=2, number_type="PAGE")),
+])
+def test_extracted_records_keep_clone_pickle_and_byte_roundtrips(tag_id: int, payload: bytes) -> None:
+    raw = hwp_binary.HwpRecord(tag_id=tag_id, level=0, size=len(payload), header_size=4, offset=0, payload=payload)
+    node = hwp_binary.record_node_from_record(raw)
+    serialized = b"".join(record.to_bytes() for record in node.to_records())
+    for restored in (node.clone(), pickle.loads(pickle.dumps(node))):
+        assert type(restored) is type(node)
+        assert b"".join(record.to_bytes() for record in restored.to_records()) == serialized
+
+
+def test_blank_paragraph_insertion_handles_an_empty_native_section() -> None:
+    model = hwp_binary.SectionModel(section_index=0, roots=[])
+    paragraph = hwp_binary._insert_blank_like_paragraph(model)
+    assert model.paragraphs() == [paragraph]
+    assert paragraph.raw_text == "\r"
+    rebuilt = hwp_binary.SectionModel.from_records(0, model.to_records())
+    assert rebuilt.paragraphs()[0].raw_text == "\r"
 
 
 def test_hwpx_compatibility_aliases_are_public() -> None:

@@ -172,8 +172,16 @@ Shared DOCX edits preserve unrelated package parts. Cross-format conversion maps
 supported content and formatting through the common model; it does not guarantee
 identical layout or preservation of every Word feature. Unsupported Word features
 produce `UserWarning` messages during conversion. The addon preserves independent
-body reference and footnote/endnote marker formatting and maps supported first-page
-headers/footers, lists, and fields to HWPX equivalents or substitute representations.
+body reference and footnote/endnote marker formatting. It maps picture placement,
+crop/rotation, conditional table formatting, theme colors, spacing, and baseline
+offsets to HWPX, and restores Word content controls and custom XML bindings on return.
+Word text boxes become editable Hancom text shapes. Nested and multi-paragraph
+fields retain their visible results and Word field structure on return.
+Supported lists use native Hancom counters; page counts, date/summary fields,
+bookmark references, and compatible table formulas use native automatic controls.
+Word commands and additional properties survive the return to DOCX. First-page
+headers/footers use fixed text boxes in HWPX. Advanced list formats and fields
+without a native mapping retain their displayed values and emit a warning.
 HWP has additional limits; an external converter remains opt-in.
 
 The existing `from jakal_hwpx import WordDocument` import remains supported.

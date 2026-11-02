@@ -488,7 +488,7 @@ class HwpxDocument(HwpxDocumentControlMixin, HwpxValidationMixin):
         sections = self.sections if section_index is None else [self.sections[section_index]]
         bookmarks: list[BookmarkXml] = []
         for section in sections:
-            for node in section.readonly_root_element.xpath(".//hp:bookmark", namespaces=NS):
+            for node in section.readonly_root_element.xpath(".//hp:bookmark | .//hp:fieldBegin[@type='BOOKMARK']", namespaces=NS):
                 bookmarks.append(BookmarkXml(self, section, node))
         return bookmarks
 

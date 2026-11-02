@@ -259,6 +259,7 @@ def test_docx_warns_about_features_outside_the_common_model(tmp_path: Path) -> N
     source = Document()
     paragraph = source.add_paragraph("목록", style="List Bullet")
     paragraph.add_run("굵게").bold = True
+    source.add_comment(paragraph.runs, "Reviewer comment")
     source.sections[0].different_first_page_header_footer = True
     source.sections[0].first_page_header.paragraphs[0].text = "첫 페이지"
     path = _save(source, tmp_path)
@@ -268,7 +269,8 @@ def test_docx_warns_about_features_outside_the_common_model(tmp_path: Path) -> N
     messages = [str(warning.message) for warning in captured]
     assert messages == document.import_warnings
     assert len(messages) == len(set(messages))
-    assert any("automatic numbering" in message for message in messages)
+    assert any("comments" in message for message in messages)
+    assert not any("automatic numbering" in message for message in messages)
     assert any(style.bold for style in document.character_styles)
     assert any(block.apply_page_type == "FIRST" for block in document.sections[0].header_footer_blocks)
 
