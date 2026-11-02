@@ -4,13 +4,13 @@ from __future__ import annotations
 from contextlib import contextmanager
 from copy import deepcopy
 from pathlib import Path
-from typing import Any
-import io
+from typing import Any, Iterator
 
 from ...hancom_document import Document, HancomConverter, Paragraph, Table, Picture, Hyperlink
 from ...document import HwpxDocument
 from ...hwp_document import HwpDocument
 from .preservation import DocxSource
+from .editing import WordEditor
 
 
 class WordDocument(Document):
@@ -72,20 +72,38 @@ class WordDocument(Document):
     @contextmanager
     def edit_word(self):
         """Edit any python-docx detail and refresh the shared model on success."""
+        if getattr(self, "_word_edit_active", False):
+            raise RuntimeError("Nested Word edit transactions are not supported; use the active editor.")
         self.refresh_from_word()
         original = self._source.raw
+        self._word_edit_active = True
         try:
             yield self.word_document
             self.refresh_from_word()
         except Exception:
             self._reload_word_bytes(original)
             raise
+        finally:
+            self._word_edit_active = False
+
+    @contextmanager
+    def edit_word_details(self) -> Iterator[WordEditor]:
+        """Edit positioned blocks, text ranges, tables, pictures and stories.
+
+        All changes commit together, or roll back on error. Editor handles are
+        valid only inside this context. Lengths use explicitly named pt units.
+        """
+        with self.edit_word() as backend:
+            editor = WordEditor(backend)
+            try:
+                yield editor
+                editor._finish()
+            finally:
+                editor._active = False
 
     def append_paragraph(self, text: str, *, section_index: int = 0) -> Paragraph:
-        with self.edit_word() as word:
-            if section_index != len(word.sections) - 1:
-                raise ValueError("Word paragraph append currently targets the final section.")
-            word.add_paragraph(text)
+        with self.edit_word_details() as editor:
+            editor.section(section_index).append_paragraph(text)
         return next(block for block in reversed(self.sections[section_index].blocks) if isinstance(block, Paragraph))
 
     def append_section(self):
@@ -94,28 +112,18 @@ class WordDocument(Document):
         return self.sections[-1]
 
     def append_table(self, rows: int, cols: int, cell_texts=None, *, section_index: int = 0, **kwargs) -> Table:
-        with self.edit_word() as word:
-            if section_index != len(word.sections) - 1:
-                raise ValueError("Word table append currently targets the final section.")
+        with self.edit_word_details() as editor:
             if any(value is not None for value in kwargs.values()):
-                raise ValueError("Use edit_word() for Word table geometry and formatting.")
-            table = word.add_table(rows=rows, cols=cols)
-            for row, values in enumerate(cell_texts or []):
-                for col, value in enumerate(values):
-                    table.cell(row, col).text = value
+                raise ValueError("Use edit_word_details() for Word table geometry and formatting.")
+            container = editor.section(section_index)
+            container.insert_table(len(container.blocks), rows=rows, cols=cols, values=cell_texts)
         return next(block for block in reversed(self.sections[section_index].blocks) if isinstance(block, Table))
 
     def append_picture(self, name: str, data: bytes, *, extension=None, width=7200, height=7200, shape_comment=None, section_index=0, **kwargs) -> Picture:
-        from docx.shared import Emu
-
-        with self.edit_word() as word:
-            if section_index != len(word.sections) - 1:
-                raise ValueError("Word picture append currently targets the final section.")
+        with self.edit_word_details() as editor:
             if any(value is not None for value in kwargs.values()):
-                raise ValueError("Use edit_word() for advanced Word picture placement.")
-            picture = word.add_paragraph().add_run().add_picture(io.BytesIO(data), width=Emu(width * 127), height=Emu(height * 127))
-            if shape_comment:
-                picture._inline.docPr.set("descr", shape_comment)
+                raise ValueError("Use edit_word_details() for advanced Word picture placement.")
+            editor.section(section_index).append_paragraph().add_picture(data, width_pt=width / 100, height_pt=height / 100, alt_text=shape_comment)
         return next(block for block in reversed(self.sections[section_index].blocks) if isinstance(block, Picture))
 
     def append_hyperlink(self, target: str, *, display_text=None, section_index=0, **kwargs) -> Hyperlink:
@@ -125,10 +133,10 @@ class WordDocument(Document):
 
         if not target or target == "#":
             raise ValueError("Word hyperlinks require a non-empty target or bookmark name.")
-        with self.edit_word() as word:
-            if section_index != len(word.sections) - 1 or kwargs:
+        with self.edit_word_details() as editor:
+            if kwargs:
                 raise ValueError("Use edit_word() for advanced Word hyperlinks.")
-            paragraph = word.add_paragraph()
+            paragraph = editor.section(section_index).append_paragraph()._native
             node = OxmlElement("w:hyperlink")
             if target.startswith("#"):
                 node.set(qn("w:anchor"), target[1:])

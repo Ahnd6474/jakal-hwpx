@@ -4,5 +4,6 @@ WordDocument shares the core Document model. Reading, writing, package
 preservation and equation mapping live here; python-docx loads only on use.
 """
 from .document import WordDocument
+from .editing import WordEditor
 
-__all__ = ["WordDocument"]
+__all__ = ["WordDocument", "WordEditor"]

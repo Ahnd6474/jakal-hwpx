@@ -31,10 +31,17 @@ DOCX 패키지에 유지됩니다. 공통 모델은 편집을 위한 투영이�
 
 공통 `append_paragraph()`, `append_table()`, `append_picture()`, `append_hyperlink()`,
 `append_section()`, `append_header()`, `append_footer()`, `replace_text()`는 Word 구현으로 연결됩니다. 현재 본문 append는
-마지막 섹션을 대상으로 합니다. 반영할 수 없는 공통 모델 수정은 출력 전에 오류를 내며
+`section_index`로 지정한 섹션에 추가할 수 있습니다. 반영할 수 없는 공통 모델 수정은 출력 전에 오류를 내며
 원본 서식을 조용히 버리지 않습니다.
 
 ## Word 세부 편집
+
+문단 삽입·삭제·이동, 글자 범위 서식, 표 셀·행·병합, 그림 교체·배치는
+[`edit_word_details()`](./word-editing.md)에서 원본 Word 객체에 적용할 수 있습니다.
+머리말·꼬리말·텍스트 상자 선택과 콘텐츠 컨트롤 바인딩 갱신도 지원합니다.
+한 편집 블록의 수정을 함께 반영하거나 오류 시 되돌리며, 편집 핸들은 종료 시 만료됩니다.
+일반적인 작업에는 이 API를 사용하고 python-docx/OOXML의 추가 기능이 필요하면 아래의
+기존 `edit_word()`를 사용할 수 있습니다.
 
 ```python
 with doc.edit_word() as word:

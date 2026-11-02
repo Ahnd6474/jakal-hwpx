@@ -39,6 +39,7 @@ Document.open("input.hwpx").save("converted.docx")
 | 모듈 | 역할 |
 | --- | --- |
 | `jakal_hwpx.addons.docx.document` | WordDocument, Word 편집 연결, 형식별 저장 |
+| `jakal_hwpx.addons.docx.editing` | 위치·범위·표·그림·영역의 트랜잭션 편집 API |
 | `jakal_hwpx.addons.docx.reader` | DOCX를 공통 모델로 투영 |
 | `jakal_hwpx.addons.docx.writer` | 공통 모델을 DOCX로 작성 |
 | `jakal_hwpx.addons.docx.preservation` | 원본 ZIP/OPC 패키지 보존과 부분 수정 |
@@ -65,6 +66,10 @@ addon에는 양방향 HWPX/DOCX 변환, 원본 DOCX 무수정 바이트 보존, 
 Word 콘텐츠 컨트롤의 본문은 한글에서 편집할 수 있는 내용으로 투영합니다.
 DOCX로 돌아올 때 해당 내용을 원래 컨트롤 속성으로 감싸고, 연결된 custom XML의
 요소·속성 값을 갱신합니다. 한글 안에서 Word의 드롭다운·날짜 선택 UI를 제공하지는 않습니다.
+
+Word 자체의 세부 편집에는 [`edit_word_details()`](./word-editing.md)를 사용할 수 있습니다.
+Word 원본 XML에 삽입·삭제·이동·서식 수정을 적용하고, 바인딩된 텍스트의 custom XML도
+함께 갱신합니다. 편집 범위와 단위, 원본 보존 방식은 해당 가이드에 설명합니다.
 
 ## 한글에서 자동 갱신되는 목록과 필드
 

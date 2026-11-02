@@ -71,6 +71,7 @@ REQUIRED_WHEEL_PATTERNS = (
     "jakal_hwpx/addons/docx/native_effects.py",
     "jakal_hwpx/addons/docx/fields.py",
     "jakal_hwpx/addons/docx/textboxes.py",
+    "jakal_hwpx/addons/docx/editing.py",
     "jakal_hwpx/addons/docx/tables.py",
     "jakal_hwpx/addons/docx/projection.py",
     "jakal_hwpx/shared_document.py",

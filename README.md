@@ -125,6 +125,25 @@ doc.save("build/docx-example/edited.docx")
 print(f"Replaced {count} occurrence(s)")
 ```
 
+For positioned edits, text-range formatting, tables, pictures, and document stories,
+use the transactional detail editor. Length arguments ending in `_pt` use points:
+
+```python
+with doc.edit_word_details() as edit:
+    body = edit.body
+    body.insert_paragraph(1, "Review notes")
+    body.paragraph(1).format_text(bold=True, font_size_pt=14)
+    body.table(0).set_cell_text(1, 1, "135")
+    body.table(0).format(widths_pt=[240, 160], repeat_header=True)
+
+doc.save("build/docx-example/detailed.docx")
+```
+
+Edits commit together or roll back on error. Handles expire when the context closes.
+See the [Word detail editing guide](docs/word-editing.md) and run
+`python examples/docx_editing.py` for an example with insertion, deletion, movement,
+story edits, and optional picture editing.
+
 #### Convert between DOCX, HWPX, and HWP
 
 Run this after the editing example to convert DOCX to HWPX and back:

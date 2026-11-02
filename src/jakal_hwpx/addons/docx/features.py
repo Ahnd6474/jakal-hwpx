@@ -226,7 +226,7 @@ def clean_control_markers(word: Any) -> None:
                 node.attrib.pop("data-jakal-control", None)
 
 
-def synchronize_bindings(word: Any) -> None:
+def synchronize_bindings(word: Any, *, controls: list[Any] | None = None) -> None:
     """Update bound XML from the edited control, avoiding stale values on open."""
     import re
     from docx.oxml.ns import qn
@@ -240,8 +240,9 @@ def synchronize_bindings(word: Any) -> None:
                 props = parse(rel.target_part.blob)
                 identity = props.get("{http://schemas.openxmlformats.org/officeDocument/2006/customXml}itemID", "").upper()
                 stores[identity] = part
-    controls = [node for part in word.part.package.parts if getattr(part, "element", None) is not None
-                for node in part.element.iter(qn("w:sdt"))]
+    if controls is None:
+        controls = [node for part in word.part.package.parts if getattr(part, "element", None) is not None
+                    for node in part.element.iter(qn("w:sdt"))]
     for node in controls:
         binding = node.find(f"./{qn('w:sdtPr')}/{qn('w:dataBinding')}")
         if binding is None:
@@ -313,7 +314,26 @@ def capture_resources(word: Any) -> dict:
         base = node.find(qn("w:basedOn"))
         if base is not None:
             used.add(base.get(qn("w:val")))
+    # A fresh Word template can carry a border/spacing setting absent from the
+    # source style. Retain the used non-list styles' direct paragraph properties,
+    # including absence, rather than inheriting those fresh-template defaults.
+    referenced = {value for part in word.part.package.parts if getattr(part, "element", None) is not None
+                  for reference in part.element.iter(qn("w:pStyle")) if (value := reference.get(qn("w:val")))}
+    paragraph_styles = []
+    for style in word.styles:
+        if style.element.get(qn("w:type")) != "paragraph":
+            continue
+        if style.style_id not in referenced and style.element.get(qn("w:default")) not in {"1", "true"}:
+            continue
+        cursor, numbered, seen = style, False, set()
+        while cursor is not None and cursor.style_id not in seen:
+            seen.add(cursor.style_id)
+            numbered |= cursor.element.find(f"./{qn('w:pPr')}/{qn('w:numPr')}") is not None
+            cursor = cursor.base_style
+        if not numbered:
+            paragraph_styles.append({"name": style.name, "pPr": xml(style.element.find(qn("w:pPr")))})
     return {"theme": theme, "table_styles": selected, "custom_xml": custom,
+            "paragraph_styles": paragraph_styles,
             "compatibility": xml(word.settings.element.find(qn("w:compat"))),
             "custom_links": [{"type": rel.reltype, "target": str(rel.target_part.partname)}
                              for rel in word.part.rels.values() if not rel.is_external and rel.reltype.endswith("/customXml")]}
@@ -340,6 +360,22 @@ def restore_resources(word: Any, resources: dict) -> None:
             if existing.tag == node.tag and existing.get(qn("w:styleId")) == node.get(qn("w:styleId")):
                 word.styles.element.remove(existing)
         word.styles.element.append(node)
+    for record in resources.get("paragraph_styles", []):
+        from docx.enum.style import WD_STYLE_TYPE
+
+        target = word.styles[record["name"]] if record["name"] in word.styles else word.styles.add_style(record["name"], WD_STYLE_TYPE.PARAGRAPH)
+        if target.type != WD_STYLE_TYPE.PARAGRAPH:
+            continue
+        for previous in list(target.element.findall(qn("w:pPr"))):
+            target.element.remove(previous)
+        if record["pPr"]:
+            # pPr must precede rPr in a style definition.
+            properties = parse(record["pPr"])
+            character = target.element.find(qn("w:rPr"))
+            if character is not None:
+                character.addprevious(properties)
+            else:
+                target.element.append(properties)
     records = resources.get("custom_xml", {})
     parts = {name: Part(PackURI(name), info["content_type"], base64.b64decode(info["data"]), word.part.package)
              for name, info in records.items()}

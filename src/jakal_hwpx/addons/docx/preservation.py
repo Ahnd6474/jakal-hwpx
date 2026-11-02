@@ -368,6 +368,16 @@ class DocxSource:
                 if changed != baseline:
                     raise ValueError(f"Preserving DOCX output cannot map non-text edits to {type(block).__name__}; no file was written.")
         for blocks, paragraph in self.paragraphs:
+            old = "".join(self.baseline[id(b)].get("text", self.baseline[id(b)].get("display_text") or "") for b in blocks if isinstance(b, (Paragraph, Hyperlink)))
+            new = "".join(b.text if isinstance(b, Paragraph) else b.display_text or "" for b in blocks if isinstance(b, (Paragraph, Hyperlink)))
+            style_changed = any(isinstance(block, Paragraph) and block.char_pr_id
+                                and current_styles[block.char_pr_id] != original_styles[block.char_pr_id] for block in blocks)
+            link_changed = any(isinstance(block, Hyperlink) and block.target != self.baseline[id(block)]["target"] for block in blocks)
+            if old == new and not style_changed and not link_changed:
+                # Native edits already live in native_changes. The original
+                # paragraph may have moved or been deleted; do not resolve its
+                # former XML path unless a projected edit actually needs it.
+                continue
             offset = 0
             slots = _visible_slots(paragraph)
             for block in blocks:
@@ -382,8 +392,6 @@ class DocxSource:
                         if paths:
                             dirty.add(main_name)
                 offset += len(original_text)
-            old = "".join(self.baseline[id(b)].get("text", self.baseline[id(b)].get("display_text") or "") for b in blocks if isinstance(b, (Paragraph, Hyperlink)))
-            new = "".join(b.text if isinstance(b, Paragraph) else b.display_text or "" for b in blocks if isinstance(b, (Paragraph, Hyperlink)))
             if old != new:
                 _patch_paragraph(main, paragraph, old, new)
                 dirty.add(main_name)
