@@ -144,11 +144,11 @@ def test_merging_and_widths_follow_the_actual_grid(tmp_path: Path):
     with model.edit_word_details() as edit:
         table = edit.body.table(0)
         table.merge(0, 0, 0, 1).format(widths_pt=[100, 150])
-        with pytest.raises(ValueError, match="merged"):
-            table.add_row(["unsafe"])
+        table.add_row(["new row"])
     result = WordFile(model.save(tmp_path / "merged.docx"))
     assert result.tables[0].cell(0, 0).width == Pt(250)
     assert result.tables[0].cell(0, 0).text == "A\nB"
+    assert result.tables[0].cell(2, 0).text == "new row"
 
 
 def test_picture_replacement_does_not_change_other_instances_of_shared_media(tmp_path: Path):
@@ -245,7 +245,7 @@ def test_transaction_failure_and_nested_edit_restore_original_bytes(tmp_path: Pa
     assert model.save(tmp_path / "nested.docx").read_bytes() == before
 
 
-def test_cross_part_moves_and_partial_field_deletion_are_rejected(tmp_path: Path):
+def test_partial_field_moves_and_deletion_are_rejected(tmp_path: Path):
     word = WordFile()
     paragraph = word.add_paragraph("Before")
     for kind in ("begin", "separate"):
@@ -264,7 +264,7 @@ def test_cross_part_moves_and_partial_field_deletion_are_rejected(tmp_path: Path
     with model.edit_word_details() as edit:
         with pytest.raises(ValueError, match="field"):
             edit.body.paragraph(0).delete()
-        with pytest.raises(ValueError, match="same document part"):
+        with pytest.raises(ValueError, match="field"):
             edit.body.paragraph(0).move(0, destination=edit.header())
     result = WordFile(model.save(tmp_path / "output.docx"))
     assert result.element.xpath(".//w:fldChar/@w:fldCharType") == ["begin", "separate", "end"]

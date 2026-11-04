@@ -149,7 +149,20 @@ def _extract_section_settings(section) -> SectionSettings:
         endnote_pr=_extract_note_pr(section, "endNotePr"),
         line_number_shape=_extract_line_number_shape(section),
         memo_shape_id=memo_shape_id,
+        columns=_extract_columns(section),
     )
+
+
+def _extract_columns(section) -> dict[str, Any]:
+    nodes = section.root_element.xpath("./hp:p[1]//hp:colPr", namespaces=NS)
+    if not nodes:
+        return {}
+    node = nodes[0]
+    sizes = node.findall(qname("hp", "colSz"))
+    return {"count": int(node.get("colCount", "1")), "gap": int(node.get("sameGap", "0")),
+            "equal": node.get("sameSz", "1") == "1", "separator": node.find(qname("hp", "colLine")) is not None,
+            "widths": [int(item.get("width", "0")) for item in sizes],
+            "gaps": [int(item.get("gap", "0")) for item in sizes]}
 
 
 def _apply_section_settings(
@@ -172,6 +185,22 @@ def _apply_section_settings(
         }.items():
             column_properties.set(name, value)
         target.element.addnext(column_control)
+        section.mark_modified()
+    if settings.columns:
+        column_properties = section.root_element.xpath("./hp:p[1]//hp:colPr", namespaces=NS)[0]
+        columns = settings.columns
+        column_properties.attrib.update({"colCount": str(columns.get("count", 1)),
+                                         "sameSz": "1" if columns.get("equal", True) else "0",
+                                         "sameGap": str(columns.get("gap", 0))})
+        for child in list(column_properties):
+            column_properties.remove(child)
+        if not columns.get("equal", True):
+            widths = columns.get("widths", [])
+            gaps = columns.get("gaps", [])
+            for index, width in enumerate(widths):
+                etree.SubElement(column_properties, qname("hp", "colSz"), width=str(width), gap=str(gaps[index] if index < len(gaps) else columns.get("gap", 0)))
+        if columns.get("separator"):
+            etree.SubElement(column_properties, qname("hp", "colLine"), type="SOLID", width="0.12 mm", color="#000000")
         section.mark_modified()
     if settings.page_width is not None or settings.page_height is not None or settings.landscape is not None:
         width, height, landscape = settings.page_width, settings.page_height, settings.landscape

@@ -351,6 +351,14 @@ def _apply_hwpx_table_block(table, block: Table) -> None:
     if block.cell_spacing is not None:
         table.set_cell_spacing(block.cell_spacing)
     table.set_table_border_fill_id(block.table_border_fill_id)
+    if getattr(block, "_docx_new_table", False):
+        # New HWPX tables reference borderFill 1 before any definitions exist.
+        # If the first definition is a shaded header, transparent body cells
+        # inherit that shade from the whole table. Reserve a neutral base.
+        neutral = _ensure_hwpx_table_border_fill(table.document, None, {})
+        table.set_table_border_fill_id(neutral)
+        for cell in table.cells():
+            cell.set_border_fill_id(neutral)
     if block.page_break:
         table.set_page_break(block.page_break)
     if block.repeat_header is not None:

@@ -135,7 +135,7 @@ def test_docx_export_dispatches_converter_with_current_model_and_preserves_outpu
 
 def test_unsupported_equations_are_not_silently_discarded(tmp_path: Path) -> None:
     document = Document.blank()
-    document.append_equation("matrix {x & y}")
+    document.append_equation("color red {x}")
     destination = tmp_path / "equation.docx"
     destination.write_bytes(b"previous output")
     with pytest.raises(ValueError, match="equations require an external"):

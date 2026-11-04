@@ -144,6 +144,34 @@ See the [Word detail editing guide](docs/word-editing.md) and run
 `python examples/docx_editing.py` for an example with insertion, deletion, movement,
 story edits, and optional picture editing.
 
+Run `python examples/docx_advanced_editing.py` for a multi-page example covering
+merged-table row/column edits, cell borders, page and column setup,
+automatic lists, fields, and genuine footnotes. Add `--image path/to/image.png`
+to include a picture. Both examples write DOCX, HWPX, and restored DOCX files.
+Use `doc.append_paragraphs(texts)` to add many paragraphs with one model refresh.
+
+#### Interact through stable object IDs
+
+`WordEndpoint(doc)` exposes snapshots, document versions and atomic edits by UUID.
+Keep those UUIDs on the client. Use `apply(..., compact=True)` and
+`changes(version)` to receive only updated objects and deleted IDs;
+`get_objects(ids)` reads selected objects without returning the whole document.
+Literal hyperlink/field representation changes retain a uniquely matched logical link ID.
+Inserting a paragraph does not change the IDs of existing paragraphs. Stale writes
+raise `VersionConflict`; a failed batch rolls back all its edits. The optional HTTP
+adapter uses the Python standard library:
+
+```sh
+python examples/word_endpoint.py
+python examples/word_endpoint.py --serve --input input.docx --port 8765
+```
+
+The server prints its Bearer token. It provides `GET /document`, `GET /objects/{id}`,
+`POST /edits`, and `GET /export.docx` / `GET /export.hwpx`. The demo covers rich
+text ranges, bookmarks/links, style management, table split/join and native
+matrix/summation/integral equations. See the [endpoint guide](docs/word-endpoint.md)
+for request examples, ID persistence and external-editor limits.
+
 #### Convert between DOCX, HWPX, and HWP
 
 Run this after the editing example to convert DOCX to HWPX and back:

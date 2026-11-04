@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from typing import Any
 
 from .document import DocumentMetadata, HwpxDocument
 
@@ -659,6 +660,7 @@ class SectionSettings:
     line_number_shape: dict[str, str] = field(default_factory=dict)
     numbering_shape_id: str | None = None
     memo_shape_id: str | None = None
+    columns: dict[str, Any] = field(default_factory=dict)
 
     def set_page_size(
         self,

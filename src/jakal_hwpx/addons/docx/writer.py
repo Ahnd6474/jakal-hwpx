@@ -185,6 +185,29 @@ class _Writer:
                 target = _element(section._sectPr, kind + "Pr")
                 _element(target, "numFmt", val=name)
 
+        from .editing_format import replace, element
+        from .features import parse
+        for name, value in getattr(settings, "_word_extra", {}).items():
+            # Header/footer links belong to their actual generated parts.
+            if name not in {"type", "footnotePr", "endnotePr", "pgNumType", "titlePg"}:
+                continue
+            node = replace(section._sectPr, name, {} if value is not None else None)
+            if node is not None:
+                source = parse(value)
+                node.attrib.update(source.attrib)
+                node.extend(deepcopy(child) for child in source)
+        if settings.columns:
+            columns = settings.columns
+            count = int(columns.get("count", 1))
+            gap = int(columns.get("gap", 0))
+            widths = columns.get("widths", [])
+            gaps = columns.get("gaps", [])
+            equal = bool(columns.get("equal", True))
+            node = replace(section._sectPr, "cols", {"num": count, "space": round(gap / 5), "equalWidth": "1" if equal else "0", "sep": "1" if columns.get("separator") else "0"})
+            if not equal:
+                for index, width in enumerate(widths):
+                    element(node, "col", w=round(int(width) / 5), space=round(int(gaps[index] if index < len(gaps) else gap) / 5) if index < count - 1 else 0)
+
     def stories(self, section: Any, source: Any) -> None:
         # Every section gets its own stories, including empty stories. Otherwise
         # Word would silently inherit a previous section's header/footer.
@@ -220,6 +243,11 @@ class _Writer:
                         first._element.append(deepcopy(child))
 
     def paragraph_style(self, paragraph: Any, block: Paragraph) -> None:
+        from .identity import assign, PARA_ID
+        assign(paragraph._p, getattr(block, "_word_extra", {}).get("identity"))
+        paragraph_identity = getattr(block, "_word_extra", {}).get("paragraph_identity")
+        if paragraph_identity:
+            paragraph._p.set(PARA_ID, paragraph_identity)
         from docx.enum.text import WD_ALIGN_PARAGRAPH, WD_LINE_SPACING
         from .features import parse
 
@@ -276,6 +304,14 @@ class _Writer:
                                ("pageBreakBefore", "page_break_before"), ("widowOrphan", "widow_control")):
             if key in style.break_setting:
                 setattr(fmt, attribute, str(style.break_setting[key]).lower() in {"1", "true"})
+        from .editing_format import replace
+        switches = {"autoSpaceDE": style.auto_spacing.get("eAsianEng"), "autoSpaceDN": style.auto_spacing.get("eAsianNum"),
+                    "snapToGrid": style.snap_to_grid, "suppressLineNumbers": style.suppress_line_numbers}
+        if style.break_setting.get("breakLatinWord") in {"BREAK_WORD", "KEEP_WORD"}:
+            switches["wordWrap"] = "1" if style.break_setting["breakLatinWord"] == "BREAK_WORD" else "0"
+        for name, value in switches.items():
+            if value is not None:
+                replace(paragraph._p.get_or_add_pPr(), name, {"val": "1" if str(value).lower() in {"1", "true", "on"} else "0"})
         if attributes.get("pageBreak") == "1":
             fmt.page_break_before = True
         if attributes.get("columnBreak") == "1":
@@ -458,6 +494,7 @@ class _Writer:
                 }.get(block.semantic_field_type)
             if instruction:
                 field = _element(paragraph._p, "fldSimple", instr=instruction, dirty="false")
+                field.attrib.update(getattr(block, "_word_extra", {}).get("attributes", {}))
                 from docx.text.run import Run
 
                 rich = getattr(block, "_docx_hyperlink_runs", None)
@@ -473,6 +510,7 @@ class _Writer:
             if block.kind == "autoNum" and block.number_type in {"PAGE", "TOTAL_PAGE"}:
                 instruction = getattr(block, "_word_extra", {}).get("instruction", "PAGE" if block.number_type == "PAGE" else "NUMPAGES")
                 field = _element(paragraph._p, "fldSimple", instr=instruction, dirty="false")
+                field.attrib.update(getattr(block, "_word_extra", {}).get("attributes", {}))
                 from docx.text.run import Run
 
                 run = Run(_element(field, "r"), paragraph)
@@ -482,9 +520,19 @@ class _Writer:
                 paragraph.add_run(str(block.number))
                 self.warn("This automatic number has no equivalent Word field and retains its displayed number.")
         elif isinstance(block, Equation):
-            from .equations import hwp_to_omml
+            from .equations import hwp_to_omml, restore_properties
+            from .identity import assign
 
-            paragraph._p.append(hwp_to_omml(block.script))
+            extra = getattr(block, "_word_extra", {})
+            math = hwp_to_omml(block.script)
+            container = math
+            if extra.get("display"):
+                from docx.oxml import OxmlElement
+                container = OxmlElement("m:oMathPara")
+                container.append(math)
+            restore_properties(container, extra.get("math"))
+            paragraph._p.append(container)
+            assign(math, extra.get("identity"))
         elif isinstance(block, Note):
             self.note(paragraph, block)
         elif isinstance(block, Shape) and getattr(block, "_word_extra", {}).get("textbox"):

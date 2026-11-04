@@ -75,6 +75,12 @@ def carrier_model(document: Any) -> Any:
 
     for section in result.sections:
         section.blocks = prepare(section.blocks)
+        properties = getattr(section.settings, "_word_extra", None)
+        if properties:
+            first = section.blocks[0] if section.blocks else None
+            field = marker({"kind": "section", "properties": properties}, first)
+            setattr(field, "source_order", -1)
+            section.blocks.insert(0, field)
         for story in section.header_footer_blocks:
             if getattr(story, "nested_blocks", None):
                 story.nested_blocks = prepare(story.nested_blocks)
@@ -99,7 +105,7 @@ def carrier_model(document: Any) -> Any:
 def restore_carriers(document: Any) -> None:
     characters = {style.style_id: style for style in document.character_styles}
 
-    def restore(values):
+    def restore(values, settings=None):
         output = []
         pending = []
         for block in values:
@@ -115,6 +121,8 @@ def restore_carriers(document: Any) -> None:
                         setattr(characters[style_id], "_word_extra", record["properties"])
                 elif kind == "resources":
                     document._word_resources = record["properties"]
+                elif kind == "section" and settings is not None:
+                    setattr(settings, "_word_extra", record["properties"])
                 elif kind == "block":
                     if "empty_paragraph" in record:
                         paragraph = Paragraph("", **record["empty_paragraph"])
@@ -147,7 +155,7 @@ def restore_carriers(document: Any) -> None:
         return output
 
     for section in document.sections:
-        section.blocks = restore(section.blocks)
+        section.blocks = restore(section.blocks, section.settings)
         for story in section.header_footer_blocks:
             if getattr(story, "nested_blocks", None):
                 story.nested_blocks = restore(story.nested_blocks)
@@ -159,6 +167,7 @@ def restore_carriers(document: Any) -> None:
 
 def capture_controls(root: Any) -> dict[Any, list[dict[str, Any]]]:
     from docx.oxml.ns import qn
+    from .identity import ID
 
     result: dict[Any, list[dict[str, Any]]] = {}
     for index, node in enumerate(root.iter(qn("w:sdt"))):
@@ -170,7 +179,7 @@ def capture_controls(root: Any) -> dict[Any, list[dict[str, Any]]]:
             parent = parent.getparent()
         level = "inline" if parent.tag == qn("w:p") else "row" if parent.tag == qn("w:tbl") else "cell" if parent.tag == qn("w:tr") else "block"
         info = {"id": str(index), "level": level, "properties": xml(node.find(qn("w:sdtPr"))),
-                "end": xml(node.find(qn("w:sdtEndPr")))}
+                "end": xml(node.find(qn("w:sdtEndPr"))), "identity": node.get(ID)}
         for element in content.iter():
             if level in {"row", "cell"}:
                 if element.tag != qn("w:tr" if level == "row" else "w:tc") or element.getparent() is not content:
@@ -205,6 +214,8 @@ def wrap_controls(node: Any, controls: list[dict[str, Any]], *, level: str) -> N
             wrapper = previous
         else:
             wrapper = OxmlElement("w:sdt")
+            from .identity import assign
+            assign(wrapper, control.get("identity"))
             wrapper.set("data-jakal-control", control["id"])
             for key in ("properties", "end"):
                 if control.get(key):

@@ -69,17 +69,31 @@ class WordDocument(Document):
         """Synchronize native backend edits and pending common model text edits."""
         self._reload_word_bytes(self._source.to_bytes(self))
 
+    def endpoint(self):
+        """Enable persistent object IDs and create a versioned editing service."""
+        from .endpoint import WordEndpoint
+        return WordEndpoint(self)
+
+    def update_fields(self, **options):
+        """Explicitly refresh supported field results and report layout needs."""
+        with self.edit_word_details() as editor:
+            return editor.update_fields(**options)
+
     @contextmanager
     def edit_word(self):
         """Edit any python-docx detail and refresh the shared model on success."""
         if getattr(self, "_word_edit_active", False):
             raise RuntimeError("Nested Word edit transactions are not supported; use the active editor.")
-        self.refresh_from_word()
+        pending = self._source.to_bytes(self)
+        if pending != self._source.raw:
+            self._reload_word_bytes(pending)
         original = self._source.raw
         self._word_edit_active = True
         try:
             yield self.word_document
-            self.refresh_from_word()
+            updated = self._source.to_bytes(self)
+            if updated != original:
+                self._reload_word_bytes(updated)
         except Exception:
             self._reload_word_bytes(original)
             raise
@@ -105,6 +119,18 @@ class WordDocument(Document):
         with self.edit_word_details() as editor:
             editor.section(section_index).append_paragraph(text)
         return next(block for block in reversed(self.sections[section_index].blocks) if isinstance(block, Paragraph))
+
+    def append_paragraphs(self, texts, *, section_index: int = 0) -> list[Paragraph]:
+        """Append many paragraphs with one native transaction/model refresh."""
+        texts = list(texts)
+        if not texts:
+            return []
+        with self.edit_word_details() as editor:
+            section = editor.section(section_index)
+            for text in texts:
+                section.append_paragraph(text)
+        paragraphs = [block for block in self.sections[section_index].blocks if isinstance(block, Paragraph)]
+        return paragraphs[-len(texts):]
 
     def append_section(self):
         with self.edit_word() as word:

@@ -8,9 +8,13 @@ from __future__ import annotations
 from copy import deepcopy
 from io import BytesIO
 import math
-from typing import Any, Sequence, Self
+from typing import Any, Sequence, Self, TYPE_CHECKING
 
 from lxml import etree
+
+if TYPE_CHECKING:
+    from .editing_stories import WordSection, WordNote
+    from .editing_fields import WordField, WordList
 
 W = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
 WP = "http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing"
@@ -42,16 +46,19 @@ def _color(value):
 
 
 def _font(target, values):
+    from .editing_format import FONT_PROPERTIES, font_extras
     from docx.enum.text import WD_UNDERLINE
     from docx.oxml.ns import qn
     from docx.shared import RGBColor
 
-    allowed = {"bold", "italic", "underline", "strike", "superscript", "subscript", "font_name", "font_size_pt", "color"}
+    font_extras(None, values)
+    extras = {key: value for key, value in values.items() if key in FONT_PROPERTIES}
+    allowed = {"bold", "italic", "underline", "strike", "superscript", "subscript", "font_name", "font_size_pt", "color"} | FONT_PROPERTIES
     if values.keys() - allowed:
         raise ValueError("Unknown character properties: " + ", ".join(sorted(values.keys() - allowed)))
     if values.get("superscript") and values.get("subscript"):
         raise ValueError("Superscript and subscript cannot both be enabled.")
-    converted = dict(values)
+    converted = {key: value for key, value in values.items() if key not in FONT_PROPERTIES}
     if "font_size_pt" in values and values["font_size_pt"] is not None:
         size = float(values["font_size_pt"])
         converted["font_size_pt"] = _points(size, positive=True)
@@ -86,14 +93,17 @@ def _font(target, values):
                     fonts.set(qn("w:" + name), value)
         else:
             setattr(font, key, value)
+    font_extras(target, extras)
 
 
 def _paragraph_format(target, values):
+    from .editing_format import PARAGRAPH_PROPERTIES, paragraph_extras
     from docx.enum.text import WD_ALIGN_PARAGRAPH
 
     names = {"left_indent_pt": "left_indent", "right_indent_pt": "right_indent",
              "first_line_indent_pt": "first_line_indent", "space_before_pt": "space_before", "space_after_pt": "space_after"}
-    allowed = {*names, "alignment", "line_spacing", "keep_with_next", "keep_together", "page_break_before", "widow_control"}
+    paragraph_extras(None, values)
+    allowed = {*names, "alignment", "line_spacing", "keep_with_next", "keep_together", "page_break_before", "widow_control"} | PARAGRAPH_PROPERTIES
     if values.keys() - allowed:
         raise ValueError("Unknown paragraph properties: " + ", ".join(sorted(values.keys() - allowed)))
     converted = {}
@@ -101,6 +111,8 @@ def _paragraph_format(target, values):
                   "right": WD_ALIGN_PARAGRAPH.RIGHT, "justify": WD_ALIGN_PARAGRAPH.JUSTIFY,
                   "distribute": WD_ALIGN_PARAGRAPH.DISTRIBUTE}
     for name, value in values.items():
+        if name in PARAGRAPH_PROPERTIES:
+            continue
         if name in names:
             from docx.shared import Pt
             # Negative indents are legal; spacing must remain non-negative.
@@ -123,16 +135,23 @@ def _paragraph_format(target, values):
     if target is not None:
         for name, value in converted.items():
             setattr(target.paragraph_format, name, value)
+        paragraph_extras(target, {key: value for key, value in values.items() if key in PARAGRAPH_PROPERTIES})
 
 
 def _blocks(root):
     for node in root:
         if node.tag in {_tag("p"), _tag("tbl")}:
-            if node.tag == _tag("p") and node.find("./" + _tag("pPr") + "/" + _tag("sectPr")) is not None and all(child.tag == _tag("pPr") for child in node):
+            if node.tag == _tag("p") and node.find("./" + _tag("pPr") + "/" + _tag("sectPr")) is not None and _only_properties(node):
                 continue
             yield node
         elif node.tag in {_tag("sdt"), _tag("sdtContent"), _tag("customXml"), _tag("ins"), _tag("moveTo")}:
             yield from _blocks(node)
+
+
+def _only_properties(node):
+    from .identity import private_ids
+    private = private_ids(node)
+    return all(child.tag == _tag("pPr") or child.tag in {_tag("bookmarkStart"), _tag("bookmarkEnd")} and child.get(_tag("id")) in private for child in node)
 
 
 def _balanced(node):
@@ -158,6 +177,7 @@ class WordEditor:
         self._backend = backend
         self._active = True
         self._textbox_pairs = []
+        self._note_upgrades = []
         self._bindings = [(node, part.element, self._binding_text(node)) for part in backend.part.package.parts
                           if getattr(part, "element", None) is not None for node in part.element.iter(_tag("sdt"))
                           if node.find("./" + _tag("sdtPr") + "/" + _tag("dataBinding")) is not None]
@@ -191,15 +211,74 @@ class WordEditor:
             from .features import synchronize_bindings
 
             synchronize_bindings(self._backend, controls=changed)
+        for original, upgraded, before in self._note_upgrades:
+            if etree.tostring(upgraded.element) == before:
+                for part in list(self._backend.part.package.parts):
+                    for relation in part.rels.values():
+                        if not relation.is_external and relation.target_part is upgraded:
+                            relation._target = original
+        from .identity import NS as identity_namespace, stamp
+        if any(getattr(part, "element", None) is not None and part.element.get("{" + identity_namespace + "}schema")
+               for part in self._backend.part.package.parts):
+            stamp(self._backend)
 
     @property
     def body(self) -> WordContainer:
         self._check()
         return WordContainer(self, self._backend.element.body, self._backend)
 
-    def section(self, index: int = 0) -> WordContainer:
+    def section(self, index: int = 0) -> WordSection:
+        from .editing_stories import WordSection
         self._check()
-        return WordContainer(self, self._backend.element.body, self._backend, section=self._backend.sections[index]._sectPr)
+        return WordSection(self, self._backend.element.body, self._backend, section=self._backend.sections[index]._sectPr)
+
+    def insert_section(self, index: int, *, break_type: str = "next_page") -> WordSection:
+        from .editing_stories import insert_section
+        return insert_section(self, index, break_type)
+
+    def create_list(self, levels: Sequence[dict[str, Any]] | None = None) -> WordList:
+        from .editing_fields import create_list
+        self._check()
+        return create_list(self, levels)
+
+    def update_fields(self, **options):
+        from .field_updates import update_fields
+        return update_fields(self, **options)
+
+    def create_style(self, name, **properties):
+        from .editing_styles import create_style
+        return create_style(self, name, **properties)
+
+    def configure_style(self, name, **properties):
+        from .editing_styles import configure_style
+        return configure_style(self, name, **properties)
+
+    def delete_style(self, name, *, replacement):
+        from .editing_styles import delete_style
+        return delete_style(self, name, replacement=replacement)
+
+    def format_theme(self, **properties):
+        from .editing_styles import format_theme
+        return format_theme(self, **properties)
+
+    @property
+    def bookmarks(self):
+        from .editing_navigation import bookmarks
+        self._check()
+        return bookmarks(self)
+
+    def object(self, object_id):
+        from .endpoint import resolve_object
+        self._check()
+        return resolve_object(self, object_id)
+
+    def footnote(self, index: int = 0) -> WordNote:
+        from .editing_stories import note_at
+        return note_at(self, "footnote", index)
+
+    def endnote(self, index: int = 0) -> WordNote:
+        from .editing_stories import note_at
+        return note_at(self, "endnote", index)
 
     def header(self, section_index: int = 0, *, variant: str = "default", unlink: bool = False) -> WordContainer:
         return self._story("header", section_index, variant, unlink)
@@ -215,7 +294,24 @@ class WordEditor:
         story = getattr(section, {"default": "", "first": "first_page_", "even": "even_page_"}[variant] + kind)
         if index and story.is_linked_to_previous and not unlink:
             raise ValueError("This story is inherited; pass unlink=True to edit this section independently.")
-        if unlink:
+        if unlink and index and story.is_linked_to_previous:
+            source = story.part
+            children = [deepcopy(child) for child in source.element]
+            story.is_linked_to_previous = False
+            target = story.part
+            relationships = {identity: target.relate_to(rel.target_ref if rel.is_external else rel.target_part, rel.reltype, is_external=rel.is_external)
+                             for identity, rel in source.rels.items()}
+            for child in list(target.element):
+                target.element.remove(child)
+            for child in children:
+                for node in child.iter():
+                    for key, value in list(node.attrib.items()):
+                        if key.startswith("{http://schemas.openxmlformats.org/officeDocument/2006/relationships}") and value in relationships:
+                            node.set(key, relationships[value])
+                target.element.append(child)
+            self._bindings.extend((node, target.element, self._binding_text(node)) for node in target.element.iter(_tag("sdt"))
+                                  if node.find("./" + _tag("sdtPr") + "/" + _tag("dataBinding")) is not None)
+        elif unlink:
             story.is_linked_to_previous = False
         if variant == "first":
             section.different_first_page_header_footer = True
@@ -244,6 +340,47 @@ class WordContainer:
     @property
     def part(self):
         return self._parent.part
+
+    @property
+    def object_id(self):
+        from .identity import identify
+        self._check()
+        return identify(self._root)
+
+    def range(self, start_paragraph, start_offset, end_paragraph, end_offset):
+        from .editing_ranges import WordRange
+        return WordRange(self.paragraph(start_paragraph), start_offset, self.paragraph(end_paragraph), end_offset)
+
+    def find_text(self, text, *, regex=False, case_sensitive=True):
+        from .editing_ranges import find_text
+        return find_text(self, text, regex=regex, case_sensitive=case_sensitive)
+
+    def replace_all(self, old, new, *, case_sensitive=True):
+        matches = self.find_text(old, case_sensitive=case_sensitive)
+        for match in reversed(matches):
+            match.replace(new)
+        return len(matches)
+
+    @property
+    def content_controls(self):
+        from .editing_content import controls
+        return controls(self)
+
+    def wrap_control(self, start, end=None, **properties):
+        from .editing_content import wrap_control
+        return wrap_control(self, start, end, **properties)
+
+    def insert_control(self, index, **properties):
+        from .editing_content import insert_control
+        return insert_control(self, index, **properties)
+
+    @property
+    def hyperlinks(self):
+        from .editing_navigation import WordLink, WordLinkField, link_instruction
+        self._check()
+        links = [WordLink(self, node) for root in self._nodes() for node in root.iter(_tag("hyperlink"))]
+        links.extend(WordLinkField(field) for field in self.fields if link_instruction(field.instruction) is not None)
+        return links
 
     def _check(self):
         self._editor._check()
@@ -279,6 +416,12 @@ class WordContainer:
     def pictures(self) -> list[WordPicture]:
         return [picture for block in self.blocks if isinstance(block, WordParagraph) for picture in block.pictures]
 
+    @property
+    def fields(self) -> list[WordField]:
+        from .editing_fields import find_fields
+        self._check()
+        return find_fields(self)
+
     def textbox(self, index: int = 0) -> WordContainer:
         from .textboxes import find
         from docx.blkcntnr import BlockItemContainer
@@ -306,7 +449,7 @@ class WordContainer:
             self._reference(nodes, index).addprevious(node)
         elif self._section is not None and self._section.getparent() is not self._root:
             end = self._section.getparent().getparent()
-            if any(child.tag != _tag("pPr") for child in end):
+            if not _only_properties(end):
                 self._section.getparent().remove(self._section)
                 end.addnext(node)
                 if node.tag == _tag("p"):
@@ -369,14 +512,14 @@ class WordContainer:
         return WordTable(self, native._tbl)
 
     def _ensure_tail(self):
-        if self._root.tag in {_tag("tc"), _tag("hdr"), _tag("ftr"), _tag("txbxContent")} and (not len(self._root) or self._root[-1].tag != _tag("p")):
+        if self._root.tag in {_tag("tc"), _tag("hdr"), _tag("ftr"), _tag("txbxContent"), _tag("footnote"), _tag("endnote")} and (not len(self._root) or self._root[-1].tag != _tag("p")):
             from docx.oxml import OxmlElement
             self._root.append(OxmlElement("w:p"))
 
 
 def _blocks_holder(node):
     if node.tag in {_tag("p"), _tag("tbl")}:
-        if not (node.tag == _tag("p") and node.find("./" + _tag("pPr") + "/" + _tag("sectPr")) is not None and all(child.tag == _tag("pPr") for child in node)):
+        if not (node.tag == _tag("p") and node.find("./" + _tag("pPr") + "/" + _tag("sectPr")) is not None and _only_properties(node)):
             yield node
     else:
         yield from _blocks(node)
@@ -385,6 +528,12 @@ def _blocks_holder(node):
 class _Block:
     def __init__(self, owner, node):
         self._owner, self._node = owner, node
+
+    @property
+    def object_id(self):
+        from .identity import identify
+        self._check()
+        return identify(self._node)
 
     def _check(self):
         self._owner._check()
@@ -404,8 +553,8 @@ class _Block:
         if self._node.getparent() is not self._owner._root:
             raise ValueError("Wrapped blocks require text editing or explicit raw XML structural editing.")
         target = destination or self._owner
-        if target._editor is not self._owner._editor or target.part is not self._owner.part:
-            raise ValueError("Moves must stay within the same document part; cross-part relationships need remapping.")
+        if target._editor is not self._owner._editor:
+            raise ValueError("Moves must use the same active editor.")
         nodes = [node for node in target._nodes() if node is not self._node]
         if not 0 <= index <= len(nodes):
             raise IndexError("Block move index is out of range.")
@@ -414,6 +563,26 @@ class _Block:
         if target._root is self._node or self._node in target._root.iterancestors():
             raise ValueError("An object cannot be moved inside itself.")
         _balanced(self._node)
+        if target.part is not self._owner.part:
+            from .editing_navigation import remap_relationships, R
+            references = {_tag(name) for name in ("footnoteReference", "endnoteReference", "footnoteRef", "endnoteRef")}
+            if any(node.tag in references for node in self._node.iter()):
+                raise ValueError("Note references cannot move to a different document part.")
+            if any(value not in self._owner.part.rels for node in self._node.iter() for key, value in node.attrib.items() if key.startswith("{" + R + "}")):
+                raise ValueError("Moved content contains an unresolved relationship.")
+            remap_relationships(self._node, self._owner.part, target.part)
+            highest = max([0] + [int(node.get(_tag("id"), "0")) for node in target.part.element.iter(_tag("bookmarkStart"))])
+            bookmark_ids = {}
+            for node in self._node.iter(_tag("bookmarkStart")):
+                highest += 1
+                bookmark_ids[node.get(_tag("id"))] = str(highest)
+            for node in self._node.iter():
+                if node.tag in {_tag("bookmarkStart"), _tag("bookmarkEnd")} and node.get(_tag("id")) in bookmark_ids:
+                    node.set(_tag("id"), bookmark_ids[node.get(_tag("id"))])
+            # Numbering/styles are package-wide; relationship IDs are part-local.
+            for node in self._node.iter(_tag("sdt")):
+                if node.find("./" + _tag("sdtPr") + "/" + _tag("dataBinding")) is not None:
+                    self._owner._editor._bindings.append((node, target.part.element, self._owner._editor._binding_text(node)))
         self._node.getparent().remove(self._node)
         target._insert(index, self._node)
         self._owner._ensure_tail()
@@ -422,6 +591,63 @@ class _Block:
 
 
 class WordParagraph(_Block):
+    def range(self, start=0, end=None):
+        from .editing_ranges import WordRange
+        return WordRange(self, start, self, len(self.text) if end is None else end)
+
+    def insert_hyperlink(self, offset, target, text):
+        from .editing_ranges import _split, _set_content
+        from .editing_navigation import hyperlink
+        from docx.text.run import Run
+        from docx.oxml import OxmlElement
+        before, after = _split(self, offset)
+        run = OxmlElement("w:r")
+        Run(run, self._native).text = text
+        link = hyperlink(self._owner, target, [run])
+        _set_content(self, before + [link._node] + after)
+        return link
+
+    @property
+    def equations(self):
+        from .editing_math import WordEquation
+        self._check()
+        return [WordEquation(self._owner, node) for node in self._node.iter("{http://schemas.openxmlformats.org/officeDocument/2006/math}oMath")]
+
+    def add_equation(self, script):
+        from .editing_math import WordEquation
+        from .equations import hwp_to_omml
+        node = hwp_to_omml(script)
+        self._native._p.append(node)
+        return WordEquation(self._owner, node)
+    @property
+    def fields(self) -> list[WordField]:
+        from .editing_fields import find_fields
+        self._check()
+        return find_fields(self._owner, self._node)
+
+    def add_field(self, instruction: str, result: str = "", *, locked: bool = False, complex_field: bool = False) -> WordField:
+        from .editing_fields import add_field
+        return add_field(self, instruction, result, locked, complex_field)
+
+    def set_list(self, listing: WordList, *, level: int = 0, start: int | None = None) -> WordParagraph:
+        from .editing_fields import set_list
+        set_list(self, listing, level, start)
+        return self
+
+    @property
+    def listing(self) -> WordList | None:
+        from .editing_fields import paragraph_list
+        return paragraph_list(self)
+
+    def remove_list(self) -> WordParagraph:
+        from .editing_fields import set_list
+        set_list(self, None, 0, None)
+        return self
+
+    def add_note(self, text: str = "", *, kind: str = "footnote") -> WordNote:
+        from .editing_stories import add_note
+        return add_note(self, text, kind)
+
     @property
     def _native(self):
         from docx.text.paragraph import Paragraph
@@ -588,7 +814,7 @@ class WordTable(_Block):
                 pr.append(OxmlElement("w:tblHeader"))
         return self
 
-    def format_cell(self, row: int, col: int, *, fill_color: str | None = None, vertical_alignment: str | None = None, padding_pt: dict[str, float] | None = None) -> WordTable:
+    def format_cell(self, row: int, col: int, *, fill_color: str | None = None, vertical_alignment: str | None = None, padding_pt: dict[str, float] | None = None, borders: dict | None = None) -> WordTable:
         from docx.enum.table import WD_CELL_VERTICAL_ALIGNMENT
         from docx.oxml import OxmlElement
         colors = _color(fill_color) if fill_color is not None else None
@@ -601,6 +827,20 @@ class WordTable(_Block):
             raise ValueError("Padding keys must be left, right, top, or bottom.")
         margins = {key: round(_points(value) / 635) for key, value in padding.items()}
         cell = self._cell(row, col)
+        if borders is not None:
+            from .editing_format import cell_borders
+            from docx.table import _Cell
+            cell_borders(cell, borders)
+            # A visible merged cell is represented by multiple physical cells.
+            # Word reads side/bottom borders from the continuation rows too.
+            if cell._tc.vMerge == "restart":
+                following = cell._tc._tr_below
+                while following is not None:
+                    continued = next((tc for tc in following.tc_lst if tc.grid_offset == cell._tc.grid_offset), None)
+                    if continued is None or continued.vMerge != "continue" or continued.grid_span != cell._tc.grid_span:
+                        break
+                    cell_borders(_Cell(continued, self._native), borders)
+                    following = continued._tr_below
         pr = cell._tc.get_or_add_tcPr()
         if colors is not None:
             for node in list(pr.findall(_tag("shd"))):
@@ -623,35 +863,54 @@ class WordTable(_Block):
                 node.append(edge)
         return self
 
-    def format_row(self, index: int, *, height_pt: float | None = None, exact: bool = False) -> WordTable:
+    def format_row(self, index: int, *, height_pt: float | None = None, exact: bool = False, allow_split: bool | None = None) -> WordTable:
         from docx.enum.table import WD_ROW_HEIGHT_RULE
         height = _points(height_pt, positive=True) if height_pt is not None else None
         row = self._native.rows[index]
         row.height = height
         row.height_rule = WD_ROW_HEIGHT_RULE.EXACTLY if height is not None and exact else WD_ROW_HEIGHT_RULE.AT_LEAST if height is not None else None
+        if allow_split is not None:
+            from .editing_format import replace
+            replace(row._tr.get_or_add_trPr(), "cantSplit", {"val": "0" if allow_split else "1"})
+        return self
+
+    def format_layout(self, **properties) -> WordTable:
+        from .editing_table_layout import format_layout
+        format_layout(self, **properties)
+        return self
+
+    def split(self, row_index):
+        from .editing_table_layout import split_table
+        return split_table(self, row_index)
+
+    def join(self, following, *, adopt_style=False):
+        from .editing_table_layout import join_tables
+        join_tables(self, following, adopt_style=adopt_style)
         return self
 
     def add_row(self, values: Sequence[object] | None = None, *, index: int | None = None) -> WordTable:
-        table = self._native
-        if self._node.xpath(".//w:vMerge | .//w:gridSpan[@w:val!='1']"):
-            raise ValueError("Row insertion in merged tables requires explicit geometry editing.")
-        index = len(table.rows) if index is None else index
-        if not 0 <= index <= len(table.rows) or (values is not None and len(values) > len(table.columns)):
-            raise ValueError("Row index or values do not fit the table.")
-        row = table.add_row()
-        for cell, value in zip(row.cells, values or []):
-            cell.text = str(value)
-        if index < len(table.rows) - 1:
-            table.rows[index]._tr.addprevious(row._tr)
+        from .editing_tables import insert_axis
+        insert_axis(self, "row", index, values)
         return self
 
     def delete_row(self, index: int) -> WordTable:
-        table = self._native
-        if len(table.rows) == 1 or self._node.xpath(".//w:vMerge | .//w:gridSpan[@w:val!='1']"):
-            raise ValueError("Deleting the last row or rows in merged tables requires explicit geometry editing.")
-        row = table.rows[index]._tr
-        _balanced(row)
-        row.getparent().remove(row)
+        from .editing_tables import delete_axis
+        delete_axis(self, "row", index)
+        return self
+
+    def add_column(self, values: Sequence[object] | None = None, *, index: int | None = None, width_pt: float = 72) -> WordTable:
+        from .editing_tables import insert_axis
+        insert_axis(self, "column", index, values, width_pt)
+        return self
+
+    def delete_column(self, index: int) -> WordTable:
+        from .editing_tables import delete_axis
+        delete_axis(self, "column", index)
+        return self
+
+    def split_cell(self, row: int, col: int) -> WordTable:
+        from .editing_tables import split_cell
+        split_cell(self, row, col)
         return self
 
     def merge(self, top: int, left: int, bottom: int, right: int) -> WordTable:

@@ -191,6 +191,8 @@ def _border_styles(node: Any) -> dict[str, dict[str, str | int]]:
 
 
 def _section_settings(section: Any) -> SectionSettings:
+    from docx.oxml.ns import qn
+    from .features import xml
     settings = SectionSettings(
         page_width=_units(section.page_width) if section.page_width is not None else None,
         page_height=_units(section.page_height) if section.page_height is not None else None,
@@ -215,6 +217,17 @@ def _section_settings(section: Any) -> SectionSettings:
             outer = min(_units(total), _units(distance))
             settings.margins[edge] = outer
             settings.margins[story] = _units(total) - outer
+    cols = section._sectPr.find(qn("w:cols"))
+    if cols is not None:
+        explicit = cols.findall(qn("w:col"))
+        settings.columns = {"count": len(explicit) or int(cols.get(qn("w:num"), "1")),
+                            "gap": int(cols.get(qn("w:space"), "0")) * 5,
+                            "equal": cols.get(qn("w:equalWidth"), "1") not in {"0", "false", "off"},
+                            "separator": cols.get(qn("w:sep"), "0") in {"1", "true", "on"},
+                            "widths": [int(node.get(qn("w:w"), "0")) * 5 for node in explicit],
+                            "gaps": [int(node.get(qn("w:space"), cols.get(qn("w:space"), "0"))) * 5 for node in explicit]}
+    # Only non-body section properties travel through the reversible carrier.
+    setattr(settings, "_word_extra", {name: xml(section._sectPr.find(qn("w:" + name))) for name in ("type", "footnotePr", "endnotePr", "pgNumType", "titlePg")})
     return settings
 
 
@@ -344,6 +357,9 @@ class _DocxReader:
             tag = etree.QName(node)
             if tag.namespace == word_ns and tag.localname == "bookmarkStart":
                 name = node.get("{" + word_ns + "}name", "")
+                from .identity import internal_name
+                if internal_name(name):
+                    continue
                 if name and name != "_GoBack":
                     append(Bookmark(name))
                 continue
@@ -362,6 +378,11 @@ class _DocxReader:
                     self.warn(unsupported)
                 if script or unsupported:
                     equation = Equation(script=script)
+                    from .identity import ID
+                    from .equations import capture_properties
+                    inner = node.find("{" + math_ns + "}oMath") if tag.localname == "oMathPara" else node
+                    setattr(equation, "_word_extra", {"identity": inner.get(ID) if inner is not None else None,
+                                                     "math": capture_properties(node), "display": tag.localname == "oMathPara"})
                     if unsupported:
                         setattr(equation, "_unsupported_word_math", unsupported)
                     append(equation)
@@ -457,7 +478,9 @@ class _DocxReader:
             if isinstance(block, Paragraph):
                 from .features import xml
 
-                setattr(block, "_word_extra", {**getattr(block, "_word_extra", {}), "pPr": xml(source._p.pPr)})
+                from .identity import ID, PARA_ID
+                setattr(block, "_word_extra", {**getattr(block, "_word_extra", {}), "pPr": xml(source._p.pPr),
+                                              "identity": source._p.get(ID), "paragraph_identity": source._p.get(PARA_ID)})
                 character = next((style for style in self.target.character_styles if style.style_id == block.char_pr_id), None)
                 if character is not None and getattr(character, "_word_extra", None):
                     getattr(block, "_word_extra")["character"] = deepcopy(getattr(character, "_word_extra"))
@@ -492,7 +515,7 @@ class _DocxReader:
         if command in {"PAGE", "NUMPAGES"}:
             result_number = AutoNumber(kind="autoNum", number=int(cached.strip()) if cached.strip().isdigit() else 1,
                                        number_type="PAGE" if command == "PAGE" else "TOTAL_PAGE")
-            setattr(result_number, "_word_extra", {"instruction": instruction})
+            setattr(result_number, "_word_extra", {"instruction": instruction, "attributes": {key: value for key, value in node.attrib.items() if key != qn("w:instr")}})
             format_match = re.search(r"\\\*\s+(ROMAN|roman|ALPHABETIC|alphabetic|Arabic)", instruction)
             if format_match:
                 setattr(result_number, "_docx_number_format", {"ROMAN": "ROMAN_CAPITAL", "roman": "ROMAN_SMALL",
@@ -504,6 +527,7 @@ class _DocxReader:
         kind = {"MERGEFIELD": "MAILMERGE", "REF": "CROSSREF", "PAGEREF": "CROSSREF",
                 "DOCPROPERTY": "DOCPROPERTY", "DATE": "DATE", "TIME": "DATE", "=": "FORMULA"}.get(command, "JAKAL_WORD_FIELD")
         result = Field(kind, cached, parameters={"WordInstruction": instruction})
+        setattr(result, "_word_extra", {"attributes": {key: value for key, value in node.attrib.items() if key != qn("w:instr")}})
         styled = [Paragraph(Run(child, source).text, char_pr_id=self.character_style(source, Run(child, source)))
                   for child in node if child.tag == qn("w:r")]
         setattr(result, "_docx_hyperlink_runs", (cached, styled))
@@ -709,6 +733,8 @@ class _DocxReader:
         return None
 
     def paragraph_style(self, source: Any, *, include_direct: bool = True) -> str:
+        from docx.enum.text import WD_TAB_ALIGNMENT
+        from docx.oxml.ns import qn
         formats = [style.paragraph_format for style in _style_chain(source.style)]
         if include_direct:
             formats.insert(0, source.paragraph_format)
@@ -731,6 +757,29 @@ class _DocxReader:
         if alignment is not None and alignment_name is None:
             self.warn("DOCX import does not preserve this paragraph alignment; using the default.")
         style = ParagraphStyle(alignment_horizontal=alignment_name)
+        # These affect mixed Korean/Latin wrapping even when font and margins
+        # agree. Resolve inheritance rather than retaining them only as metadata.
+        def explicit_switch(name):
+            for fmt in formats:
+                root = fmt._element
+                node = root.find("./" + qn("w:pPr") + "/" + qn("w:" + name))
+                if node is None:
+                    node = root.find(qn("w:" + name))
+                if node is not None:
+                    return node.get(qn("w:val"), "1").lower() not in {"0", "false", "off"}
+            return None
+
+        for native, key in (("autoSpaceDE", "eAsianEng"), ("autoSpaceDN", "eAsianNum")):
+            value = explicit_switch(native)
+            if value is not None:
+                style.auto_spacing[key] = "1" if value else "0"
+        for native, key in (("snapToGrid", "snap_to_grid"), ("suppressLineNumbers", "suppress_line_numbers")):
+            value = explicit_switch(native)
+            if value is not None:
+                setattr(style, key, "1" if value else "0")
+        wrapping = explicit_switch("wordWrap")
+        if wrapping is not None:
+            style.break_setting["breakLatinWord"] = "BREAK_WORD" if wrapping else "KEEP_WORD"
         for attribute, key in (
             ("left_indent", "left"), ("right_indent", "right"), ("first_line_indent", "intent"),
             ("space_before", "prev"), ("space_after", "next"),
@@ -750,9 +799,23 @@ class _DocxReader:
             ("page_break_before", "pageBreakBefore"), ("widow_control", "widowOrphan"),
         ):
             value = effective(attribute)
+            if value is None and attribute == "widow_control":
+                # Word defaults to widow/orphan protection; HWPX defaults to
+                # off. Leaving this unspecified splits paragraphs at a column
+                # or page boundary after a seemingly faithful roundtrip.
+                value = True
             if value is not None:
                 style.break_setting[key] = "1" if value else "0"
-        tabs: Any = next((fmt.tab_stops for fmt in formats if len(fmt.tab_stops)), [])
+        # Tab positions inherit independently. A direct clear at one position
+        # must not erase other inherited tabs or become a native left tab.
+        inherited_tabs: dict[int, Any] = {}
+        for fmt in reversed(formats):
+            for tab in fmt.tab_stops:
+                if tab.alignment == WD_TAB_ALIGNMENT.CLEAR:
+                    inherited_tabs.pop(int(tab.position), None)
+                else:
+                    inherited_tabs[int(tab.position)] = tab
+        tabs = [inherited_tabs[position] for position in sorted(inherited_tabs)]
         tab_stops = [{"pos": _units(tab.position), "type": {0: "LEFT", 1: "CENTER", 2: "RIGHT", 3: "DECIMAL", 4: "BAR"}.get(tab.alignment, "LEFT"),
                       "leader": {0: "NONE", 1: "DOT", 2: "DASH", 3: "SOLID", 4: "DOUBLE_SLIM"}.get(tab.leader, "NONE")} for tab in tabs]
         setattr(style, "_docx_tab_stops", tab_stops)
@@ -956,7 +1019,7 @@ class _DocxReader:
                 active = variant == "default" or (
                     settings.odd_and_even_pages_header_footer if variant == "even" else source.different_first_page_header_footer
                 )
-                if not active or (not text and not story.tables and not story._element.xpath(".//w:drawing")):
+                if not active or (not text and not story.tables and not story._element.xpath(".//w:drawing | .//w:pict | .//w:fldSimple | .//w:fldChar | .//m:oMath")):
                     continue
                 page_type = "FIRST" if variant == "first" else "EVEN" if variant == "even" else ("ODD" if settings.odd_and_even_pages_header_footer else "BOTH")
                 header = HeaderFooter(kind, text, apply_page_type=page_type)

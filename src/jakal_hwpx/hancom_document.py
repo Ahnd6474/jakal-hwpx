@@ -1074,6 +1074,8 @@ class Document:
     def to_hwp_document(self, *, converter: HancomConverter | None = None, preserve_formatting: bool | None = None) -> HwpDocument:
         if preserve_formatting:
             raise ValueError("Formatting-preserving conversion requires a WordDocument.")
+        if any(int(section.settings.columns.get("count", 1)) > 1 for section in self.sections):
+            raise ValueError("Pure Python HWP output does not support multi-column sections; save HWPX or use an explicit Word converter.")
         effective_converter = converter or self._converter
         document = HwpDocument.blank(converter=effective_converter)
         document.ensure_section_count(max(len(self.sections), 1))

@@ -115,6 +115,17 @@ def read_table(reader: Any, source: Any) -> Table:
         ),
     )
     setattr(result, "_docx_cell_content", rich_cells)
+    setattr(result, "_docx_new_table", True)
+    position = source._tbl.tblPr.find(qn("w:tblpPr"))
+    if position is not None:
+        result.layout.update(treatAsChar="0", flowWithText="1", allowOverlap="0", textWrap="SQUARE", textFlow="BOTH_SIDES")
+        for key, anchor in (("horz", "horzAnchor"), ("vert", "vertAnchor")):
+            result.layout[key + "RelTo"] = {"page": "PAPER", "margin": "PAGE", "text": "PARA"}.get(position.get(qn("w:" + anchor), "text"), "PARA")
+            result.layout[key + "Offset"] = str(int(position.get(qn("w:tblp" + ("X" if key == "horz" else "Y")), "0")) * 5)
+            result.layout[key + "Align"] = "LEFT" if key == "horz" else "TOP"
+        result.out_margins = {edge: int(position.get(qn("w:" + edge + "FromText"), "0")) * 5 for edge in ("left", "right", "top", "bottom")}
+    if all(row._tr.xpath("./w:trPr/w:cantSplit[not(@w:val='0' or @w:val='false')]") for row in source.rows):
+        result.page_break = "CELL"
     setattr(
         result,
         "_word_extra",
@@ -126,6 +137,9 @@ def read_table(reader: Any, source: Any) -> Table:
         },
     )
     native = getattr(result, "_word_extra")["table"]
+    from .identity import ID
+    getattr(result, "_word_extra")["identity"] = source._tbl.get(ID)
+    native["spans"] = {f"{row},{col}": list(span) for (row, col), span in spans.items()}
     native["row_controls"] = [reader.controls.get(row._tr, []) for row in source.rows]
     native["cell_controls"] = {
         f"{row},{col}": reader.controls.get(cell._tc, [])
@@ -165,6 +179,8 @@ def write_table(writer: Any, container: Any, block: Table) -> None:
     if native.get("tblPr"):
         for node in parse(native["tblPr"]):
             set_property(table._tbl.tblPr, node)
+    from .identity import assign
+    assign(table._tbl, extra.get("identity"))
     for row_index, properties in enumerate(native.get("rows", [])):
         if properties and row_index < block.rows:
             for node in parse(properties):
@@ -251,6 +267,31 @@ def write_table(writer: Any, container: Any, block: Table) -> None:
                         sz=size,
                         color=_color(str(values.get("color", "000000"))) or "000000",
                     )
+    # A merged cell's continuation rows have their own physical border/fill
+    # properties. row.cells aliases the origin and cannot restore those.
+    if native.get("spans") == {f"{r},{c}": list(span) for (r, c), span in (block.cell_spans or {}).items()}:
+        for r, row in enumerate(table._tbl.tr_lst):
+            for tc in row.tc_lst:
+                raw = native.get("continuations", {}).get(f"{r},{tc.grid_offset}")
+                if tc.vMerge != "continue" or not raw:
+                    continue
+                properties = tc.get_or_add_tcPr()
+                for node in parse(raw):
+                    if node.tag.rsplit("}", 1)[-1] not in {"gridSpan", "vMerge", "tcW"}:
+                        set_property(properties, node)
+                origin = next(((a, b) for (a, b), (h, w) in (block.cell_spans or {}).items()
+                               if a <= r < a + h and b <= tc.grid_offset < b + w), None)
+                if origin is not None:
+                    a, b = origin
+                    for tag, changed in (("tcBorders", border_styles.get(origin, {}) != extra.get("borders", {}).get(f"{a},{b}", {})),
+                                         ("shd", fills.get(origin) != extra.get("fills", {}).get(f"{a},{b}"))):
+                        if changed:
+                            from .editing_format import replace
+                            replacement = table.cell(a, b)._tc.tcPr.find("{http://schemas.openxmlformats.org/wordprocessingml/2006/main}" + tag)
+                            replace(properties, tag)
+                            if replacement is not None:
+                                from copy import deepcopy
+                                set_property(properties, deepcopy(replacement))
     # Wrap rows/cells after all grid operations. python-docx intentionally
     # omits SDT-wrapped rows from its ordinary table.rows collection.
     native_rows = list(table.rows)

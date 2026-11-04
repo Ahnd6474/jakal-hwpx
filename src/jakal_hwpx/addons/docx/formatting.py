@@ -125,7 +125,9 @@ def capture_table_properties(table: Any) -> dict:
             "col_widths": [round(int(column.width) / 127) if column.width is not None else None for column in table.columns],
             "row_heights": [round(int(row.height) / 127) if row.height is not None else 0 for row in table.rows],
             "cells": {f"{row},{col}": xml(cell._tc.tcPr) for row, source in enumerate(table.rows)
-                      for col, cell in enumerate(source.cells, start=source.grid_cols_before)}}
+                      for col, cell in enumerate(source.cells, start=source.grid_cols_before)},
+            "continuations": {f"{r},{tc.grid_offset}": xml(tc.tcPr) for r, row in enumerate(table._tbl.tr_lst)
+                              for tc in row.tc_lst if tc.vMerge == "continue"}}
 
 
 def apply_hwpx_character(element: Any, style: Any) -> None:

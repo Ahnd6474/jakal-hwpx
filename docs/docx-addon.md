@@ -50,6 +50,18 @@ Document.open("input.hwpx").save("converted.docx")
 | `jakal_hwpx.addons.docx.native_effects` | 한글 자동 목록·필드 매핑과 Word 목록 복원 |
 | `jakal_hwpx.addons.docx.fields` | 중첩·여러 문단 필드의 명령과 결과 범위 보존 |
 | `jakal_hwpx.addons.docx.textboxes` | Word 텍스트 상자 ↔ 편집 가능한 한글 글상자 |
+| `jakal_hwpx.addons.docx.editing` | 원본 객체를 수정하는 트랜잭션과 편집 핸들 |
+| `jakal_hwpx.addons.docx.editing_tables` | 병합 그리드의 행·열 추가·삭제와 셀 분할 |
+| `jakal_hwpx.addons.docx.editing_format` | 세부 글자·문단·셀 테두리 서식 검증과 적용 |
+| `jakal_hwpx.addons.docx.editing_stories` | 페이지·다단·섹션과 각주·미주 편집 |
+| `jakal_hwpx.addons.docx.editing_fields` | 자동 목록 인스턴스와 필드 명령·결과 편집 |
+| `jakal_hwpx.addons.docx.editing_ranges` | 서식을 유지하는 문단 간 범위·복사·이동·치환 |
+| `jakal_hwpx.addons.docx.editing_navigation` | 링크·책갈피와 연결된 참조 갱신 |
+| `jakal_hwpx.addons.docx.editing_styles` | 스타일 생성·관계·삭제와 테마 편집 |
+| `jakal_hwpx.addons.docx.editing_table_layout` | 떠 있는 표·행 분할·표 나누기·합치기 |
+| `jakal_hwpx.addons.docx.editing_math` | 구조화 수식 선택·추가·수정·삭제 |
+| `jakal_hwpx.addons.docx.identity` | 영속 UUID·native 앵커·ID 기록 |
+| `jakal_hwpx.addons.docx.endpoint` | 버전 비교·원자적 편집과 선택적 HTTP adapter |
 | `jakal_hwpx.addons.docx.dependencies` | Word 백엔드의 선택적 로딩과 설치 안내 |
 
 기존 `from jakal_hwpx import WordDocument`와
