@@ -17,6 +17,21 @@ from ..._hancom_models import Field, Paragraph, Table
 FEATURE = "JAKAL_WORD_FEATURE"
 
 
+def character_signature(style):
+    """Compare projected style values without treating HWPX defaults as edits."""
+    from hashlib import sha256
+    def color(value):
+        return str(value or "000000").lstrip("#").upper()
+    value = {"height": float(style.height or 1100), "bold": bool(style.bold), "italic": bool(style.italic),
+             "fonts": {key: name.casefold() for key, name in style.font_names.items()},
+             "ratios": {key: int(number) for key, number in style.font_ratios.items() if int(number) != 100},
+             "color": color(style.text_color), "shade": color(style.shade_color) if style.shade_color and str(style.shade_color).lower() != "none" else None,
+             "position": str(style.script_position or "NORMAL").upper(),
+             "underline": {**style.underline, "color": color(style.underline.get("color"))} if style.underline.get("type", "NONE") != "NONE" else None,
+             "strikeout": {**style.strikeout, "color": color(style.strikeout.get("color"))} if style.strikeout.get("shape", "NONE") != "NONE" else None}
+    return sha256(json.dumps(value, sort_keys=True).encode("utf-8")).hexdigest()
+
+
 def xml(element: Any) -> str | None:
     return etree.tostring(element, encoding="unicode") if element is not None else None
 
@@ -342,7 +357,8 @@ def capture_resources(word: Any) -> dict:
             numbered |= cursor.element.find(f"./{qn('w:pPr')}/{qn('w:numPr')}") is not None
             cursor = cursor.base_style
         if not numbered:
-            paragraph_styles.append({"name": style.name, "pPr": xml(style.element.find(qn("w:pPr")))})
+            paragraph_styles.append({"name": style.name, "pPr": xml(style.element.find(qn("w:pPr"))),
+                                     "rPr": xml(style.element.find(qn("w:rPr")))})
     return {"theme": theme, "table_styles": selected, "custom_xml": custom,
             "paragraph_styles": paragraph_styles,
             "compatibility": xml(word.settings.element.find(qn("w:compat"))),
@@ -387,6 +403,13 @@ def restore_resources(word: Any, resources: dict) -> None:
                 character.addprevious(properties)
             else:
                 target.element.append(properties)
+        if "rPr" in record:
+            # Absence is significant too: retain inheritance instead of the
+            # fresh Word template's font, size, colour, or character defaults.
+            for previous in list(target.element.findall(qn("w:rPr"))):
+                target.element.remove(previous)
+            if record["rPr"]:
+                target.element.append(parse(record["rPr"]))
     records = resources.get("custom_xml", {})
     parts = {name: Part(PackURI(name), info["content_type"], base64.b64decode(info["data"]), word.part.package)
              for name, info in records.items()}

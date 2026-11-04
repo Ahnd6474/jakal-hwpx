@@ -165,6 +165,9 @@ def edit_result(field):
             field._end = copied.get(field._end, field._end)
             field._instructions = [copied.get(node, node) for node in field._instructions]
         field._node.set(_tag("dirty"), "false")
+        from .identity import NS, enable
+        if scratch.get("{" + NS + "}schema"):
+            enable(field._owner.part.element)
         for block in source if field._simple else blocks:
             for node in block.iter(_tag("sdt")):
                 if node.find("./" + _tag("sdtPr") + "/" + _tag("dataBinding")) is not None:
@@ -231,13 +234,20 @@ def wrap_control(owner, start, end=None, **properties):
 
 def insert_control(owner, index, *, text="", **properties):
     from docx.oxml import OxmlElement
-    _properties(OxmlElement("w:sdt"), **properties)  # Validate before insertion.
-    paragraph = owner.insert_paragraph(index, text)
-    try:
-        return wrap_control(owner, index, **properties)
-    except BaseException:
-        paragraph.delete()
-        raise
+    from docx.text.run import Run
+    node = OxmlElement("w:sdt")
+    _properties(node, **properties)
+    native_ids = [int(item.get(_tag("val"))) for item in owner.part.element.iter(_tag("id")) if item.get(_tag("val"), "").lstrip("-").isdigit()]
+    node.find("./" + _tag("sdtPr") + "/" + _tag("id")).set(_tag("val"), str(max([0, *native_ids]) + 1))
+    content, paragraph = OxmlElement("w:sdtContent"), OxmlElement("w:p")
+    node.append(content)
+    content.append(paragraph)
+    run = OxmlElement("w:r")
+    paragraph.append(run)
+    Run(run, owner._parent).text = text
+    owner._insert(index, node)
+    owner._ensure_tail()
+    return WordContentControl(owner, node)
 
 
 class WordContentControl(WordContainer):

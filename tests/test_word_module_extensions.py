@@ -31,6 +31,7 @@ def run(parent, text=None, *, control=None, instruction=None):
     ("lpile {a # b}", "m:m"),
     ("rpile {a # b}", "m:m"),
     ("matrix {lcol {a # b} rcol {c # d}}", "m:m"),
+    ("eqalign {x & =1 # y & =2}", "m:eqArr"),
     ("{n} choose {k}", "m:f"),
     ("binom {n} {k}", "m:f"),
     ("{x} atop {y}", "m:f"),
@@ -288,3 +289,122 @@ def test_mixed_script_layout_switches_map_in_both_directions(tmp_path):
     assert pr.find(qn("w:wordWrap")).get(qn("w:val")) == "0"
     assert pr.find(qn("w:snapToGrid")).get(qn("w:val")) == "0"
     assert pr.find(qn("w:suppressLineNumbers")).get(qn("w:val")) == "1"
+
+
+def test_created_complex_field_and_control_move_preserve_relationships(tmp_path):
+    doc = WordDocument.blank()
+    with doc.edit_word_details() as edit:
+        field = edit.body.append_paragraph("Before ").add_field('IF 1 = 1 "yes" "no"', "yes", complex_field=True)
+        with field.edit_result() as result:
+            result.append_paragraph("More")
+        assert field.result == "yes\nMore"
+        control = edit.body.insert_control(len(edit.body.blocks), text="Linked ", tag="moved")
+        control.paragraph(0).insert_hyperlink(7, "https://example.com/control", "control")
+        identity = control.object_id
+        control.move(0, destination=edit.header())
+        assert control.object_id == identity and control.hyperlinks[0].target == "https://example.com/control"
+        control.paragraph(0).replace_text("Linked", "Edited")
+        control.move(len(edit.body.blocks), destination=edit.body)
+        assert control.text == "Edited control"
+    native = WordFile(doc.save(tmp_path / "complex.docx"))
+    assert native.element.xpath(".//w:sdtContent//w:t/text()") == ["Edited ", "control"]
+
+
+def test_rich_field_result_survives_hwpx_roundtrip(tmp_path):
+    doc = complex_document()
+    with doc.edit_word_details() as edit:
+        field = edit.body.fields[0]
+        with field.edit_result() as result:
+            result.paragraph(0).replace_text("one", "updated")
+            result.insert_table(1, rows=1, cols=1, values=[["Nested table"]])
+            result.fields[0].set_result("9")
+    returned = WordFile(Document.open(doc.save(tmp_path / "rich.hwpx")).save(tmp_path / "returned.docx"))
+    assert "Nested table" in returned.element.xpath(".//w:t/text()")
+    assert returned.element.xpath(".//w:instrText/text()") == ['TOC \\o "1-3"']
+    assert "9" in returned.element.xpath(".//w:t/text()")
+
+
+def test_implicit_word_layout_defaults_stay_inherited(tmp_path):
+    doc = WordDocument.blank()
+    doc.append_paragraph("Keep implicit layout")
+    result = WordFile(Document.open(doc.save(tmp_path / "implicit.hwpx")).save(tmp_path / "implicit.docx"))
+    for root in (result.paragraphs[0]._p, result.styles["Normal"].element):
+        for name in ("snapToGrid", "wordWrap", "autoSpaceDE", "autoSpaceDN", "suppressLineNumbers"):
+            assert root.find("./" + qn("w:pPr") + "/" + qn("w:" + name)) is None
+
+
+def test_standalone_math_uses_word_math_alignment_in_hwpx(tmp_path):
+    doc = WordDocument.blank()
+    with doc.edit_word_details() as edit:
+        edit.body.append_paragraph().add_equation("cases {x # y}")
+        edit.body.append_paragraph("Inline ").add_equation("x")
+    paragraphs = [block for block in doc.sections[0].blocks if type(block).__name__ == "Paragraph"]
+    styles = {style.style_id: style for style in doc.paragraph_styles}
+    assert styles[paragraphs[0].para_pr_id].alignment_horizontal == "CENTER"
+    assert styles[paragraphs[1].para_pr_id].alignment_horizontal == "LEFT"
+    HwpxDocument.open(doc.save(tmp_path / "math-alignment.hwpx")).strict_validate()
+
+
+def test_empty_header_keeps_private_anchor_and_paragraph_identity(tmp_path):
+    from jakal_hwpx.addons.docx.identity import internal_name, ID
+    doc = WordDocument.blank()
+    with doc.edit_word_details() as edit:
+        edit.body.append_paragraph("Body")
+        header = edit.header().paragraph(0)
+        identity = header.object_id
+    returned = WordFile(Document.open(doc.save(tmp_path / "empty-header.hwpx")).save(tmp_path / "empty-header.docx"))
+    paragraph = returned.sections[0].header.paragraphs[0]._p
+    assert paragraph.get(ID) == identity
+    assert not list(paragraph.iter(qn("w:r")))
+    assert returned.styles["Header"].element.rPr is None
+    assert any(internal_name(node.get(qn("w:name"))) for node in paragraph.iter(qn("w:bookmarkStart")))
+
+
+def test_same_header_for_both_pages_shares_one_part_without_duplicate_ids(tmp_path):
+    from jakal_hwpx.addons.docx.identity import ID
+    doc = WordDocument.blank()
+    with doc.edit_word_details() as edit:
+        edit.body.append_paragraph("Body")
+        edit.header().paragraph(0).set_text("Shared header")
+        edit.header().paragraph(0).object_id
+    common = Document.open(doc.save(tmp_path / "shared.hwpx"))
+    common.sections[0].header_footer_blocks[0].apply_page_type = "BOTH"
+    # Activate odd/even globally through another distinct story.
+    from jakal_hwpx._hancom_models import HeaderFooter
+    common.sections[0].header_footer_blocks.append(HeaderFooter("footer", "Even footer", apply_page_type="EVEN"))
+    result = WordFile(common.save(tmp_path / "shared.docx"))
+    assert result.sections[0].header.part is result.sections[0].even_page_header.part
+    ids = [node.get(ID) for part in result.part.package.parts if getattr(part, "element", None) is not None for node in part.element.iter() if node.get(ID)]
+    assert len(ids) == len(set(ids))
+
+
+def test_modified_common_named_style_preserves_existing_direct_character_format(tmp_path):
+    doc = WordDocument.blank()
+    with doc.edit_word_details() as edit:
+        edit.format_style("Normal", font={"font_name": "Arial", "font_size_pt": 10})
+        edit.body.append_paragraph("Style edit").format_text(font_size_pt=9)
+    common = Document.open(doc.save(tmp_path / "style.hwpx"))
+    paragraph = next(block for block in common.sections[0].blocks if getattr(block, "text", None) == "Style edit")
+    definition = next(style for style in common.style_definitions if style.style_id == paragraph.style_id)
+    character = next(style for style in common.character_styles if style.style_id == definition.char_pr_id)
+    character.height = 1700
+    native = WordFile(common.save(tmp_path / "style.docx"))
+    assert native.styles["Normal"].font.size.pt == 17
+    # HWPX runs have an independent charPr; changing the named default does
+    # not remove the existing run's explicit character formatting.
+    assert native.paragraphs[0].runs[-1].font.size.pt == 9
+
+
+def test_private_identity_bookmarks_never_become_visible_field_owners(tmp_path):
+    from jakal_hwpx._hancom_models import Field, Paragraph
+    from jakal_hwpx.addons.docx.identity import internal_name
+    doc = WordDocument.blank()
+    with doc.edit_word_details() as edit:
+        p = edit.body.append_paragraph("Editable literal")
+        p.object_id
+    assert any(isinstance(block, Paragraph) and block.text == "Editable literal" for block in doc.sections[0].blocks)
+    assert not any(isinstance(block, Field) and internal_name(block.name) for block in doc.sections[0].blocks)
+    doc.replace_text("literal", "text")
+    restored = Document.open(doc.save(tmp_path / "private.hwpx"))
+    assert any(isinstance(block, Paragraph) and block.text == "Editable text" for block in restored.sections[0].blocks)
+    assert not any(isinstance(block, Field) and internal_name(block.name) for block in restored.sections[0].blocks)

@@ -309,10 +309,105 @@ OMML과 한글 수식 스크립트 사이에서 변환합니다. 행렬의 열�
 `_ {하한}`·`^ {상한}` 또는 `from {하한}`·`to {상한}` 뒤에 `{본문}`을 둡니다.
 예: `int _ {0} ^ {1} {{x} ^ {2} dx}`, `left [ {matrix {1 & 2 # 3 & 4}} right ]`.
 
+추가로 `cases {x & x>0 # -x & x<0}`, `pile {a # b}`, `lpile {a # b}`,
+`rpile {a # b}`, `eqalign {x & =1 # y & =2}`, `{n} choose {k}`,
+`binom {n} {k}`, `{a} atop {b}`를 지원합니다. `pmatrix`·`bmatrix`·`dmatrix`는
+행렬을 괄호로 감쌉니다. 열별 정렬은 `matrix {lcol {a # b} rcol {c # d}}`처럼
+`col`·`lcol`·`rcol`로 지정합니다. 한글의 공식
+[수식 명령어](https://help.hancom.com/hoffice130_assistant/ko-KR/Hwp/insert/equation/equation(explanation).htm)를 사용합니다.
+왼쪽·오른쪽 쌓기는 열 정렬이 있는 단일 열 OMML 행렬로 작성합니다. OMML의 `baseJc`는
+수직 기준이므로 가로 정렬 값을 넣지 않습니다.
+
 원래 Word 수식의 속성만 별도 기록하므로 피연산자 사본을 저장하지 않습니다. 구조가
 같으면 제한 위치·글자 속성과 독립 수식 문단을 복원하고, 구조가 바뀌면 오래된 속성을
-다른 노드에 붙이지 않습니다. `cases`, `pile`, `atop`, `choose`, 일반 상/하한 함수,
-여러 인수 구분 괄호 등 나머지 문법은 명시적으로 오류를 냅니다.
+다른 노드에 붙이지 않습니다. 일반 `limLow`·`limUpp`는 한글에서 세로 쌓기로 표시하고,
+여러 인수 구분 괄호는 구분 문자를 사이에 둔 행렬로 표시합니다. 구조가 유지된 채
+내용이 편집되면 현재 피연산자로 원래 OMML 구조를 복원합니다. 대체 표현의 구조를
+바꾸면 원래 구조 복원을 강제하지 않습니다. 색·굵기 명령, 아직 매핑하지 않은 장식·
+도형 수식과 비스듬한 분수 등은 명시적으로 오류를 냅니다.
+
+## 복합 필드 결과와 콘텐츠 컨트롤
+
+```python
+with doc.edit_word_details() as edit:
+    field = edit.body.append_paragraph().add_field(
+        'IF 1 = 1 "Result" "Other"', "Result", complex_field=True,
+    )
+    with field.edit_result() as result:
+        result.paragraph(0).format_text(bold=True)
+        result.append_paragraph("두 번째 결과 문단")
+        result.insert_table(1, rows=1, cols=2, values=[["항목", "값"]])
+
+    control = edit.body.insert_control(
+        len(edit.body.blocks), text="본문", tag="article", title="Article",
+    )
+    control.append_paragraph("컨트롤 내부에 삽입")
+    control.paragraph(0).set_text("수정한 본문")
+    control.configure(tag="updated", title="Updated article")
+    control.move(0, destination=edit.header())
+    # control.unwrap()  # 내용은 유지하고 컨트롤만 해제
+    # control.delete()  # 컨트롤과 내용을 삭제
+```
+
+`field.edit_result()`는 분리된 결과 범위를 편집한 뒤 정상 종료 시 반영합니다. 바깥의
+명령·시작/끝 표식·주변 본문을 유지하고 내부 문단·표·링크·중첩 필드를 편집합니다.
+`field.result_fields`로 내부 필드를 찾을 수도 있습니다. 편집 중 원래 결과가 바뀌면
+오래된 복사본 반영을 거부하며, 반환한 결과 컨테이너는 블록 종료 후 만료됩니다.
+simple field의 결과는 한 문단의 인라인 내용으로 제한합니다. 여러 블록이 필요하면
+처음부터 `complex_field=True`로 생성합니다. 복합 필드 경계는 형제 문단에 있어야 하며
+섹션 경계를 재구성하는 편집은 거부합니다.
+Word는 열기·재계산 시 필드 명령으로 결과를 다시 만들 수 있습니다. 직접 작성한 복합
+결과를 유지하려면 `field.lock()` 또는 생성 시 `locked=True`를 사용하고, Word 자동 계산을
+다시 사용할 때 `lock(False)`로 풉니다. 결과 편집 자체는 잠금 상태를 자동 변경하지 않습니다.
+
+`container.wrap_control(start, end, tag=..., title=...)`은 블록 인덱스의 반열린 범위를
+감쌉니다. `end`를 생략하면 한 블록을 감쌉니다. 컨트롤 내부 구조는 해당 핸들에서
+편집하며, 바깥 컨테이너에서 내부 블록 사이에 삽입하는 것은 계속 거부합니다.
+`container.content_controls`로 찾고, 단일 문단 또는 인라인 컨트롤은 `set_text()`도
+사용할 수 있습니다. 생성 종류는 기본 `rich_text`, 선택적으로 `plain_text`입니다.
+기존 컨트롤 속성과 데이터 바인딩은 유지하며 바뀐 내용으로 custom XML을 갱신합니다.
+컨트롤 UUID도 HWPX 왕복에 보존합니다. 드롭다운·날짜 선택 UI를 새로 생성하는 기능은
+포함하지 않습니다.
+
+## 명시적 필드 갱신과 목차 재생성
+
+```python
+report = doc.update_fields(data={"status": "approved"}, now="2026-11-04T13:14:15")
+for row in report:
+    print(row["instruction"], row["status"], row.get("reason"))
+
+with doc.edit_word_details() as edit:
+    toc = next(f for f in edit.body.fields if f.instruction.lstrip().startswith("TOC"))
+    print(toc.rebuild_toc())  # entries, requires_layout
+```
+
+`edit.update_fields()`도 같은 갱신을 실행합니다. 숫자 비교·대소문자를 구분하는 문자열
+동등 비교·지원 범위의 `*`/`?` 패턴을 사용하는 리터럴/중첩 `IF`, 데이터가 주어진
+`MERGEFIELD`, 기본 문서 속성, 지원 날짜·시간 서식, 기본 `REF`를 갱신합니다.
+상태는 `updated`·`unchanged`·`locked`·`unsupported`이며 잠긴 필드는 유지합니다.
+`strict=True`는 미지원 항목이 있으면 결과를 쓰기 전에 오류를 냅니다. 날짜는 명시적
+서식만 지원하며 로캘별 기본 서식이나 문자열 대소 비교를 추측하지 않습니다.
+구조화된 결과를 새 문자열로 덮어쓰는 자동 갱신은 거부하고 `edit_result()`를 사용합니다.
+
+`TOC.rebuild_toc()`는 본문 제목 수준을 읽어 현재 제목·들여쓰기·이동 링크를 다시 만듭니다.
+지원 스위치는 `\o "1-3"`·`\h`·`\z`·`\u`·인수 없는 `\n`입니다. 기존 명령은 유지하지만
+쪽 번호는 생성하지 않습니다. 쪽 번호가 필요한 명령이면 `requires_layout=True`로
+보고하고 Word 재계산 대상으로 표시합니다. `include_page_numbers=True`는 조판 엔진이
+필요하다는 오류를 냅니다. 이 API는 한글 앱 안의 IF·TOC 자동 계산기를 설치하지 않습니다.
+
+## 한영 문단 배치 설정
+
+`paragraph.format(word_wrap=False, auto_space_east_asian_latin=True,
+auto_space_east_asian_numbers=False, snap_to_grid=False, suppress_line_numbers=True)`로
+줄바꿈·한영/한숫자 간격·격자·줄 번호 제외를 편집합니다. 값은 bool이며 `None`은
+상속으로 되돌립니다. 스타일 상속을 해석해 HWPX의 `breakLatinWord`, `autoSpacing`,
+격자·줄 번호 속성에 연결하고 역변환에도 반영합니다. 이 설정은 조판 차이의 일부를
+줄이지만 글꼴 대체·표 자동 높이·두 앱의 모든 줄바꿈 동일성을 보장하지 않습니다.
+단독 수식 문단에는 Word의 수식 정렬을 적용하고 인라인 수식이 포함된 본문의 정렬은
+유지합니다. 빈 머리말의 숨김 ID 앵커와 run 유무, 변경하지 않은 스타일의 상속도 보존합니다.
+문단 스타일의 원본 글자 속성도 보존하며, HWPX 기본 스타일이 같은 이름의 가져온
+Word 스타일을 덮어쓰지 않게 처리합니다. 이 수정으로 확장 예제의 0.72pt 세로 차이를
+해소했고 동일한 Word 렌더링에서 좌표·전체 픽셀 일치를 확인했습니다.
 
 ## 트랜잭션과 객체 ID
 
@@ -325,8 +420,10 @@ OMML과 한글 수식 스크립트 사이에서 변환합니다. 행렬의 열�
 사용합니다. 모든 삽입을 묶고 공통 모델은 한 번만 다시 읽습니다. 변경 없는 편집 블록은
 모델을 다시 읽지 않으며, 여러 세부 편집도 한 `edit_word_details()` 블록 안에서 묶습니다.
 
-다른 OPC 파트 사이의 이동, 섹션 구분 문단의 삭제·이동, 필드·책갈피·댓글 경계를
-끊는 삭제·이동은 거부합니다. 같은 파트의 본문과 표 셀 사이 이동은 지원합니다.
+본문·머리말·꼬리말 등 다른 OPC 파트로 블록을 이동할 때 링크·그림 관계를 다시 연결하고
+대상 파트에서 책갈피 숫자 ID가 겹치지 않게 조정합니다. 객체 UUID는 유지합니다.
+다른 활성 편집기 사이 이동, 각주·미주 참조가 포함된 파트 간 이동, 섹션 구분 문단의
+삭제·이동, 필드·책갈피·댓글 경계를 끊는 삭제·이동은 거부합니다.
 그룹 도형과 IF·TOC의 한글 내 자동 계산은 별도 지원 범위입니다.
 
 `WordEndpoint` 또는 `doc.endpoint()`를 사용하면 객체 UUID와 버전 기반 일괄 수정을
@@ -340,6 +437,8 @@ OMML과 한글 수식 스크립트 사이에서 변환합니다. 행렬의 열�
 python examples/docx_editing.py
 python examples/docx_editing.py --image path/to/image.png --output-dir build/my-editing-demo
 python examples/docx_advanced_editing.py --image path/to/image.png
+python examples/docx_module_extensions.py
+python -m pytest tests/test_word_module_extensions.py
 python -m pytest tests/test_word_editing.py
 python -m pytest tests/test_word_advanced_editing.py
 ```

@@ -13,6 +13,15 @@ def accept_visible_content(root: Any) -> None:
 
     select_alternatives(root)
 
+    from .identity import NS, internal_name
+    private = {node.get(qn("w:id")) for node in root.iter(qn("w:bookmarkStart")) if internal_name(node.get(qn("w:name")))}
+    for node in list(root.iter()):
+        if node.tag in {qn("w:bookmarkStart"), qn("w:bookmarkEnd")} and node.get(qn("w:id")) in private:
+            paragraph = next(node.iterancestors(qn("w:p")), None)
+            if paragraph is not None:
+                paragraph.set("{" + NS + "}paragraphAnchor", "1")
+            node.getparent().remove(node)
+
     for node in list(root.iter()):
         parent = node.getparent()
         if parent is None:

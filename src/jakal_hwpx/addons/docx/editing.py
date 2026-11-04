@@ -582,7 +582,8 @@ class _Block:
             # Numbering/styles are package-wide; relationship IDs are part-local.
             for node in self._node.iter(_tag("sdt")):
                 if node.find("./" + _tag("sdtPr") + "/" + _tag("dataBinding")) is not None:
-                    self._owner._editor._bindings.append((node, target.part.element, self._owner._editor._binding_text(node)))
+                    before = next((before for existing, _, before in self._owner._editor._bindings if existing is node), self._owner._editor._binding_text(node))
+                    self._owner._editor._bindings.append((node, target.part.element, before))
         self._node.getparent().remove(self._node)
         target._insert(index, self._node)
         self._owner._ensure_tail()

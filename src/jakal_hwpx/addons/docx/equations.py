@@ -11,7 +11,7 @@ from lxml import etree
 M = "http://schemas.openxmlformats.org/officeDocument/2006/math"
 NARY = {"sum": "∑", "prod": "∏", "coprod": "∐", "int": "∫", "oint": "∮", "iint": "∬", "iiint": "∭", "bigcup": "⋃", "bigcap": "⋂"}
 SEMANTIC_PROPERTIES = {"naryPr": {"chr", "subHide", "supHide"}, "dPr": {"begChr", "endChr", "sepChr"},
-                       "fPr": {"type"}, "mPr": {"mcs"}}
+                       "fPr": {"type"}, "mPr": {"mcs"}, "rPr": {"aln"}}
 
 
 def _tag(name: str) -> str:

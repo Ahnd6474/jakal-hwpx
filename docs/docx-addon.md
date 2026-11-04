@@ -60,6 +60,8 @@ Document.open("input.hwpx").save("converted.docx")
 | `jakal_hwpx.addons.docx.editing_styles` | 스타일 생성·관계·삭제와 테마 편집 |
 | `jakal_hwpx.addons.docx.editing_table_layout` | 떠 있는 표·행 분할·표 나누기·합치기 |
 | `jakal_hwpx.addons.docx.editing_math` | 구조화 수식 선택·추가·수정·삭제 |
+| `jakal_hwpx.addons.docx.editing_content` | 복합 필드 결과 범위·콘텐츠 컨트롤 구조 편집 |
+| `jakal_hwpx.addons.docx.field_updates` | 지원 필드의 명시적 계산·목차 제목 및 링크 재생성 |
 | `jakal_hwpx.addons.docx.identity` | 영속 UUID·native 앵커·ID 기록 |
 | `jakal_hwpx.addons.docx.endpoint` | 버전 비교·원자적 편집과 선택적 HTTP adapter |
 | `jakal_hwpx.addons.docx.dependencies` | Word 백엔드의 선택적 로딩과 설치 안내 |
@@ -121,6 +123,11 @@ Word 윤곽 속성은 복원합니다. 굵은 밑줄·가는 해치 같은 일�
 구조를 다시 적용하므로 목차 명령이나 내부 필드의 글자가 사라지지 않습니다.
 `IF`·`TOC` 같은 바깥 필드의 한글 내 재계산은 지원하지 않으며 경고합니다.
 내부 필드가 지원하는 한글 필드로 매핑되면 해당 내부 필드의 자동 갱신은 유지합니다.
+모듈에서는 `doc.update_fields()`로 지원 범위의 IF·머지·문서 속성·날짜·시간·REF를
+명시적으로 계산하고 상태를 반환합니다. `field.rebuild_toc()`는 현재 제목과 링크를 다시
+만들며 쪽 번호가 필요한 경우 조판 엔진 필요 여부를 보고합니다. 한글 내부의 자동 계산과
+구분되는 기능입니다. 복합 결과·콘텐츠 컨트롤의 구조 편집과 실행 예제는
+[편집 API](./word-editing.md#복합-필드-결과와-콘텐츠-컨트롤)를 참고하세요.
 
 Word 텍스트 상자는 편집 가능한 한글 글상자로 작성하고, DOCX에서는 현재 내용을
 상자 안에 복원합니다. 문단별 서식·링크·그림·표·필드를 함께 변환하며 Word의 대체

@@ -50,6 +50,9 @@ def populate_from_docx(target: HancomDocument, path: Path) -> None:
     from docx.table import Table as DocxTable
 
     reader = _DocxReader(target)
+    math_ns = "{http://schemas.openxmlformats.org/officeDocument/2006/math}"
+    justification = source.settings.element.find("./" + math_ns + "mathPr/" + math_ns + "defJc")
+    reader.math_justification = justification.get(math_ns + "val", "centerGroup") if justification is not None else "centerGroup"
     from .features import capture_controls, capture_resources
 
     reader.source_path = path
@@ -269,6 +272,7 @@ _NOTE_FORMATS = {"decimal": "DIGIT", "lowerRoman": "ROMAN_SMALL", "upperRoman": 
 class _DocxReader:
     def __init__(self, target: HancomDocument) -> None:
         self.target = target
+        self.math_justification = "centerGroup"
         self.default_run_properties: Any = None
         self.default_paragraph_format: Any = None
         self._paragraph_styles: dict[str, str] = {}
@@ -329,6 +333,15 @@ class _DocxReader:
         pending_break = self.pending_breaks.pop(source._p.getparent(), None)
 
         para_id = self.paragraph_style(source)
+        math_nodes = [node for node in source._p if node.tag in {qn("m:oMath"), qn("m:oMathPara")}]
+        if math_nodes and all(node.tag in {qn("w:pPr"), qn("w:bookmarkStart"), qn("w:bookmarkEnd"), qn("m:oMath"), qn("m:oMathPara")} or
+                              node.tag == qn("w:r") and all(child.tag in {qn("w:rPr"), qn("w:t")} for child in node) and not "".join(node.itertext(qn("w:t"))).strip()
+                              for node in source._p):
+            justification = math_nodes[0].find("./" + qn("m:oMathParaPr") + "/" + qn("m:jc"))
+            value = justification.get(qn("m:val")) if justification is not None else getattr(self, "math_justification", "centerGroup")
+            style = deepcopy(next(style for style in self.target.paragraph_styles if style.style_id == para_id))
+            style.alignment_horizontal = {"left": "LEFT", "right": "RIGHT", "center": "CENTER", "centerGroup": "CENTER"}.get(value, style.alignment_horizontal)
+            para_id = self.register_paragraph_style(style)
         style_id = self.named_style(source)
         blocks: list[HancomBlock] = []
         segment = 0
@@ -478,9 +491,14 @@ class _DocxReader:
             if isinstance(block, Paragraph):
                 from .features import xml
 
-                from .identity import ID, PARA_ID
+                from .identity import ID, PARA_ID, NS, private_ids
                 setattr(block, "_word_extra", {**getattr(block, "_word_extra", {}), "pPr": xml(source._p.pPr),
-                                              "identity": source._p.get(ID), "paragraph_identity": source._p.get(PARA_ID)})
+                                              "identity": source._p.get(ID), "paragraph_identity": source._p.get(PARA_ID),
+                                              "paragraph_anchor": bool(private_ids(source._p)) or source._p.get("{" + NS + "}paragraphAnchor") == "1",
+                                              "no_runs": not any(True for _ in source._p.iter(qn("w:r")))})
+                paragraph_style = next((style for style in self.target.paragraph_styles if style.style_id == block.para_pr_id), None)
+                if paragraph_style is not None:
+                    getattr(block, "_word_extra")["layout_switches"] = dict(getattr(paragraph_style, "_word_extra", {}).get("layout_switches", {}))
                 character = next((style for style in self.target.character_styles if style.style_id == block.char_pr_id), None)
                 if character is not None and getattr(character, "_word_extra", None):
                     getattr(block, "_word_extra")["character"] = deepcopy(getattr(character, "_word_extra"))
@@ -780,6 +798,12 @@ class _DocxReader:
         wrapping = explicit_switch("wordWrap")
         if wrapping is not None:
             style.break_setting["breakLatinWord"] = "BREAK_WORD" if wrapping else "KEEP_WORD"
+        setattr(style, "_word_extra", {"layout_switches": {
+            "autoSpaceDE": style.auto_spacing.get("eAsianEng", "0"), "autoSpaceDN": style.auto_spacing.get("eAsianNum", "0"),
+            "wordWrap": "1" if style.break_setting.get("breakLatinWord") == "BREAK_WORD" else "0",
+            "snapToGrid": style.snap_to_grid if style.snap_to_grid is not None else "1",
+            "suppressLineNumbers": style.suppress_line_numbers if style.suppress_line_numbers is not None else "0",
+        }})
         for attribute, key in (
             ("left_indent", "left"), ("right_indent", "right"), ("first_line_indent", "intent"),
             ("space_before", "prev"), ("space_after", "next"),
@@ -879,10 +903,15 @@ class _DocxReader:
 
             style_id = str(len(self._named_styles) + 1)
             self._named_styles[style.style_id] = style_id
+            char_id = self.character_style(source, Run(OxmlElement("w:r"), source))
             self.target.style_definitions.append(StyleDefinition(
                 style.name, style_id=style_id, para_pr_id=self.paragraph_style(source, include_direct=False),
-                char_pr_id=self.character_style(source, Run(OxmlElement("w:r"), source)),
+                char_pr_id=char_id,
             ))
+            from .features import character_signature
+            character = next((item for item in self.target.character_styles if item.style_id == char_id), None)
+            if character is not None:
+                self.target._word_resources.setdefault("style_signatures", {})[style.name] = character_signature(character)
         return self._named_styles[style.style_id]
 
     def character_style(self, paragraph: Any, run: Any) -> str | None:
@@ -1019,7 +1048,7 @@ class _DocxReader:
                 active = variant == "default" or (
                     settings.odd_and_even_pages_header_footer if variant == "even" else source.different_first_page_header_footer
                 )
-                if not active or (not text and not story.tables and not story._element.xpath(".//w:drawing | .//w:pict | .//w:fldSimple | .//w:fldChar | .//m:oMath")):
+                if not active:
                     continue
                 page_type = "FIRST" if variant == "first" else "EVEN" if variant == "even" else ("ODD" if settings.odd_and_even_pages_header_footer else "BOTH")
                 header = HeaderFooter(kind, text, apply_page_type=page_type)

@@ -289,7 +289,8 @@ def test_cell_movement_and_style_edits_use_the_native_backend(tmp_path: Path):
 
 
 @pytest.mark.parametrize("format_only", [False, True])
-def test_bound_content_control_edits_update_xml_and_preserve_the_wrapper(tmp_path: Path, format_only):
+@pytest.mark.parametrize("move_control", [False, True])
+def test_bound_content_control_edits_update_xml_and_preserve_the_wrapper(tmp_path: Path, format_only, move_control):
     from docx.opc.part import Part
     from docx.opc.packuri import PackURI
     from lxml import etree
@@ -324,6 +325,8 @@ def test_bound_content_control_edits_update_xml_and_preserve_the_wrapper(tmp_pat
             paragraph.format_text(0, 2, bold=True)
         else:
             paragraph.replace_text("Alice", "Bob")
+        if move_control:
+            edit.body.content_controls[0].move(0, destination=edit.header())
         edit.body.insert_paragraph(0, "Outside control")
     result = model.save(tmp_path / "output.docx")
     with zipfile.ZipFile(result) as package:
@@ -332,7 +335,8 @@ def test_bound_content_control_edits_update_xml_and_preserve_the_wrapper(tmp_pat
         else:
             assert etree.fromstring(package.read("customXml/customer.xml")).findtext("name") == "Bob"
     word = WordFile(result)
-    assert "".join(word.element.xpath(".//w:sdt//w:t/text()")) == ("Alice" if format_only else "Bob")
+    root = word.sections[0].header._element if move_control else word.element
+    assert "".join(root.xpath(".//w:sdt//w:t/text()")) == ("Alice" if format_only else "Bob")
     assert word.paragraphs[0].text == "Outside control"
 
 

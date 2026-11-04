@@ -57,10 +57,15 @@ def _compare(left, operator, right):
     except InvalidOperation:
         a, b = left, right
         if operator in {"=", "<>"}:
-            if "*" in b and len(a) > 128:
+            if any(char in b for char in "*?") and (len(a) > 128 or len(b) > 128):
                 raise _Unsupported("Wildcard comparisons beyond 128 characters require Word.")
-            pattern = re.escape(b).replace(r"\*", ".*").replace(r"\?", ".")
-            equal = re.fullmatch(pattern, a, flags=re.DOTALL) is not None
+            previous = [True] + [False] * len(a)
+            for char in b:
+                current = [previous[0] and char == "*"]
+                for index, value in enumerate(a, 1):
+                    current.append(previous[index] or current[index - 1] if char == "*" else previous[index - 1] and (char == "?" or char == value))
+                previous = current
+            equal = previous[-1]
             return equal if operator == "=" else not equal
         raise _Unsupported("Text ordering requires Word's locale comparison rules.")
     return {"=": lambda: a == b, "<>": lambda: a != b, "<": lambda: a < b,
@@ -72,7 +77,7 @@ def _evaluate(field, fields, planned, editor, data, now):
     if not tokens:
         raise _Unsupported("Empty field code.")
     kind = tokens.pop(0).upper()
-    if len(tokens) >= 2 and tokens[-2:] == [r"\*", "MERGEFORMAT"]:
+    if len(tokens) >= 2 and tokens[-2] == r"\*" and tokens[-1].upper() == "MERGEFORMAT":
         tokens = tokens[:-2]
     if kind == "IF" and len(tokens) in {4, 5} and tokens[1] in {"=", "<>", "<", ">", "<=", ">="}:
         for token in (tokens[0], tokens[2]):
@@ -106,8 +111,25 @@ def _evaluate(field, fields, planned, editor, data, now):
             raise _Unsupported("Reference bookmark is missing or ambiguous.")
         bookmark = matches[0]
         nodes = list(bookmark._owner.part.element.iter())
-        return "".join(node.text or "" if node.tag == _tag("t") else "\t" if node.tag == _tag("tab") else "\n" if node.tag in {_tag("br"), _tag("p")} else ""
-                       for node in nodes[nodes.index(bookmark._node) + 1:nodes.index(bookmark._end)])
+        left, right = nodes.index(bookmark._node) + 1, nodes.index(bookmark._end)
+        if field._node in nodes[left:right]:
+            raise _Unsupported("A reference cannot read its own result.")
+        output, index = [], left
+        starts = {item._node: item for item in fields}
+        while index < right:
+            node = nodes[index]
+            inner = starts.get(node)
+            if inner is not None:
+                output.append(planned.get(node, inner.result))
+                end = inner._node if inner._simple else inner._end
+                index = nodes.index(end) + 1
+                if inner._simple:
+                    while index < right and any(parent is node for parent in nodes[index].iterancestors()):
+                        index += 1
+                continue
+            output.append(node.text or "" if node.tag == _tag("t") else "\t" if node.tag == _tag("tab") else "\n" if node.tag in {_tag("br"), _tag("p")} else "")
+            index += 1
+        return "".join(output)
     if kind == "TOC":
         raise _Unsupported("Use rebuild_toc(); page numbers require a layout engine.")
     if kind in {"PAGE", "PAGEREF", "NUMPAGES", "SECTIONPAGES"}:
@@ -149,7 +171,9 @@ def update_fields(editor, *, data=None, now=None, strict=False):
                 value = _evaluate(field, fields, planned, editor, data or {}, now)
                 if any(ord(char) < 32 and char not in "\t\n\r" for char in value):
                     raise ValueError("Field values must be valid XML text.")
-                if value != field.result and any(node.tag in {_tag(name) for name in ("fldChar", "fldSimple", "drawing", "pict", "tbl", "p")} | {"{http://schemas.openxmlformats.org/officeDocument/2006/math}oMath"} for node in field._result_nodes()):
+                from lxml import etree
+                etree.Element("text").text = value  # Validate before writing any result.
+                if value != field.result and any(node.tag in {_tag(name) for name in ("fldChar", "fldSimple", "drawing", "pict", "tbl", "p", "hyperlink", "sdt", "customXml")} | {"{http://schemas.openxmlformats.org/officeDocument/2006/math}oMath"} for node in field._result_nodes()):
                     raise _Unsupported("Structured results must be edited with edit_result().")
                 planned[field._node] = value
                 report["status"] = "unchanged" if value == field.result else "updated"

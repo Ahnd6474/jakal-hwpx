@@ -130,6 +130,11 @@ python examples/word_endpoint.py --serve --input input.docx --port 8765
 삭제를 지원합니다. 링크·책갈피·필드·수식은 각각의 전용 편집 메서드를 호출합니다.
 `target="document"`에서는 스타일 생성·관계 변경·삭제·서식·테마, 목록 생성, 섹션 나누기를
 지원합니다. 상세 인수는 [편집 API](./word-editing.md)를 참고하세요.
+`update_fields`도 문서 작업으로 호출하며 결과의 상태 보고서는 `results[].value`로
+반환합니다. 필드에는 `replace_result_text`·`rebuild_toc`를, 컨테이너에는
+`insert_control`·`wrap_control`을 사용할 수 있습니다. 콘텐츠 컨트롤(`kind="sdt"`)의
+UUID를 대상으로 `configure`·`set_text`·`unwrap`·`delete`·`move`와 내부 블록 삽입·치환을
+호출합니다. 여러 문단·표를 포함한 필드 결과의 컨텍스트 편집은 Python API를 사용합니다.
 
 | 연결 작업 | `method`와 `kwargs` |
 | --- | --- |
@@ -153,6 +158,8 @@ ID를 활성화한 문서는 OOXML 속성, 숨김 책갈피 앵커, custom XML�
 열기·문단 삽입·이동에서 UUID를 유지합니다. 문단·표·수식 ID와 문단의 native identity도
 HWPX 왕복에 보존합니다. `_JAKAL_` 뒤에 32자리 UUID가 붙는 숨김 책갈피 이름은
 내부 식별용으로 예약하며 일반 책갈피 API·텍스트 범위에서 제외합니다.
+공통 모델에 읽을 때도 내부 ID 책갈피를 본문 소유 필드로 만들지 않습니다. 실제 본문은
+일반 문단으로 편집하고, DOCX 출력 시 내부 앵커만 별도로 복원합니다.
 
 Word 앱이 재저장에서 알 수 없는 속성·`paraId`를 다시 만들고 책갈피 시작을 문단 밖으로
 이동하는 경우도 앵커로 복구합니다. 실제 Word SaveAs로 문단 ID 유지와 편집된 내용의

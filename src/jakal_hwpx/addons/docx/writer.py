@@ -67,6 +67,8 @@ def build_docx(document: Document) -> bytes:
             node = word.core_properties._element.find(qn("dcterms:" + name))
             if node is not None:
                 word.core_properties._element.remove(node)
+    if any(story.apply_page_type in {"ODD", "EVEN"} for section in document.sections for story in section.header_footer_blocks):
+        word.settings.odd_and_even_pages_header_footer = True
     for index, source in enumerate(document.sections):
         section = word.sections[0] if index == 0 else word.add_section()
         writer.section_settings(section, source.settings)
@@ -79,6 +81,7 @@ def build_docx(document: Document) -> bytes:
     stream = BytesIO()
     clean_control_markers(word)
     synchronize_bindings(word)
+    writer.restore_paragraph_anchors()
     word.save(stream)
     return stream.getvalue()
 
@@ -113,12 +116,15 @@ class _Writer:
     def __init__(self, source: Document, word: Any) -> None:
         self.source = source
         self.word = word
+        self.anchored_paragraphs: set[Any] = set()
         self.characters = {style.style_id: _word_character_style(style) for style in source.character_styles}
         self.paragraphs = {style.style_id: _word_paragraph_style(style) for style in source.paragraph_styles}
         self.styles = {style.style_id: style for style in source.style_definitions}
         from docx.enum.style import WD_STYLE_TYPE
 
         self.word_styles = {}
+        preferred = {style.name or "Imported " + str(style.style_id): style for style in source.style_definitions}
+        native_character_styles = {record["name"] for record in getattr(source, "_word_resources", {}).get("paragraph_styles", []) if "rPr" in record}
         for style in source.style_definitions:
             kind = WD_STYLE_TYPE.CHARACTER if style.style_type == "CHAR" else WD_STYLE_TYPE.PARAGRAPH
             name = style.name or "Imported " + str(style.style_id)
@@ -126,11 +132,21 @@ class _Writer:
             if target.type == kind:
                 self.word_styles[style.style_id] = target
         for style in source.style_definitions:
+            # HWPX keeps its template Normal style before the imported Word
+            # Normal. Both resolve to one Word name: only the imported (last)
+            # definition may configure that style, not the unused template.
+            if preferred[style.name or "Imported " + str(style.style_id)] is not style:
+                continue
             target = self.word_styles.get(style.style_id)
             following = self.word_styles.get(style.next_style_id)
             if target is not None and following is not None and target.type == following.type == WD_STYLE_TYPE.PARAGRAPH:
                 target.next_paragraph_style = following
             if target is not None and style.char_pr_id is not None:
+                from .features import character_signature
+                character = self.characters.get(style.char_pr_id)
+                baseline = getattr(source, "_word_resources", {}).get("style_signatures", {}).get(style.name)
+                if character is not None and style.name in native_character_styles and baseline == character_signature(character):
+                    continue
                 from docx.oxml import OxmlElement
                 from docx.text.run import Run
 
@@ -220,31 +236,37 @@ class _Writer:
                 story.is_linked_to_previous = False
         for block in source.header_footer_blocks:
             prefixes = ["first_page_" if block.apply_page_type == "FIRST" else "even_page_" if block.apply_page_type == "EVEN" else ""]
-            if block.apply_page_type == "BOTH":
-                prefixes.append("even_page_")
             for prefix in prefixes:
                 story = getattr(section, prefix + block.kind)
                 if block.nested_blocks:
                     self.blocks(story, block.nested_blocks, first=story.paragraphs[0], nested=True)
                 else:
                     story.paragraphs[0].add_run(block.text)
+            if block.apply_page_type == "BOTH" and self.word.settings.odd_and_even_pages_header_footer:
+                self.share_story(section, block.kind, "even", getattr(section, block.kind))
         if (any(block.apply_page_type == "FIRST" for block in source.header_footer_blocks)
                 or source.settings.visibility.get("hideFirstHeader") == "1" or source.settings.visibility.get("hideFirstFooter") == "1"):
             section.different_first_page_header_footer = True
             for kind in ("header", "footer"):
                 if source.settings.visibility.get("hideFirst" + kind.capitalize()) != "1":
                     ordinary = getattr(section, kind)
-                    first = getattr(section, "first_page_" + kind)
-                    from copy import deepcopy
+                    self.share_story(section, kind, "first", ordinary)
 
-                    for child in list(first._element):
-                        first._element.remove(child)
-                    for child in ordinary._element:
-                        first._element.append(deepcopy(child))
+    def share_story(self, section, kind, variant, ordinary):
+        """Reuse one OPC story instead of duplicating its UUIDs/bookmark names."""
+        from docx.oxml.ns import qn
+        from docx.opc.constants import RELATIONSHIP_TYPE as RT
+        reference = next(node for node in section._sectPr if node.tag == qn("w:" + kind + "Reference") and node.get(qn("w:type")) == variant)
+        old = reference.get(qn("r:id"))
+        reference.set(qn("r:id"), self.word.part.relate_to(ordinary.part, RT.HEADER if kind == "header" else RT.FOOTER))
+        if old not in self.word.element.xpath(".//@r:id"):
+            self.word.part.drop_rel(old)
 
     def paragraph_style(self, paragraph: Any, block: Paragraph) -> None:
         from .identity import assign, PARA_ID
         assign(paragraph._p, getattr(block, "_word_extra", {}).get("identity"))
+        if getattr(block, "_word_extra", {}).get("paragraph_anchor"):
+            self.anchored_paragraphs.add(paragraph._p)
         paragraph_identity = getattr(block, "_word_extra", {}).get("paragraph_identity")
         if paragraph_identity:
             paragraph._p.set(PARA_ID, paragraph_identity)
@@ -309,9 +331,15 @@ class _Writer:
                     "snapToGrid": style.snap_to_grid, "suppressLineNumbers": style.suppress_line_numbers}
         if style.break_setting.get("breakLatinWord") in {"BREAK_WORD", "KEEP_WORD"}:
             switches["wordWrap"] = "1" if style.break_setting["breakLatinWord"] == "BREAK_WORD" else "0"
+        extra = getattr(block, "_word_extra", {})
+        word_origin = bool(getattr(self.source, "_word_resources", None))
+        baseline = extra.get("layout_switches", {"wordWrap": "0", "autoSpaceDE": "0", "autoSpaceDN": "0", "snapToGrid": "1", "suppressLineNumbers": "0"})
         for name, value in switches.items():
             if value is not None:
-                replace(paragraph._p.get_or_add_pPr(), name, {"val": "1" if str(value).lower() in {"1", "true", "on"} else "0"})
+                normalized = "1" if str(value).lower() in {"1", "true", "on"} else "0"
+                if word_origin and (not extra or normalized == baseline.get(name)):
+                    continue  # Keep native inheritance when projection values did not change.
+                replace(paragraph._p.get_or_add_pPr(), name, {"val": normalized})
         if attributes.get("pageBreak") == "1":
             fmt.page_break_before = True
         if attributes.get("columnBreak") == "1":
@@ -333,6 +361,26 @@ class _Writer:
             self.list_label(paragraph, Field("JAKAL_LIST_LABEL", parameters=native_list))
         elif style.heading.get("type", "NONE") != "NONE":
             self.warn("Automatic numbering/bullets are not mapped to Word list definitions.")
+
+    def restore_paragraph_anchors(self):
+        from docx.oxml import OxmlElement
+        from docx.oxml.ns import qn
+        from .identity import ID, internal_name
+        roots = [part.element for part in self.word.part.package.parts if getattr(part, "element", None) is not None]
+        highest = max([0] + [int(node.get(qn("w:id"), "0")) for root in roots for node in root.iter(qn("w:bookmarkStart"))])
+        for root in roots:
+            for paragraph in root.iter(qn("w:p")):
+                if paragraph not in self.anchored_paragraphs or not paragraph.get(ID):
+                    continue
+                if any(internal_name(node.get(qn("w:name"))) for node in paragraph.iter(qn("w:bookmarkStart"))):
+                    continue
+                highest += 1
+                start, end = OxmlElement("w:bookmarkStart"), OxmlElement("w:bookmarkEnd")
+                start.set(qn("w:id"), str(highest))
+                start.set(qn("w:name"), "_JAKAL_" + paragraph.get(ID))
+                end.set(qn("w:id"), str(highest))
+                paragraph.insert(1 if len(paragraph) and paragraph[0].tag == qn("w:pPr") else 0, start)
+                paragraph.append(end)
 
     def character_style(self, run: Any, block: Paragraph) -> None:
         from docx.oxml.ns import qn
@@ -435,6 +483,8 @@ class _Writer:
         from docx.opc.constants import RELATIONSHIP_TYPE
 
         if isinstance(block, Paragraph):
+            if not block.text and getattr(block, "_word_extra", {}).get("no_runs"):
+                return  # A new empty run can change an empty header's line box.
             rich = getattr(block, "_docx_runs", None)
             if rich and "".join(text for text, _ in rich) == block.text:
                 for text, char_id in rich:

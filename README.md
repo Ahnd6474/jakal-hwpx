@@ -157,6 +157,14 @@ Keep those UUIDs on the client. Use `apply(..., compact=True)` and
 `changes(version)` to receive only updated objects and deleted IDs;
 `get_objects(ids)` reads selected objects without returning the whole document.
 Literal hyperlink/field representation changes retain a uniquely matched logical link ID.
+
+Word detail editing also supports structured field results (`field.edit_result()`),
+content control creation and structural edits, and block moves between body/header/footer
+with relationship remapping. `doc.update_fields()` explicitly refreshes supported fields;
+`field.rebuild_toc()` rebuilds heading text and links while reporting pagination needs.
+Additional native equations include cases, aligned stacks, binomials and barless fractions.
+Run `python examples/docx_module_extensions.py` and see the
+[editing guide](docs/word-editing.md#복합-필드-결과와-콘텐츠-컨트롤).
 Inserting a paragraph does not change the IDs of existing paragraphs. Stale writes
 raise `VersionConflict`; a failed batch rolls back all its edits. The optional HTTP
 adapter uses the Python standard library:

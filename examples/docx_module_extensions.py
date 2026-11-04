@@ -12,6 +12,10 @@ from jakal_hwpx.addons.docx import WordDocument
 def create(output):
     output.mkdir(parents=True, exist_ok=True)
     doc = WordDocument.blank()
+    with doc.edit_word() as word:
+        from docx.oxml.ns import qn
+        for border in list(word.styles["Title"].element.iter(qn("w:pBdr"))):
+            border.getparent().remove(border)
     with doc.edit_word_details() as edit:
         edit.format_style("Normal", font={"font_name": "Arial", "font_size_pt": 10, "color": "000000"},
                           paragraph={"space_after_pt": 5})
@@ -21,7 +25,7 @@ def create(output):
         body = edit.body
         body.append_paragraph("Word module extensions", style="Title")
         body.append_paragraph("Native equations, structured field results, content controls and explicit field refresh.")
-        toc = body.append_paragraph().add_field('TOC \\o "1-2" \\h', "Contents", complex_field=True)
+        toc = body.append_paragraph().add_field('TOC \\o "1-2" \\h', "Contents", complex_field=True, locked=True)
         body.append_paragraph("Structured equations", style="Heading 1")
         for script in ["cases {x & x>0 # -x & x<0}", "lpile {a+b=c # d+e=f}", "{n} choose {k}",
                        "{a} atop {b}", "bmatrix {a & b # c & d}"]:
@@ -30,14 +34,14 @@ def create(output):
         control = body.insert_control(len(body.blocks), text="Original control text", tag="article", title="Article")
         control.paragraph(0).replace_text("Original", "Edited")
         control.append_paragraph("Another paragraph inside the same content control.")
-        field = body.append_paragraph().add_field('IF 1 = 1 "Result" "Other"', "Result", complex_field=True)
+        field = body.append_paragraph().add_field('IF 1 = 1 "Result" "Other"', "Result", complex_field=True, locked=True)
         with field.edit_result() as result:
             result.paragraph(0).format_text(bold=True)
             result.append_paragraph("A second result paragraph.")
             result.insert_table(1, rows=1, cols=2, values=[["Rich result", "Editable table"]])
         body.append_paragraph("Explicit refresh", style="Heading 1")
         p = body.append_paragraph("Condition: ")
-        p.add_field('IF 2 < 10 "numeric comparison passed" "failed"', "old")
+        condition = p.add_field('IF 2 < 10 "numeric comparison passed" "failed"', "old")
         body.append_paragraph("한글English123 mixed text wrapping").format(
             word_wrap=False, auto_space_east_asian_latin=True, auto_space_east_asian_numbers=False,
         ).format_text(font_names={"eastAsia": "맑은 고딕"})
@@ -45,6 +49,7 @@ def create(output):
         p.move(0, destination=edit.header())
         p.move(len(body.blocks), destination=body)
         report = edit.update_fields(now="2026-11-04T13:14:15")
+        condition.lock()  # Compare the refreshed cache without Word recalculating it on open.
         toc_report = toc.rebuild_toc()
     edited = doc.save(output / "edited.docx")
     middle = doc.save(output / "edited.hwpx")
