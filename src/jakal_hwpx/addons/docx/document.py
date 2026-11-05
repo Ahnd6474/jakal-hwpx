@@ -284,4 +284,7 @@ class WordDocument(Document):
             setattr(result, name, deepcopy(getattr(self, name)))
         result._word_feature_model = getattr(self, "_word_feature_model", False)
         result._word_resources = deepcopy(getattr(self, "_word_resources", {}))
+        result._hwpx_ref_resources = deepcopy(getattr(self, "_hwpx_ref_resources", []))
+        result._hwpx_version_attributes = deepcopy(getattr(self, "_hwpx_version_attributes", {}))
+        result._hwpx_application_settings = deepcopy(getattr(self, "_hwpx_application_settings", []))
         return result

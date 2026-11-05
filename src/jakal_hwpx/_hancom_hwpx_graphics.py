@@ -323,8 +323,42 @@ def _apply_hwpx_table_block(table, block: Table) -> None:
     from ._hancom_conversion_common import _normalize_int_map
     from ._hancom_hwpx_write import _build_hwpx_nested_sublist
 
+    anchor = getattr(block, "_hwpx_anchor_paragraph", None)
+    if anchor is not None:
+        paragraph = next(table.element.iterancestors(qname("hp", "p")), None)
+        if paragraph is not None:
+            if anchor.para_pr_id is not None:
+                paragraph.set("paraPrIDRef", anchor.para_pr_id)
+            if anchor.style_id is not None:
+                paragraph.set("styleIDRef", anchor.style_id)
+            if anchor.char_pr_id is not None:
+                table.element.getparent().set("charPrIDRef", anchor.char_pr_id)
+
     for (row, column), (row_span, col_span) in (block.cell_spans or {}).items():
         table.merge_cells(row, column, row + row_span - 1, column + col_span - 1)
+    native = getattr(block, "_hwpx_table_properties", {})
+    if native and native.get("rows", block.rows) == block.rows and native.get("cols", block.cols) == block.cols and native.get("spans", block.cell_spans or {}) == (block.cell_spans or {}):
+        from copy import deepcopy
+        table.element.attrib.update(native["attributes"])
+        for raw in native["children"]:
+            node = etree.fromstring(raw)
+            existing = table.element.find(node.tag)
+            if existing is not None:
+                table.element.replace(existing, node)
+        for cell in table.cells():
+            record = native["cells"].get((cell.row, cell.column))
+            if record is None:
+                continue
+            cell.element.attrib.update(record["attributes"])
+            sublist = cell.element.find(qname("hp", "subList"))
+            if sublist is not None:
+                sublist.attrib.update(record["sublist"])
+            for raw in record["children"]:
+                node = etree.fromstring(raw)
+                existing = cell.element.find(node.tag)
+                if existing is not None:
+                    cell.element.replace(existing, deepcopy(node))
+        table.section.mark_modified()
     for cell in table.cells():
         size = cell.element.find(qname("hp", "cellSz"))
         if size is None:
@@ -351,7 +385,7 @@ def _apply_hwpx_table_block(table, block: Table) -> None:
     if block.cell_spacing is not None:
         table.set_cell_spacing(block.cell_spacing)
     table.set_table_border_fill_id(block.table_border_fill_id)
-    if getattr(block, "_docx_new_table", False):
+    if getattr(block, "_docx_new_table", False) and not getattr(block, "_hwpx_table_properties", None):
         # New HWPX tables reference borderFill 1 before any definitions exist.
         # If the first definition is a shaded header, transparent body cells
         # inherit that shade from the whole table. Reserve a neutral base.
@@ -363,21 +397,27 @@ def _apply_hwpx_table_block(table, block: Table) -> None:
         table.set_page_break(block.page_break)
     if block.repeat_header is not None:
         table.set_repeat_header(block.repeat_header)
+    coordinates = {(cell.row, cell.column) for cell in table.cells()}
     for (row, column), border_fill_id in (block.cell_border_fill_ids or {}).items():
-        table.cell(row, column).set_border_fill_id(border_fill_id)
+        if (row, column) in coordinates:
+            table.cell(row, column).set_border_fill_id(border_fill_id)
     pattern_coordinates = {tuple(map(int, key.split(","))) for key in getattr(block, "_word_extra", {}).get("patterns", {})}
     for row, column in set(block.cell_fill_colors or {}) | set(block.cell_border_styles or {}) | pattern_coordinates:
+        if (row, column) not in coordinates:
+            continue
         color = (block.cell_fill_colors or {}).get((row, column))
         borders = (block.cell_border_styles or {}).get((row, column), {})
         pattern = getattr(block, "_word_extra", {}).get("patterns", {}).get(f"{row},{column}")
         border_fill_id = _ensure_hwpx_table_border_fill(table.document, color, borders, pattern=pattern)
         table.cell(row, column).set_border_fill_id(border_fill_id)
     for (row, column), margins in (block.cell_margins or {}).items():
-        table.cell(row, column).set_margins(**_normalize_int_map(margins))
+        if (row, column) in coordinates:
+            table.cell(row, column).set_margins(**_normalize_int_map(margins))
     for (row, column), vertical_align in (block.cell_vertical_aligns or {}).items():
-        table.cell(row, column).set_vertical_align(vertical_align)
+        if (row, column) in coordinates:
+            table.cell(row, column).set_vertical_align(vertical_align)
     for (row, column), (baseline, blocks) in getattr(block, "_docx_cell_content", {}).items():
-        if row >= block.rows or column >= block.cols or block.cell_texts[row][column] != baseline:
+        if (row, column) not in coordinates or block.cell_texts[row][column] != baseline:
             continue
         cell = table.cell(row, column)
         sublist = cell.element.find(qname("hp", "subList"))
@@ -497,6 +537,17 @@ def _apply_hwpx_equation_block(equation, block: Equation) -> None:
     unsupported = getattr(block, "_unsupported_word_math", None)
     if unsupported:
         raise ValueError(unsupported)
+    if hasattr(block, "_hwpx_equation_baseline"):
+        baseline = block._hwpx_equation_baseline
+        if baseline is None:
+            equation.element.attrib.pop("baseLine", None)
+        else:
+            equation.element.set("baseLine", baseline)
+        equation.section.mark_modified()
+    character = getattr(block, "_hwpx_char_pr_id", None)
+    if character is not None:
+        equation.element.getparent().set("charPrIDRef", character)
+        equation.section.mark_modified()
     if block.layout:
         equation.set_layout(**_hwpx_layout_kwargs(block.layout))
     if block.out_margins:
@@ -704,6 +755,16 @@ def _extract_hwpx_table(table) -> Table:
         "cell_fill_colors": fills, "cell_border_styles": borders,
     })
     setattr(result, "_docx_cell_content", rich)
+    setattr(result, "_hwpx_table_properties", {
+        "rows": result.rows, "cols": result.cols, "spans": result.cell_spans or {},
+        "attributes": dict(table.element.attrib),
+        "children": [etree.tostring(child) for child in table.element if etree.QName(child).localname in {"sz", "pos", "outMargin", "inMargin"}],
+        "cells": {(cell.row, cell.column): {
+            "attributes": dict(cell.element.attrib),
+            "sublist": dict(cell.element.find(qname("hp", "subList")).attrib),
+            "children": [etree.tostring(child) for child in cell.element if etree.QName(child).localname in {"cellAddr", "cellSpan", "cellSz", "cellMargin"}],
+        } for cell in cells},
+    })
     return result
 
 
@@ -792,7 +853,7 @@ def _extract_hwpx_equation(equation) -> Equation:
     from ._hancom_conversion_common import _normalize_int_map, _normalize_str_map
 
     size = equation.size()
-    return Equation(
+    result = Equation(
         script=equation.script,
         width=size.get("width", 4800),
         height=size.get("height", 2300),
@@ -804,6 +865,9 @@ def _extract_hwpx_equation(equation) -> Equation:
         out_margins=_normalize_int_map(equation.out_margins()),
         rotation=_normalize_str_map(equation.rotation()),
     )
+    setattr(result, "_hwpx_equation_baseline", equation.element.get("baseLine"))
+    setattr(result, "_hwpx_char_pr_id", equation.element.getparent().get("charPrIDRef", "0"))
+    return result
 
 
 def _extract_hwpx_chart(chart) -> Chart:

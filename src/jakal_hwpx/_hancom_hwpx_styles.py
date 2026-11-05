@@ -17,6 +17,14 @@ if TYPE_CHECKING:
 
 
 def _apply_styles(document: HwpxDocument, hancom_document: HancomDocument) -> None:
+    def discard_originals(nodes):
+        for old in nodes:
+            parent = old.getparent()
+            parent.remove(old)
+            parent.set("itemCnt", str(len(parent)))
+        if nodes:
+            document.header.mark_modified()
+
     for raw in getattr(hancom_document, "_hwpx_ref_resources", []):
         node = etree.fromstring(raw)
         ref_list = document.header.root_element.find(qname("hh", "refList"))
@@ -35,12 +43,30 @@ def _apply_styles(document: HwpxDocument, hancom_document: HancomDocument) -> No
         etree.SubElement(tab_properties, qname("hh", "tabPr"), id="0", autoTabLeft="0", autoTabRight="0")
         document.header.mark_modified()
     for style in hancom_document.paragraph_styles:
+        originals = list(document.header.root_element.xpath(".//hh:paraProperties/hh:paraPr[@id=$id]", namespaces=NS, id=style.style_id or ""))
         appended = document.append_paragraph_style(
             style_id=style.style_id,
             alignment_horizontal=style.alignment_horizontal,
             alignment_vertical=style.alignment_vertical,
             line_spacing=None,
         )
+        discard_originals(originals)
+        if style.native_hwpx_xml is not None:
+            from copy import deepcopy
+            original = etree.fromstring(style.native_hwpx_xml)
+            appended.element.attrib.update(original.attrib)
+            appended.element.set("id", str(style.style_id))
+            for child in list(appended.element):
+                appended.element.remove(child)
+            for child in original:
+                appended.element.append(deepcopy(child))
+            from dataclasses import fields
+            from ._hancom_styles import _extract_paragraph_style
+            baseline = _extract_paragraph_style(appended)
+            if all(getattr(style, item.name) == getattr(baseline, item.name)
+                   for item in fields(style) if item.name not in {"native_hwpx_xml", "native_hwp_payload", "style_id"}):
+                document.header.mark_modified()
+                continue
         for key, value in {
             "tabPrIDRef": style.tab_pr_id,
             "snapToGrid": style.snap_to_grid,
@@ -107,16 +133,19 @@ def _apply_styles(document: HwpxDocument, hancom_document: HancomDocument) -> No
             style.style_id = appended.style_id
 
     for style in hancom_document.character_styles:
+        originals = list(document.header.root_element.xpath(".//hh:charProperties/hh:charPr[@id=$id]", namespaces=NS, id=style.style_id or ""))
         appended = document.append_character_style(
             style_id=style.style_id,
             text_color=style.text_color,
             height=style.height,
         )
+        discard_originals(originals)
         if style.native_hwpx_xml is not None:
             from copy import deepcopy
 
             original = etree.fromstring(style.native_hwpx_xml)
             appended.element.attrib.update(original.attrib)
+            appended.element.set("id", str(style.style_id))
             for child in list(appended.element):
                 appended.element.remove(child)
             for child in original:
@@ -128,11 +157,13 @@ def _apply_styles(document: HwpxDocument, hancom_document: HancomDocument) -> No
         for name, enabled in (("bold", style.bold), ("italic", style.italic)):
             if enabled is None:
                 continue
+            if style.native_hwpx_xml is not None and bool(appended.element.find(qname("hh", name)) is not None) == enabled:
+                continue
             for node in appended.element.findall(qname("hh", name)):
                 appended.element.remove(node)
             if enabled:
                 node = etree.Element(qname("hh", name))
-                underline = appended.element.find(qname("hh", "underline"))
+                underline = next((child for child in appended.element if etree.QName(child).localname in {"underline", "strikeout", "outline", "shadow"}), None)
                 if underline is not None:
                     underline.addprevious(node)
                 else:
@@ -159,7 +190,9 @@ def _apply_styles(document: HwpxDocument, hancom_document: HancomDocument) -> No
                 if family is None:
                     family = etree.SubElement(fontfaces, qname("hh", "fontface"), lang=lang.upper(), fontCnt="0")
                 fonts = list(family)
-                font = next((font for font in fonts if font.get("face") == face_name), None)
+                font = next((font for font in fonts if font.get("id") == font_refs.get(lang) and font.get("face") == face_name), None)
+                if font is None:
+                    font = next((font for font in fonts if font.get("face") == face_name), None)
                 if font is None:
                     font = etree.SubElement(family, qname("hh", "font"), id=str(len(fonts)), face=face_name, type="TTF", isEmbedded="0")
                 font_refs[lang] = font.get("id", "0")
@@ -199,6 +232,7 @@ def _apply_styles(document: HwpxDocument, hancom_document: HancomDocument) -> No
             style.style_id = appended.style_id
 
     for style in hancom_document.style_definitions:
+        originals = list(document.header.root_element.xpath(".//hh:styles/hh:style[@id=$id]", namespaces=NS, id=style.style_id or ""))
         document.append_style(
             style.name,
             english_name=style.english_name,
@@ -210,6 +244,7 @@ def _apply_styles(document: HwpxDocument, hancom_document: HancomDocument) -> No
             lang_id=style.lang_id,
             lock_form=style.lock_form,
         )
+        discard_originals(originals)
 
     for memo_shape in hancom_document.memo_shape_definitions:
         appended = document.append_memo_shape(

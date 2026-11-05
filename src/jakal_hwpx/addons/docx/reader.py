@@ -50,6 +50,8 @@ def populate_from_docx(target: HancomDocument, path: Path) -> None:
     from docx.table import Table as DocxTable
 
     reader = _DocxReader(target)
+    from .native_properties import Restore
+    reader.native = Restore(source, target)
     math_ns = "{http://schemas.openxmlformats.org/officeDocument/2006/math}"
     justification = source.settings.element.find("./" + math_ns + "mathPr/" + math_ns + "defJc")
     reader.math_justification = justification.get(math_ns + "val", "centerGroup") if justification is not None else "centerGroup"
@@ -58,6 +60,8 @@ def populate_from_docx(target: HancomDocument, path: Path) -> None:
     reader.source_path = path
     reader.controls = capture_controls(source.element)
     target._word_resources = capture_resources(source)
+    if reader.native.records:
+        target._word_resources["native_hwpx_origin"] = True
     target._word_feature_model = True
     reader.source_paths = {projected: raw.getroottree().getelementpath(raw)
                            for projected, raw in zip(source.element.iter(), original.element.iter())}
@@ -119,6 +123,7 @@ def populate_from_docx(target: HancomDocument, path: Path) -> None:
             if isinstance(item, DocxTable):
                 block = reader.table(item)
                 _mark_source(block, paragraph_index * 100000, 0)
+                reader.native.table(item._tbl, block)
                 setattr(block, "_docx_source_path", reader.source_paths.get(item._tbl))
                 if reader.controls.get(item._tbl):
                     setattr(block, "_word_extra", {**getattr(block, "_word_extra", {}), "controls": reader.controls[item._tbl]})
@@ -130,6 +135,7 @@ def populate_from_docx(target: HancomDocument, path: Path) -> None:
                     continue
                 section.blocks.extend(reader.paragraph(item, paragraph_index))
         reader.headers(source_section, section, inherited_headers, source.settings)
+        reader.native.section(source_section._sectPr, section.settings, section=section, source=source_section)
     if not target.sections:
         target.sections.append(HancomSection())
     definitions = {style.style_id: style for style in target.style_definitions}
@@ -140,6 +146,7 @@ def populate_from_docx(target: HancomDocument, path: Path) -> None:
                 definitions[reader._named_styles[style.style_id]].next_style_id = reader._named_styles.get(following.style_id)
     from .preservation import capture_docx_source
 
+    reader.native.finish()
     capture_docx_source(target, original, path)
 
 
@@ -179,6 +186,7 @@ def _border_styles(node: Any) -> dict[str, dict[str, str | int]]:
     for side, names in (
         ("left", ("left", "start")), ("right", ("right", "end")),
         ("top", ("top",)), ("bottom", ("bottom",)),
+        ("insideH", ("insideH",)), ("insideV", ("insideV",)),
     ):
         for name in names:
             edge = node.find(qn("w:" + name))
@@ -272,6 +280,7 @@ _NOTE_FORMATS = {"decimal": "DIGIT", "lowerRoman": "ROMAN_SMALL", "upperRoman": 
 class _DocxReader:
     def __init__(self, target: HancomDocument) -> None:
         self.target = target
+        self.native: Any = None
         self.math_justification = "centerGroup"
         self.default_run_properties: Any = None
         self.default_paragraph_format: Any = None
@@ -287,6 +296,7 @@ class _DocxReader:
         self.note_formats: dict[str, str] = {}
         self.note_counts: dict[str, int] = {}
         self.pending_breaks: dict[Any, str] = {}
+        self.pending_break_properties: dict[Any, str] = {}
         self.source_path = Path(".")
         self.controls: dict[Any, list[dict[str, Any]]] = {}
         self.table_context: dict[str, Any] = {}
@@ -323,6 +333,8 @@ class _DocxReader:
                 and all(child.tag in {qn("w:pPr"), qn("w:r")} for child in source._p)):
             previous = self.pending_breaks.get(source._p.getparent())
             self.pending_breaks[source._p.getparent()] = run_children[0].get(qn("w:type"))
+            from .features import xml
+            self.pending_break_properties[source._p.getparent()] = str(xml(source._p))
             if previous:
                 carrier = Paragraph("", para_pr_id=self.paragraph_style(source), style_id=self.named_style(source))
                 setattr(carrier, "_hwpx_paragraph_attributes", {"pageBreak" if previous == "page" else "columnBreak": "1"})
@@ -331,6 +343,7 @@ class _DocxReader:
                 return [carrier]
             return []
         pending_break = self.pending_breaks.pop(source._p.getparent(), None)
+        pending_break_properties = self.pending_break_properties.pop(source._p.getparent(), None)
 
         para_id = self.paragraph_style(source)
         math_nodes = [node for node in source._p if node.tag in {qn("m:oMath"), qn("m:oMathPara")}]
@@ -398,6 +411,8 @@ class _DocxReader:
                                                      "math": capture_properties(node), "display": tag.localname == "oMathPara"})
                     if unsupported:
                         setattr(equation, "_unsupported_word_math", unsupported)
+                    if inner is not None:
+                        self.native.equation(inner, equation)
                     append(equation)
                 continue
             if tag.namespace != word_ns or tag.localname not in {"r", "hyperlink"}:
@@ -461,7 +476,8 @@ class _DocxReader:
         if not blocks:
             from docx.oxml import OxmlElement
 
-            char_id = self.character_style(source, DocxRun(OxmlElement("w:r"), source))
+            empty_run = source._p.find(qn("w:r"))
+            char_id = self.character_style(source, DocxRun(empty_run if empty_run is not None else OxmlElement("w:r"), source))
             append(Paragraph("", style_id=style_id, para_pr_id=para_id, char_pr_id=char_id))
         # A leading empty paragraph carries alignment for picture/link-only paragraphs.
         elif not isinstance(blocks[0], Paragraph):
@@ -498,6 +514,8 @@ class _DocxReader:
                                               "no_runs": not any(True for _ in source._p.iter(qn("w:r")))})
                 paragraph_style = next((style for style in self.target.paragraph_styles if style.style_id == block.para_pr_id), None)
                 if paragraph_style is not None:
+                    from .features import paragraph_projection
+                    getattr(block, "_word_extra")["paragraph_projection"] = paragraph_projection(paragraph_style)
                     getattr(block, "_word_extra")["layout_switches"] = dict(getattr(paragraph_style, "_word_extra", {}).get("layout_switches", {}))
                 character = next((style for style in self.target.character_styles if style.style_id == block.char_pr_id), None)
                 if character is not None and getattr(character, "_word_extra", None):
@@ -507,6 +525,11 @@ class _DocxReader:
                     getattr(block, "_word_extra")["controls"] = controls
         if pending_break:
             setattr(blocks[0], "_hwpx_paragraph_attributes", {"pageBreak" if pending_break == "page" else "columnBreak": "1"})
+            if pending_break_properties:
+                extra = getattr(blocks[0], "_word_extra", {})
+                extra["preceding_break"] = {"kind": pending_break, "paragraph": pending_break_properties}
+                setattr(blocks[0], "_word_extra", extra)
+        self.native.paragraph(source._p, blocks)
         return blocks
 
     def field(self, node: Any, source: Any) -> Field | AutoNumber:
@@ -860,7 +883,7 @@ class _DocxReader:
         tab_stops = getattr(style, "_docx_tab_stops", [])
         key = repr(style) + repr(tab_stops)
         if key not in self._paragraph_styles:
-            style.style_id = str(len(self._paragraph_styles) + 1)
+            style.style_id = str(max([int(item.style_id) for item in self.target.paragraph_styles if str(item.style_id).isdigit()] or [0]) + 1)
             self.target.paragraph_styles.append(style)
             self._paragraph_styles[key] = style.style_id
         return self._paragraph_styles[key]
@@ -901,7 +924,7 @@ class _DocxReader:
             from docx.oxml import OxmlElement
             from docx.text.run import Run
 
-            style_id = str(len(self._named_styles) + 1)
+            style_id = str(max([int(item.style_id) for item in self.target.style_definitions if str(item.style_id).isdigit()] or [0]) + 1)
             self._named_styles[style.style_id] = style_id
             char_id = self.character_style(source, Run(OxmlElement("w:r"), source))
             self.target.style_definitions.append(StyleDefinition(
@@ -916,6 +939,9 @@ class _DocxReader:
 
     def character_style(self, paragraph: Any, run: Any) -> str | None:
         from docx.oxml.ns import qn
+        native = self.native.character(run._r)
+        if native is not None:
+            return native
 
         properties = [run._r.rPr]
         properties.extend(style.element.rPr for style in _style_chain(run.style))
@@ -997,7 +1023,7 @@ class _DocxReader:
             "bold", "italic", "height", "font_names", "font_ratios", "text_color", "shade_color", "underline", "strikeout", "script_position")}})
         key = json.dumps({"color": color, "height": height, "fonts": fonts, "ratios": font_ratios, "bold": style.bold, "italic": style.italic, "underline": style.underline, "strikeout": style.strikeout, "shade": style.shade_color, "position": style.script_position, "rPr": resolved}, sort_keys=True)
         if key not in self._character_styles:
-            style_id = str(len(self._character_styles) + 1)
+            style_id = str(max([int(item.style_id) for item in self.target.character_styles if str(item.style_id).isdigit()] or [0]) + 1)
             style.style_id = style_id
             self.target.character_styles.append(style)
             self._character_styles[key] = style_id

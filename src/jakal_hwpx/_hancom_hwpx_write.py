@@ -580,6 +580,11 @@ def _apply_hwpx_paragraph_style_block(
     paragraph = document._paragraph_element(section_index, paragraph_index)
     protected = [(run, run.get("charPrIDRef")) for run in paragraph.findall(qname("hp", "run"))
                  if run.xpath(".//hp:fieldBegin/hp:parameters/*[@name='JakalFieldKind' and text()='JAKAL_WORD_FEATURE']", namespaces=NS)]
+    empty = getattr(block, "_hwpx_empty_runs", getattr(block, "_word_extra", {}).get("native_empty_runs"))
+    if empty is not None:
+        if not hasattr(document, "_hwpx_empty_runs"):
+            document._hwpx_empty_runs = {}
+        document._hwpx_empty_runs[paragraph] = empty
     document.apply_style_to_paragraph(
         section_index,
         paragraph_index,

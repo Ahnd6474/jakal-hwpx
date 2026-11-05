@@ -209,8 +209,9 @@ def test_standalone_page_break_does_not_create_an_extra_blank_line(tmp_path: Pat
         assert result.paragraphs[1]._p.xpath('./w:r/w:br[@w:type="page"]')
         assert result.tables[0].cell(0, 0).text == "Second page table"
     else:
-        assert [p.text for p in result.paragraphs] == ["First page", "Second page"]
-        assert result.paragraphs[1].paragraph_format.page_break_before
+        assert [p.text for p in result.paragraphs] == ["First page", "", "Second page"]
+        assert result.paragraphs[1]._p.xpath('./w:r/w:br[@w:type="page"]')
+        assert result.paragraphs[2].paragraph_format.page_break_before is None
 
 
 def test_fields_bookmarks_and_page_breaks_keep_their_effect(tmp_path: Path) -> None:

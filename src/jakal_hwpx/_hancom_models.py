@@ -550,6 +550,7 @@ class ParagraphStyle:
     break_setting: dict[str, str] = field(default_factory=dict)
     auto_spacing: dict[str, str] = field(default_factory=dict)
     native_hwp_payload: bytes | None = None
+    native_hwpx_xml: bytes | None = None
 
 
 @dataclass

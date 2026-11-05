@@ -370,6 +370,8 @@ def _extract_hwpx_run_node(section, node: etree._Element) -> HancomBlock | list[
         paragraphs = node.xpath("ancestor::hp:p[1]", namespaces=NS)
         if paragraphs:
             setattr(table, "_hwpx_paragraph_attributes", {key: paragraphs[0].get(key, "0") for key in ("pageBreak", "columnBreak")})
+            run = node.getparent()
+            setattr(table, "_hwpx_anchor_paragraph", _build_hwpx_paragraph_block(paragraphs[0], "", char_pr_id=run.get("charPrIDRef")))
         return table
     if local_name == "pic":
         return _extract_hwpx_picture(_build_picture_wrapper(section, node))
@@ -434,6 +436,10 @@ def _build_hwpx_paragraph_block(paragraph, text: str, *, char_pr_id: str | None 
         char_pr_id=char_pr_id or _extract_hwpx_paragraph_char_pr_id(paragraph),
     )
     setattr(result, "_hwpx_paragraph_attributes", {key: paragraph.get(key, "0") for key in ("pageBreak", "columnBreak", "merged")})
+    from ._hancom_text_layout import capture_empty_runs
+    empty = capture_empty_runs(paragraph)
+    if empty is not None:
+        setattr(result, "_hwpx_empty_runs", empty)
     return result
 
 

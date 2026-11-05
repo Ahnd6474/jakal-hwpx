@@ -12,9 +12,20 @@ from typing import Any
 
 from lxml import etree
 
-from ..._hancom_models import Field, Paragraph, Table
+from ..._hancom_models import CharacterStyle, Field, Paragraph, Table
 
 FEATURE = "JAKAL_WORD_FEATURE"
+
+
+def paragraph_projection(style):
+    """Canonical editable paragraph values, including native HWPX defaults."""
+    return {
+        "alignment": style.alignment_horizontal or "JUSTIFY",
+        "margins": {key: float(style.margins.get(key, 0)) for key in ("left", "right", "intent", "prev", "next")},
+        "spacing": [style.line_spacing_type or "PERCENT", float(style.line_spacing if style.line_spacing is not None else 160)],
+        "breaks": {key: str(style.break_setting.get(key, "0")) for key in ("keepWithNext", "keepLines", "pageBreakBefore", "widowOrphan")},
+        "tabs": getattr(style, "_docx_tab_stops", []),
+    }
 
 
 def character_signature(style):
@@ -60,15 +71,33 @@ def children(block: Any):
 def carrier_model(document: Any) -> Any:
     result = copy(document)
     result.sections = deepcopy(document.sections)
+    result.character_styles = list(document.character_styles)
+    marker_style_id = next((style.style_id for style in result.character_styles if str(style.height) == "1" and not getattr(style, "_word_extra", None)), None)
+    if marker_style_id is None:
+        marker_style_id = str(max([int(style.style_id) for style in result.character_styles if str(style.style_id).isdigit()] or [0]) + 1)
+        result.character_styles.append(CharacterStyle(style_id=marker_style_id, height=1))
     result._word_carriers_prepared = True
 
     def marker(properties, block=None):
         field = Field(FEATURE, display_text="", parameters={"Record": json.dumps(properties, ensure_ascii=True)})
+        setattr(field, "_docx_char_pr_id", marker_style_id)
         if block is not None:
             for key in ("source_paragraph_index", "nested_paragraph_index"):
                 if hasattr(block, key):
                     setattr(field, key, getattr(block, key))
         return field
+
+    def prefix(values, fields):
+        first = next((item for item in values if not (isinstance(item, Field) and item.field_type == FEATURE)), None)
+        if isinstance(first, Table) and getattr(first, "_docx_cell_content", None):
+            baseline, content = first._docx_cell_content[min(first._docx_cell_content)]
+            for field in fields:
+                setattr(field, "nested_paragraph_index", getattr(content[0], "nested_paragraph_index", 0) if content else 0)
+            content[:0] = fields
+            for index, item in enumerate(content):
+                setattr(item, "nested_source_order", index)
+        else:
+            values[:0] = fields
 
     def prepare(values):
         output = []
@@ -81,7 +110,12 @@ def carrier_model(document: Any) -> Any:
                 if isinstance(block, Paragraph) and not block.text:
                     record["empty_paragraph"] = {"para_pr_id": block.para_pr_id, "style_id": block.style_id,
                                                   "char_pr_id": block.char_pr_id}
-                output.append(marker(record, block))
+                if isinstance(block, Table) and getattr(block, "_docx_cell_content", None):
+                    record["kind"] = "parent_table"
+                    temporary = [block]
+                    prefix(temporary, [marker(record)])
+                else:
+                    output.append(marker(record, block))
             output.append(block)
         for index, block in enumerate(output):
             setattr(block, "source_order", index)
@@ -95,7 +129,7 @@ def carrier_model(document: Any) -> Any:
             first = section.blocks[0] if section.blocks else None
             field = marker({"kind": "section", "properties": properties}, first)
             setattr(field, "source_order", -1)
-            section.blocks.insert(0, field)
+            prefix(section.blocks, [field])
         for story in section.header_footer_blocks:
             if getattr(story, "nested_blocks", None):
                 story.nested_blocks = prepare(story.nested_blocks)
@@ -105,22 +139,21 @@ def carrier_model(document: Any) -> Any:
         prefixes = []
         for style in document.character_styles:
             if getattr(style, "_word_extra", None):
-                field = marker({"kind": "character", "id": style.style_id, "properties": style._word_extra}, first)
-                setattr(field, "_docx_char_pr_id", style.style_id)
+                field = marker({"kind": "character", "id": style.style_id, "signature": character_signature(style), "properties": style._word_extra}, first)
                 prefixes.append(field)
         resources = getattr(document, "_word_resources", None)
         if resources:
             prefixes.append(marker({"kind": "resources", "properties": resources}, first))
         for index, field in enumerate(prefixes):
             setattr(field, "source_order", -len(prefixes) + index)
-        values[:0] = prefixes
+        prefix(values, prefixes)
     return result
 
 
 def restore_carriers(document: Any) -> None:
     characters = {style.style_id: style for style in document.character_styles}
 
-    def restore(values, settings=None):
+    def restore(values, settings=None, owner=None):
         output = []
         pending = []
         for block in values:
@@ -131,13 +164,21 @@ def restore_carriers(document: Any) -> None:
                     raise ValueError("Invalid Word feature property record.") from error
                 kind = record.get("kind")
                 if kind == "character":
-                    style_id = getattr(block, "_docx_char_pr_id", record.get("id"))
+                    if "signature" in record:
+                        style_id = record.get("id")
+                        if style_id not in characters or character_signature(characters[style_id]) != record["signature"]:
+                            matching = [key for key, style in characters.items() if character_signature(style) == record["signature"]]
+                            style_id = matching[0] if len(matching) == 1 else None
+                    else:
+                        style_id = getattr(block, "_docx_char_pr_id", record.get("id"))
                     if style_id in characters:
                         setattr(characters[style_id], "_word_extra", record["properties"])
                 elif kind == "resources":
                     document._word_resources = record["properties"]
                 elif kind == "section" and settings is not None:
                     setattr(settings, "_word_extra", record["properties"])
+                elif kind == "parent_table" and isinstance(owner, Table):
+                    setattr(owner, "_word_extra", record["properties"])
                 elif kind == "block":
                     if "empty_paragraph" in record:
                         paragraph = Paragraph("", **record["empty_paragraph"])
@@ -161,7 +202,7 @@ def restore_carriers(document: Any) -> None:
                     pending.remove(record)
                     break
             for nested in children(block):
-                nested[:] = restore(nested)
+                nested[:] = restore(nested, settings, block if isinstance(block, Table) else owner)
             output.append(block)
         if pending:
             # A deleted native object must not cause its old properties to be
@@ -173,11 +214,33 @@ def restore_carriers(document: Any) -> None:
         section.blocks = restore(section.blocks, section.settings)
         for story in section.header_footer_blocks:
             if getattr(story, "nested_blocks", None):
-                story.nested_blocks = restore(story.nested_blocks)
+                story.nested_blocks = restore(story.nested_blocks, section.settings)
     document._word_feature_model = True
     from .native_effects import restore_list_styles
 
     restore_list_styles(document)
+
+
+def normalize_carrier_fonts(document):
+    """Empty technical field runs must not enlarge a paragraph's line box."""
+    from ...namespaces import NS
+    from ..._hancom_hwpx_write import _word_effect_from_field_name
+    for section in document.sections:
+        for begin in section.root_element.xpath(".//hp:fieldBegin", namespaces=NS):
+            record = _word_effect_from_field_name(begin.get("name"))
+            if not record or record.get("kind") != FEATURE:
+                continue
+            start = begin.getparent().getparent()
+            paragraph = start.getparent()
+            runs = [start, *start.itersiblings()]
+            end = next((index for index, run in enumerate(runs)
+                        if run.xpath("./hp:ctrl/hp:fieldEnd[@beginIDRef=$id]", namespaces=NS, id=begin.get("id"))), None)
+            if end is None:
+                raise ValueError("Unclosed Word feature property carrier.")
+            for run in runs[:end + 1]:
+                run.set("charPrIDRef", start.get("charPrIDRef", "0"))
+            if paragraph is not None:
+                section.mark_modified()
 
 
 def capture_controls(root: Any) -> dict[Any, list[dict[str, Any]]]:
@@ -314,6 +377,9 @@ def capture_resources(word: Any) -> dict:
 
     custom = {}
     for part in word.part.package.parts:
+        from .native_properties import PART as native_properties_part
+        if str(part.partname) == native_properties_part:
+            continue  # Already restored to native properties; do not nest a second copy in HWPX fields.
         if str(part.partname).startswith("/customXml/"):
             custom[str(part.partname)] = {
                 "content_type": part.content_type, "data": base64.b64encode(part.blob).decode("ascii"),
@@ -363,7 +429,8 @@ def capture_resources(word: Any) -> dict:
             "paragraph_styles": paragraph_styles,
             "compatibility": xml(word.settings.element.find(qn("w:compat"))),
             "custom_links": [{"type": rel.reltype, "target": str(rel.target_part.partname)}
-                             for rel in word.part.rels.values() if not rel.is_external and rel.reltype.endswith("/customXml")]}
+                             for rel in word.part.rels.values() if not rel.is_external and rel.reltype.endswith("/customXml")
+                             and str(rel.target_part.partname) != native_properties_part]}
 
 
 def restore_resources(word: Any, resources: dict) -> None:

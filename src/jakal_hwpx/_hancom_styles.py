@@ -109,6 +109,7 @@ def _extract_paragraph_style(style) -> ParagraphStyle:
     line_spacing_types = style.element.xpath(".//hh:lineSpacing/@type", namespaces=NS)
     result = ParagraphStyle(
         style_id=style.style_id,
+        native_hwpx_xml=etree.tostring(style.element),
         alignment_horizontal=style.alignment_horizontal,
         alignment_vertical=style.element.xpath("./hh:align/@vertical", namespaces=NS)[0]
         if style.element.xpath("./hh:align/@vertical", namespaces=NS)

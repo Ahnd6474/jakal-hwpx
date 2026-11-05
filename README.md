@@ -150,6 +150,42 @@ automatic lists, fields, and genuine footnotes. Add `--image path/to/image.png`
 to include a picture. Both examples write DOCX, HWPX, and restored DOCX files.
 Use `doc.append_paragraphs(texts)` to add many paragraphs with one model refresh.
 
+For nested tables, repeating table headers, alternating page stories, a multi-paragraph
+footnote, equations and landscape pages, run
+`python examples/docx_complex_roundtrip.py --output-dir build/complex-word` (requires Pillow).
+Export `source.docx` and `returned.docx` to PDF in the same Word installation, then compare
+every page without resizing or aligning it:
+
+```sh
+python scripts/compare_document_pdfs.py build/complex-word/source.pdf build/complex-word/returned.pdf --output-dir build/complex-word/comparison
+```
+
+The comparison needs Pillow, numpy, pdfplumber and Poppler's `pdftoppm` on PATH
+(or `--pdftoppm path/to/pdftoppm`). It writes per-page metrics, differences and a contact
+sheet. White background does not count toward fidelity. Missing pages or different page
+sizes invalidate the aggregate score. Four HWPX-origin forms/reports (14 pages) now
+match every pixel after HWPX→DOCX→HWPX at 120dpi. The native path preserves the source
+version, print settings and empty-run font metrics, and keeps technical Word properties
+in a separate HWPX addon part so they do not change text justification. Hancom's own
+HWPX SaveAs removes that addon part, so supplementary Word formatting and object IDs
+stored only there are not guaranteed across that external resave. Some other complex
+documents still have layout differences; see the dated results in the
+[fidelity benchmark](docs/docx-fidelity-benchmark.md#2026-11-05-복잡한-문서의-양방향-왕복-검증).
+
+To isolate body text, tables and editable equations from native drawings, pictures,
+automatic numbers and page decorations, run:
+
+```sh
+python scripts/validate_hwpx_math_body.py examples/samples/hwpx/spacing_fix.hwpx --output-dir build/math-body
+```
+
+The original stays untouched. The tool writes an isolated `body-source.hwpx`,
+`middle.docx`, `returned.hwpx`, `direct.hwpx` and `structure.json` with paragraph/equation
+counts, body order and math structure checks. Export the isolated reference and result
+in the same Hancom installation and compare their PDFs using the command above.
+The structural report alone does not certify layout; see the
+[body/math benchmark](docs/docx-fidelity-benchmark.md#수식본문-분리-검증).
+
 #### Interact through stable object IDs
 
 `WordEndpoint(doc)` exposes snapshots, document versions and atomic edits by UUID.

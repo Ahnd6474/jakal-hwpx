@@ -247,7 +247,7 @@ def test_implicit_word_table_layout_does_not_become_centered_or_justified(tmp_pa
     table.cell(0, 0).text = "short line\nnext line"
     result, _ = _word_cycle(word, tmp_path)
     cell = result.tables[0].cell(0, 0)
-    assert cell.paragraphs[0].alignment == WD_ALIGN_PARAGRAPH.LEFT
+    assert cell.paragraphs[0].alignment is None  # Retain the original default-left inheritance.
     assert cell.vertical_alignment == WD_CELL_VERTICAL_ALIGNMENT.TOP
     assert cell._tc.tcPr.find(qn("w:tcMar")).find(qn("w:left")).get(qn("w:w")) == "108"
 

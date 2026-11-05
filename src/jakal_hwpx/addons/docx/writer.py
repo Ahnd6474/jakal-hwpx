@@ -78,10 +78,13 @@ def build_docx(document: Document) -> bytes:
             word.add_paragraph()
     if not document.sections:
         word.add_paragraph()
+    for section, source in zip(word.sections, document.sections):
+        writer.native.section(section._sectPr, source.settings, section=section, source=source)
     stream = BytesIO()
     clean_control_markers(word)
     synchronize_bindings(word)
     writer.restore_paragraph_anchors()
+    writer.native.save(word)
     word.save(stream)
     return stream.getvalue()
 
@@ -115,6 +118,8 @@ def _color(value: str | None) -> str | None:
 class _Writer:
     def __init__(self, source: Document, word: Any) -> None:
         self.source = source
+        from .native_properties import Capture
+        self.native = Capture(source)
         self.word = word
         self.anchored_paragraphs: set[Any] = set()
         self.characters = {style.style_id: _word_character_style(style) for style in source.character_styles}
@@ -294,6 +299,9 @@ class _Writer:
                 paragraph.paragraph_format.page_break_before = True
             return
         fmt = paragraph.paragraph_format
+        from .features import paragraph_projection
+        projection = paragraph_projection(style)
+        baseline_projection = getattr(block, "_word_extra", {}).get("paragraph_projection", {})
         alignment = {
             "LEFT": WD_ALIGN_PARAGRAPH.LEFT, "RIGHT": WD_ALIGN_PARAGRAPH.RIGHT,
             "CENTER": WD_ALIGN_PARAGRAPH.CENTER, "JUSTIFY": WD_ALIGN_PARAGRAPH.JUSTIFY,
@@ -302,7 +310,7 @@ class _Writer:
         raw_alignment = paragraph._p.xpath("./w:pPr/w:jc/@w:val") if native else []
         raw_equivalent = {"thaiDistribute": "DISTRIBUTE", "distribute": "DISTRIBUTE", "mediumKashida": "JUSTIFY",
                           "highKashida": "JUSTIFY", "lowKashida": "JUSTIFY"}.get(raw_alignment[0]) if raw_alignment else None
-        if alignment is not None and raw_equivalent != style.alignment_horizontal:
+        if alignment is not None and raw_equivalent != style.alignment_horizontal and projection["alignment"] != baseline_projection.get("alignment"):
             paragraph.alignment = alignment
         margins = style.margins
         native = getattr(style, "_docx_paragraph_margins", None)
@@ -310,9 +318,9 @@ class _Writer:
             margins = native[1]
         for key, attribute in (("left", "left_indent"), ("right", "right_indent"), ("intent", "first_line_indent"),
                                ("prev", "space_before"), ("next", "space_after")):
-            if key in margins:
+            if key in margins and projection["margins"][key] != baseline_projection.get("margins", {}).get(key):
                 setattr(fmt, attribute, _length(margins[key]))
-        if style.line_spacing is not None:
+        if style.line_spacing is not None and projection["spacing"] != baseline_projection.get("spacing"):
             spacing = float(style.line_spacing)
             kind = style.line_spacing_type or "PERCENT"
             if kind == "PERCENT":
@@ -324,7 +332,7 @@ class _Writer:
                 self.warn("Unsupported paragraph line-spacing mode: " + kind)
         for key, attribute in (("keepWithNext", "keep_with_next"), ("keepLines", "keep_together"),
                                ("pageBreakBefore", "page_break_before"), ("widowOrphan", "widow_control")):
-            if key in style.break_setting:
+            if key in style.break_setting and projection["breaks"][key] != baseline_projection.get("breaks", {}).get(key):
                 setattr(fmt, attribute, str(style.break_setting[key]).lower() in {"1", "true"})
         from .editing_format import replace
         switches = {"autoSpaceDE": style.auto_spacing.get("eAsianEng"), "autoSpaceDN": style.auto_spacing.get("eAsianNum"),
@@ -340,13 +348,14 @@ class _Writer:
                 if word_origin and (not extra or normalized == baseline.get(name)):
                     continue  # Keep native inheritance when projection values did not change.
                 replace(paragraph._p.get_or_add_pPr(), name, {"val": normalized})
-        if attributes.get("pageBreak") == "1":
+        preceding = getattr(block, "_word_extra", {}).get("preceding_break", {}).get("kind")
+        if attributes.get("pageBreak") == "1" and preceding != "page":
             fmt.page_break_before = True
-        if attributes.get("columnBreak") == "1":
+        if attributes.get("columnBreak") == "1" and preceding != "column":
             from docx.enum.text import WD_BREAK
 
             paragraph.add_run().add_break(WD_BREAK.COLUMN)
-        if hasattr(style, "_docx_tab_stops"):
+        if hasattr(style, "_docx_tab_stops") and projection["tabs"] != baseline_projection.get("tabs"):
             from docx.enum.text import WD_TAB_ALIGNMENT, WD_TAB_LEADER
 
             fmt.tab_stops.clear_all()
@@ -361,6 +370,7 @@ class _Writer:
             self.list_label(paragraph, Field("JAKAL_LIST_LABEL", parameters=native_list))
         elif style.heading.get("type", "NONE") != "NONE":
             self.warn("Automatic numbering/bullets are not mapped to Word list definitions.")
+        self.native.paragraph(paragraph._p, block, style)
 
     def restore_paragraph_anchors(self):
         from docx.oxml import OxmlElement
@@ -429,13 +439,14 @@ class _Writer:
                 attrs["color"] = str(_color(style.underline["color"]))
             _element(run._r.get_or_add_rPr(), "u", **attrs)
         if style.strikeout and changed("strikeout"):
-            run.font.strike = style.strikeout.get("shape", "NONE") != "NONE"
+            run.font.strike = style.strikeout.get("shape", "NONE") not in {"NONE", "3D"}
         if style.script_position is not None and changed("script_position"):
             run.font.superscript = style.script_position == "SUPERSCRIPT"
             if style.script_position == "SUBSCRIPT":
                 run.font.subscript = True
         if style.font_ratios.get("latin") and changed("font_ratios"):
             _element(run._r.get_or_add_rPr(), "w", val=style.font_ratios["latin"])
+        self.native.character(run._r, style)
 
     def blocks(self, container: Any, blocks: list[Any], *, first: Any = None, nested: bool = False) -> None:
         paragraph = None
@@ -448,10 +459,18 @@ class _Writer:
                 continue
             if getattr(block, "source_text_owned_by_container", False):
                 continue
+            attributes = getattr(block, "_hwpx_paragraph_attributes", {})
+            preceding = getattr(block, "_word_extra", {}).get("preceding_break", {})
+            break_key = "pageBreak" if preceding.get("kind") == "page" else "columnBreak"
+            restore_break = bool(preceding and attributes.get(break_key) == "1")
+            if restore_break and (paragraph is None or getattr(block, "nested_paragraph_index" if nested else "source_paragraph_index", None) != group):
+                from .features import parse
+                carrier = container.add_paragraph()
+                carrier._p.getparent().replace(carrier._p, parse(preceding["paragraph"]))
             if isinstance(block, Table):
                 attributes = getattr(block, "_hwpx_paragraph_attributes", {})
                 for key, kind in (("pageBreak", "PAGE"), ("columnBreak", "COLUMN")):
-                    if attributes.get(key) == "1":
+                    if attributes.get(key) == "1" and not (restore_break and key == break_key):
                         from docx.enum.text import WD_BREAK
 
                         container.add_paragraph().add_run().add_break(getattr(WD_BREAK, kind))
@@ -469,6 +488,31 @@ class _Writer:
                 group = index
                 if isinstance(block, Paragraph):
                     self.paragraph_style(paragraph, block)
+                elif index is not None:
+                    # Word tables are block objects. A native inline table can
+                    # therefore split one HWPX paragraph into a table and a
+                    # following Word paragraph beginning with inline math.
+                    # Keep that paragraph's native identity/style on the tail.
+                    anchor = None
+                    for candidate in blocks[position + 1:]:
+                        if getattr(candidate, "nested_paragraph_index" if nested else "source_paragraph_index", None) != index:
+                            break
+                        if isinstance(candidate, Paragraph):
+                            anchor = candidate
+                            break
+                    if anchor is None:
+                        for candidate in reversed(blocks[:position + 1]):
+                            if getattr(candidate, "nested_paragraph_index" if nested else "source_paragraph_index", None) != index:
+                                break
+                            anchor = getattr(candidate, "_hwpx_anchor_paragraph", None)
+                            if anchor is not None:
+                                anchor = deepcopy(anchor)
+                                for key in ("source_paragraph_index", "nested_paragraph_index"):
+                                    if hasattr(block, key):
+                                        setattr(anchor, key, getattr(block, key))
+                                break
+                    if anchor is not None:
+                        self.paragraph_style(paragraph, anchor)
                 wrap_controls(paragraph._p, getattr(block, "_word_extra", {}).get("controls", []), level="block")
             following = blocks[position + 1] if position + 1 < len(blocks) else None
             if nested or not _is_owned_text_shadow_paragraph(block, following):
@@ -583,6 +627,7 @@ class _Writer:
             restore_properties(container, extra.get("math"))
             paragraph._p.append(container)
             assign(math, extra.get("identity"))
+            self.native.equation(math, block)
         elif isinstance(block, Note):
             self.note(paragraph, block)
         elif isinstance(block, Shape) and getattr(block, "_word_extra", {}).get("textbox"):

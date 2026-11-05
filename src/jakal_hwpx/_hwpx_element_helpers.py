@@ -11,6 +11,9 @@ from .namespaces import NS, qname
 
 
 _FORM_METADATA_COMMAND_PREFIX = "JAKAL_FORM_META:"
+_INLINE_TEXT_CHARACTERS = {qname("hp", "tab"): "\t", qname("hp", "lineBreak"): "\n",
+                           qname("hp", "nbSpace"): "\u00a0", qname("hp", "fwSpace"): "\u2007"}
+_INLINE_TEXT_TAGS = {value: key for key, value in _INLINE_TEXT_CHARACTERS.items()}
 
 
 def _text_nodes(element: etree._Element) -> list[etree._Element]:
@@ -543,10 +546,8 @@ def _set_crop_values(
 def _text_node_plain_text(node: etree._Element) -> str:
     chunks = [node.text or ""]
     for child in node:
-        if child.tag == qname("hp", "tab"):
-            chunks.append("\t")
-        elif child.tag == qname("hp", "lineBreak"):
-            chunks.append("\n")
+        if child.tag in _INLINE_TEXT_CHARACTERS:
+            chunks.append(_INLINE_TEXT_CHARACTERS[child.tag])
         else:
             chunks.append("".join(child.itertext()))
         chunks.append(child.tail or "")
@@ -558,14 +559,13 @@ def _set_text_node_content(node: etree._Element, text: str) -> None:
     previous_properties = [(child.tag, dict(child.attrib)) for child in node]
     for child in list(node):
         node.remove(child)
-    chunks = re.split(r"([\t\n])", text.replace("\r\n", "\n").replace("\r", "\n"))
-    control_tags = [qname("hp", "tab" if char == "\t" else "lineBreak") for char in chunks[1::2]]
+    chunks = re.split(r"([\t\n\u00a0\u2007])", text.replace("\r\n", "\n").replace("\r", "\n"))
+    control_tags = [_INLINE_TEXT_TAGS[char] for char in chunks[1::2]]
     preserve_properties = control_tags == [tag for tag, _ in previous_properties]
     node.text = chunks[0]
     for index in range(1, len(chunks), 2):
-        tag = "tab" if chunks[index] == "\t" else "lineBreak"
-        child = etree.SubElement(node, qname("hp", tag))
-        if tag == "tab":
+        child = etree.SubElement(node, _INLINE_TEXT_TAGS[chunks[index]])
+        if chunks[index] == "\t":
             child.attrib.update({"width": "0", "leader": "0", "type": "0"})
         if preserve_properties:
             child.attrib.update(previous_properties[(index - 1) // 2][1])
@@ -582,7 +582,7 @@ def _replace_text(element: etree._Element, old: str, new: str, count: int = -1) 
     remaining = count
     replaced = 0
     for node in _text_nodes(element):
-        plain_inline_content = all(child.tag in {qname("hp", "tab"), qname("hp", "lineBreak")} for child in node)
+        plain_inline_content = all(child.tag in _INLINE_TEXT_CHARACTERS for child in node)
         current = _text_node_plain_text(node) if plain_inline_content else node.text or ""
         if old not in current:
             continue

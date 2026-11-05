@@ -6,6 +6,22 @@ from typing import Any
 from ..._hancom_models import Table
 
 
+def border_signature(borders):
+    """Compare the Word and HWPX encodings of the same cell edges."""
+    result = {}
+    for side in ("left", "right", "top", "bottom"):
+        value = borders.get(side, {})
+        shape = value.get("style", value.get("type", "NONE"))
+        shape = {"SOLID": "single", "NONE": "nil", "none": "nil", "DASH": "dashed", "DOT": "dotted", "DOUBLE_SLIM": "double"}.get(shape, shape)
+        if shape == "nil":
+            result[side] = ["nil"]
+        else:
+            width = float(str(value.get("width", "0.1")).replace("mm", ""))
+            size = int(value["size"]) if "size" in value else max(2, round(width * 72 / 25.4 * 8))
+            result[side] = [shape, size, str(value.get("color", "000000")).lstrip("#").upper()]
+    return result
+
+
 def read_table(reader: Any, source: Any) -> Table:
     """Project a python-docx table into the shared table model."""
     from docx.oxml.ns import qn
@@ -56,19 +72,22 @@ def read_table(reader: Any, source: Any) -> Table:
                 overrides = _cell_margins(properties.find(qn("w:tcMar")) if properties is not None else None)
                 if overrides:
                     cell_margins[(row_index, column)] = {**table_margins, **overrides} if table_margins else overrides
-                borders = _border_styles(properties.find(qn("w:tcBorders")) if properties is not None else None)
+                cell_borders = _border_styles(properties.find(qn("w:tcBorders")) if properties is not None else None)
                 conditional_borders = _border_styles(resolved["tblPr"].find(qn("w:tblBorders")))
-                borders = {**conditional_borders, **borders}
+                inherited_borders = {**table_borders, **conditional_borders}
+                borders = {}
                 for side, inside, outer in (
                     ("top", "insideH", row_index == 0),
                     ("bottom", "insideH", row_index == rows - 1),
                     ("left", "insideV", column == 0),
                     ("right", "insideV", column == cols - 1),
                 ):
-                    if not outer and inside in borders:
-                        borders[side] = borders[inside]
-                if table_borders or borders:
-                    cell_border_styles[(row_index, column)] = {**table_borders, **borders}
+                    inherited = inherited_borders.get(side if outer else inside)
+                    edge = cell_borders.get(side, inherited)
+                    if edge is not None:
+                        borders[side] = edge
+                if borders:
+                    cell_border_styles[(row_index, column)] = borders
                     if any(
                         spec.get("style") not in {"single", "dashed", "dotted", "double", "none", "nil"}
                         for spec in cell_border_styles[(row_index, column)].values()
@@ -149,6 +168,10 @@ def read_table(reader: Any, source: Any) -> Table:
     pending = reader.pending_breaks.pop(source._tbl.getparent(), None)
     if pending:
         setattr(result, "_hwpx_paragraph_attributes", {"pageBreak" if pending == "page" else "columnBreak": "1"})
+        properties = reader.pending_break_properties.pop(source._tbl.getparent(), None)
+        if properties:
+            getattr(result, "_word_extra")["preceding_break"] = {"kind": pending, "paragraph": properties}
+    reader.native.table(source._tbl, result)
     return result
 
 
@@ -166,6 +189,9 @@ def write_table(writer: Any, container: Any, block: Table) -> None:
     widths = block.col_widths or details.get("col_widths")
     heights = block.row_heights or details.get("row_heights")
     original_columns = bool(native and widths == native.get("col_widths"))
+    original_grid = original_columns and native.get("spans") == {
+        f"{row},{col}": list(span) for (row, col), span in (block.cell_spans or {}).items()
+    }
     if native and block.row_heights is None:
         heights = native.get("row_heights")
     fills = block.cell_fill_colors if block.cell_fill_colors is not None else details.get("cell_fill_colors", {})
@@ -220,7 +246,7 @@ def write_table(writer: Any, container: Any, block: Table) -> None:
             source_properties = native.get("cells", {}).get(f"{row},{col}")
             if source_properties:
                 for node in parse(source_properties):
-                    if node.tag.rsplit("}", 1)[-1] not in {"gridSpan", "vMerge", "tcW"}:
+                    if node.tag.rsplit("}", 1)[-1] not in ({"gridSpan", "vMerge"} if original_grid else {"gridSpan", "vMerge", "tcW"}):
                         set_property(properties, node)
             fill = _color(fills.get((row, col)))
             if fill and fills.get((row, col)) != extra.get("fills", {}).get(f"{row},{col}"):
@@ -239,7 +265,7 @@ def write_table(writer: Any, container: Any, block: Table) -> None:
                 "BOTTOM": WD_CELL_VERTICAL_ALIGNMENT.BOTTOM,
             }.get(alignment, WD_CELL_VERTICAL_ALIGNMENT.CENTER)
             borders = border_styles.get((row, col), {})
-            if borders and borders != extra.get("borders", {}).get(f"{row},{col}"):
+            if borders and (not native or border_signature(borders) != border_signature(extra.get("borders", {}).get(f"{row},{col}", {}))):
                 node = _element(properties, "tcBorders")
                 for side, values in borders.items():
                     if side not in {"left", "right", "top", "bottom"}:
@@ -277,7 +303,7 @@ def write_table(writer: Any, container: Any, block: Table) -> None:
                     continue
                 properties = tc.get_or_add_tcPr()
                 for node in parse(raw):
-                    if node.tag.rsplit("}", 1)[-1] not in {"gridSpan", "vMerge", "tcW"}:
+                    if node.tag.rsplit("}", 1)[-1] not in ({"gridSpan", "vMerge"} if original_grid else {"gridSpan", "vMerge", "tcW"}):
                         set_property(properties, node)
                 origin = next(((a, b) for (a, b), (h, w) in (block.cell_spans or {}).items()
                                if a <= r < a + h and b <= tc.grid_offset < b + w), None)
@@ -307,3 +333,4 @@ def write_table(writer: Any, container: Any, block: Table) -> None:
         controls = native.get("row_controls", [])
         if row < len(controls):
             wrap_controls(item._tr, controls[row], level="row")
+    writer.native.table(table._tbl, block)

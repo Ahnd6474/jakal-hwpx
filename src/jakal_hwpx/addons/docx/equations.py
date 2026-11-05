@@ -10,8 +10,14 @@ from lxml import etree
 
 M = "http://schemas.openxmlformats.org/officeDocument/2006/math"
 NARY = {"sum": "∑", "prod": "∏", "coprod": "∐", "int": "∫", "oint": "∮", "iint": "∬", "iiint": "∭", "bigcup": "⋃", "bigcap": "⋂"}
+ACCENTS = {"hat": "̂", "check": "̌", "tilde": "̃", "acute": "́", "grave": "̀", "dot": "̇", "ddot": "̈", "vec": "⃗", "dyad": "⃡"}
+FONTS = {"rm": "p", "it": "i", "bold": "bi", "boldrm": "b"}
+SYMBOLS = {"geq": "≥", "leq": "≤", "neq": "≠", "times": "×", "pi": "π", "prime": "′",
+           "alpha": "α", "theta": "θ", "sigma": "σ", "rarrow": "→", "inf": "∞", "cdot": "·"}
+FUNCTIONS = {"sin", "cos", "tan", "cot", "log", "ln", "exp", "max", "min", "det", "gcd", "sec", "csc", "sinh", "cosh", "tanh"}
 SEMANTIC_PROPERTIES = {"naryPr": {"chr", "subHide", "supHide"}, "dPr": {"begChr", "endChr", "sepChr"},
-                       "fPr": {"type"}, "mPr": {"mcs"}, "rPr": {"aln"}}
+                       "fPr": {"type"}, "mPr": {"mcs"}, "rPr": {"aln", "sty"},
+                       "accPr": {"chr"}, "barPr": {"pos"}}
 
 
 def _tag(name: str) -> str:
@@ -59,7 +65,8 @@ def _projection(node):
             mapped.append((item, "delimiter_arguments"))
     records = []
     for item, kind in mapped:
-        path, child = [], item
+        path: list[int] = []
+        child = item
         while child is not projected:
             parent = child.getparent()
             path.insert(0, _children(parent).index(child))
@@ -176,12 +183,56 @@ def omml_to_hwp(node: etree._Element) -> str:
         return "" if child is None else omml_to_hwp(child)
 
     if name in {"oMath", "oMathPara", "num", "den", "e", "sup", "sub", "deg", "lim"}:
-        return "".join(omml_to_hwp(child) for child in node if not etree.QName(child).localname.endswith("Pr"))
+        parts = [omml_to_hwp(child) for child in node if not etree.QName(child).localname.endswith("Pr")]
+        value = ""
+        commands = r"^(?:sqrt|root|left|matrix|pile|lpile|rpile|eqalign|lim|bar|under|" + "|".join([*NARY, *ACCENTS, *FONTS, *sorted(FUNCTIONS)]) + r")\b"
+        previous = ""
+        for part in parts:
+            # HWP measures an operator next to a Roman label before the
+            # italic reset (e.g. ABC = it pi/2). Keep that boundary order.
+            if value.endswith(" it ") and re.fullmatch(r"[=+−*/<>:,;!-]+", part):
+                value = value[:-4] + part + " it "
+                previous = part
+                continue
+            if value and ((value[-1].isalnum() and re.match(commands, part))
+                          or previous in FUNCTIONS and part and part[0].isalnum()):
+                value += " "  # v + left, 15 + sqrt must remain separate tokens.
+            value += part
+            previous = part
+        return value
     if name == "r":
         text = "".join(child.text or "" for child in node if child.tag == _tag("t"))
+        text = text.replace("\u2005", "`").replace("\u00a0", "~")
         if re.search(r"[{}^_\\]", text):
             raise ValueError("Unsupported literal math operator in Word equation text; use native math structures or an external converter.")
+        for symbol_command, symbol in SYMBOLS.items():
+            text = text.replace(symbol, " " + symbol_command + " ")
+        style = node.find("./" + _tag("rPr") + "/" + _tag("sty"))
+        kind = style.get(_tag("val")) if style is not None else None
+        if kind == "p" and text in FUNCTIONS:
+            return text
+        if kind == "i":
+            # HWP math is italic by default. Roman/bold scopes below are
+            # braced, so repeating an italic switch changes token spacing.
+            return text
+        if kind in FONTS.values():
+            font_command = next(key for key, value in FONTS.items() if value == kind)
+            value = "{" + font_command + " {" + text + "}}"
+            # HWP font switches leak through brace groups. Reset Roman runs
+            # explicitly so a following delimiter/variable keeps math italics.
+            return value + " it " if kind == "p" else value
         return text
+    if name in {"bar", "acc"}:
+        if name == "bar":
+            position = node.find("./" + _tag("barPr") + "/" + _tag("pos"))
+            accent_command = "bar" if position is not None and position.get(_tag("val")) == "top" else "under"
+        else:
+            char = node.find("./" + _tag("accPr") + "/" + _tag("chr"))
+            symbol = char.get(_tag("val"), "̂") if char is not None else "̂"
+            accent_command = next((key for key, value in ACCENTS.items() if value == symbol), "")
+            if not accent_command:
+                raise ValueError("Unsupported Word equation accent: " + symbol)
+        return accent_command + " {" + argument("e") + "}"
     if name == "f":
         kind = node.find("./" + _tag("fPr") + "/" + _tag("type"))
         style = kind.get(_tag("val"), "bar") if kind is not None else "bar"
@@ -189,6 +240,13 @@ def omml_to_hwp(node: etree._Element) -> str:
             raise ValueError("Unsupported Word fraction layout: " + style)
         return "{" + argument("num") + ("} atop {" if style == "noBar" else "} over {") + argument("den") + "}"
     if name in {"sSup", "sSub", "sSubSup"}:
+        base = node.find(_tag("e"))
+        content = _children(base) if base is not None else []
+        opposite = "sSub" if name == "sSup" else "sSup"
+        if name in {"sSup", "sSub"} and len(content) == 1 and content[0].tag == _tag(opposite):
+            # A reset separates sequential scripts in HWP. An extra brace
+            # group alone does not retain their native placement.
+            return argument("e") + " it " + ("^" if name == "sSup" else "_") + " {" + argument("sup" if name == "sSup" else "sub") + "}"
         value = "{" + argument("e") + "}"
         if name != "sSup":
             value += " _ {" + argument("sub") + "}"
@@ -227,7 +285,7 @@ def omml_to_hwp(node: etree._Element) -> str:
                 text = ""
                 for item in _children(row):
                     alignment = item.find("./" + _tag("rPr") + "/" + _tag("aln"))
-                    if alignment is not None and alignment.get(_tag("val"), "1") not in {"0", "false", "off"}:
+                    if text and alignment is not None and alignment.get(_tag("val"), "1") not in {"0", "false", "off"}:
                         text += " & "
                     text += omml_to_hwp(item)
                 lines.append(text)
@@ -259,6 +317,14 @@ def omml_to_hwp(node: etree._Element) -> str:
         if any(value not in {"", "(", ")", "[", "]", "{", "}", "|", "‖", "⌈", "⌉", "⌊", "⌋"} for value in delimiters):
             raise ValueError("Unsupported Word math delimiter.")
         body = argument("e")
+        if delimiters == ["{", ""] and len(bodies) == 1:
+            content = _children(bodies[0])
+            if len(content) == 1 and content[0].tag == _tag("m"):
+                matrix = content[0]
+                alignments = matrix.findall("./" + _tag("mPr") + "/" + _tag("mcs") + "/" + _tag("mc") + "/" + _tag("mcPr") + "/" + _tag("mcJc"))
+                rows = matrix.findall(_tag("mr"))
+                if alignments and all(item.get(_tag("val")) == "left" for item in alignments) and all(len(row.findall(_tag("e"))) >= 2 for row in rows):
+                    return "cases {" + " # ".join(" & ".join(omml_to_hwp(cell) for cell in row.findall(_tag("e"))) for row in rows) + "}"
         if len(bodies) > 1:
             prop = node.find("./" + _tag("dPr") + "/" + _tag("sepChr"))
             separator = prop.get(_tag("val"), "|") if prop is not None else "|"
@@ -277,16 +343,24 @@ def omml_to_hwp(node: etree._Element) -> str:
 
 
 def hwp_to_omml(script: str) -> etree._Element:
-    if re.search(r"\\|\b(color|bold|italic|lbound|upperlim)\b", script, re.IGNORECASE):
+    if re.search(r"\\|\b(color|italic|lbound|upperlim)\b", script, re.IGNORECASE):
         raise ValueError("HWP equations require an external DOCX converter for this unsupported math grammar.")
     keywords = "over|atop|choose|binom|sqrt|root|of|matrix|pmatrix|bmatrix|dmatrix|cases|pile|lpile|rpile|eqalign|col|lcol|rcol|" + "|".join(NARY) + "|lim|left|right|from|to"
-    pattern = r"\b(?:" + keywords + r")\b"
+    keywords += "|bar|under|" + "|".join([*ACCENTS, *FONTS, *SYMBOLS, *sorted(FUNCTIONS)])
+    # Underscores introduce scripts; they are not part of a command name.
+    pattern = r"(?<![A-Za-z])(?:" + keywords + r")(?![A-Za-z])"
     tokens = re.findall(pattern + r"|[{}^_&#()\[\]|‖⌈⌉⌊⌋]|[^{}^_&#()\[\]|‖⌈⌉⌊⌋]+?(?=" + pattern + r"|[{}^_&#()\[\]|‖⌈⌉⌊⌋]|$)", script, re.IGNORECASE)
     cursor = 0
+    font = None
 
     def run(value: str) -> etree._Element:
         node = etree.Element(_tag("r"))
-        etree.SubElement(node, _tag("t")).text = value
+        if font is not None:
+            etree.SubElement(etree.SubElement(node, _tag("rPr")), _tag("sty")).set(_tag("val"), font)
+        text = etree.SubElement(node, _tag("t"))
+        text.text = value.replace("`", "\u2005").replace("~", "\u00a0")
+        if any(char.isspace() for char in text.text):
+            text.set("{http://www.w3.org/XML/1998/namespace}space", "preserve")
         return node
 
     def container(name: str, children: list[etree._Element]) -> etree._Element:
@@ -295,12 +369,23 @@ def hwp_to_omml(script: str) -> etree._Element:
         return node
 
     def whitespace() -> None:
-        nonlocal cursor
-        while cursor < len(tokens) and not tokens[cursor].strip():
+        nonlocal cursor, font
+        while cursor < len(tokens):
+            token = tokens[cursor].strip().lower()
+            if token and token not in FONTS:
+                break
+            if token == "rm":
+                font = "b" if font in {"b", "bi"} else "p"
+            elif token == "it":
+                font = "bi" if font in {"b", "bi"} else None
+            elif token == "bold":
+                font = "b" if font in {"p", "b"} else "bi"
+            elif token:
+                font = FONTS[token]
             cursor += 1
 
     def atom() -> list[etree._Element]:
-        nonlocal cursor
+        nonlocal cursor, font
         whitespace()
         if cursor >= len(tokens):
             raise ValueError("Incomplete HWP equation; use an external converter.")
@@ -309,21 +394,51 @@ def hwp_to_omml(script: str) -> etree._Element:
             token = token.lower()
         cursor += 1
         if token == "{":
+            previous_font = font
             value = expression()
             whitespace()
             if cursor >= len(tokens) or tokens[cursor].strip() != "}":
                 raise ValueError("Unbalanced HWP equation braces.")
             cursor += 1
+            font = previous_font
             return value
+        if token in SYMBOLS:
+            symbol = SYMBOLS[token]
+            original_token = tokens[cursor - 1].strip()
+            if token in {"alpha", "theta", "sigma", "pi"} and original_token[0].isupper():
+                symbol = symbol.upper()
+            return [run(symbol)]
+        if token in FUNCTIONS:
+            node = run(token)
+            properties = node.find(_tag("rPr"))
+            if properties is None:
+                properties = etree.Element(_tag("rPr"))
+                node.insert(0, properties)
+            for old in list(properties.findall(_tag("sty"))):
+                properties.remove(old)
+            etree.SubElement(properties, _tag("sty")).set(_tag("val"), "p")
+            return [node]
+        if token in {"bar", "under", *ACCENTS}:
+            content = atom()
+            node = etree.Element(_tag("bar" if token in {"bar", "under"} else "acc"))
+            prop = etree.SubElement(node, _tag("barPr" if token in {"bar", "under"} else "accPr"))
+            etree.SubElement(prop, _tag("pos" if token in {"bar", "under"} else "chr")).set(_tag("val"),
+                ("top" if token == "bar" else "bot") if token in {"bar", "under"} else ACCENTS[token])
+            node.append(container("e", content))
+            return [node]
         if token in {"sqrt", "root"}:
             degree = []
             if token == "root":
                 degree = atom()
                 whitespace()
-                if cursor >= len(tokens) or tokens[cursor].strip() != "of":
+                if cursor >= len(tokens) or tokens[cursor].strip().lower() != "of":
                     raise ValueError("HWP root requires an 'of' argument.")
                 cursor += 1
             value = atom()
+            whitespace()
+            if token == "sqrt" and cursor < len(tokens) and tokens[cursor].strip().lower() == "of":
+                cursor += 1
+                degree, value = value, atom()
             radical = etree.Element(_tag("rad"))
             if not degree:
                 properties = etree.SubElement(radical, _tag("radPr"))
@@ -390,7 +505,7 @@ def hwp_to_omml(script: str) -> etree._Element:
                 for row in rows:
                     entry = etree.SubElement(array, _tag("e"))
                     for index, cell in enumerate(row):
-                        if index:
+                        if index or len(row) == 1:
                             marker = run("")
                             properties = etree.Element(_tag("rPr"))
                             etree.SubElement(properties, _tag("aln")).set(_tag("val"), "1")
@@ -426,7 +541,7 @@ def hwp_to_omml(script: str) -> etree._Element:
                     raise ValueError("Duplicate operator limit.")
                 limits[key] = atom()
                 whitespace()
-            body = [run("lim")] if token == "lim" else atom()
+            body = [run("lim")] if token == "lim" else operand()
             if token == "lim":
                 key = "sub"
                 if limits["sup" if key == "sub" else "sub"]:
@@ -469,42 +584,52 @@ def hwp_to_omml(script: str) -> etree._Element:
             raise ValueError("Unexpected HWP equation operator: " + token)
         return [run(tokens[cursor - 1].strip())]
 
-    def expression(stops=None) -> list[etree._Element]:
+    def operand() -> list[etree._Element]:
         nonlocal cursor
+        whitespace()
+        grouped = cursor < len(tokens) and tokens[cursor].strip() == "{"
+        value = atom()
+        before_space = cursor
+        whitespace()
+        font_break = any(token.strip().lower() in FONTS for token in tokens[before_space:cursor])
+        while cursor < len(tokens) and tokens[cursor].strip() in {"^", "_"}:
+            token = tokens[cursor].strip()
+            cursor += 1
+            argument = atom()
+            previous = value[0] if len(value) == 1 else None
+            opposite = "sSub" if token == "^" else "sSup"
+            if previous is not None and previous.tag == _tag(opposite) and not grouped and not font_break:
+                node = etree.Element(_tag("sSubSup"))
+                base = previous.find(_tag("e"))
+                assert base is not None
+                node.append(base)
+                sub = previous.find(_tag("sub")) if token == "^" else container("sub", argument)
+                sup = container("sup", argument) if token == "^" else previous.find(_tag("sup"))
+                assert sub is not None and sup is not None
+                node.extend([sub, sup])
+            else:
+                node = etree.Element(_tag("sSup" if token == "^" else "sSub"))
+                node.extend([container("e", value), container("sup" if token == "^" else "sub", argument)])
+            value = [node]
+            grouped = False
+            before_space = cursor
+            whitespace()
+            font_break = any(token.strip().lower() in FONTS for token in tokens[before_space:cursor])
+        if cursor < len(tokens) and tokens[cursor].strip().lower() in {"over", "atop", "choose"}:
+            operator = tokens[cursor].strip().lower()
+            cursor += 1
+            denominator = atom()
+            node = fraction(value, denominator, "bar" if operator == "over" else "noBar")
+            value = [delimiter("(", ")", [node]) if operator == "choose" else node]
+        return value
+
+    def expression(stops=None) -> list[etree._Element]:
         result: list[etree._Element] = []
         while cursor < len(tokens):
             whitespace()
             if cursor >= len(tokens) or tokens[cursor].strip().lower() in (stops or {"}"}):
                 break
-            value = atom()
-            whitespace()
-            while cursor < len(tokens) and tokens[cursor].strip() in {"^", "_"}:
-                token = tokens[cursor].strip()
-                cursor += 1
-                argument = atom()
-                previous = value[0] if len(value) == 1 else None
-                opposite = "sSub" if token == "^" else "sSup"
-                if previous is not None and previous.tag == _tag(opposite):
-                    node = etree.Element(_tag("sSubSup"))
-                    base = previous.find(_tag("e"))
-                    assert base is not None
-                    node.append(base)
-                    sub = previous.find(_tag("sub")) if token == "^" else container("sub", argument)
-                    sup = container("sup", argument) if token == "^" else previous.find(_tag("sup"))
-                    assert sub is not None and sup is not None
-                    node.extend([sub, sup])
-                else:
-                    node = etree.Element(_tag("sSup" if token == "^" else "sSub"))
-                    node.extend([container("e", value), container("sup" if token == "^" else "sub", argument)])
-                value = [node]
-                whitespace()
-            if cursor < len(tokens) and tokens[cursor].strip().lower() in {"over", "atop", "choose"}:
-                operator = tokens[cursor].strip().lower()
-                cursor += 1
-                denominator = atom()
-                node = fraction(value, denominator, "bar" if operator == "over" else "noBar")
-                value = [delimiter("(", ")", [node]) if operator == "choose" else node]
-            result.extend(value)
+            result.extend(operand())
         return result
 
     def fraction(numerator, denominator, style):

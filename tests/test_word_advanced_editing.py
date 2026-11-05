@@ -376,8 +376,13 @@ def test_word_default_widow_control_survives_native_roundtrip(tmp_path, explicit
     if explicit is not None:
         with doc.edit_word_details() as edit:
             edit.body.paragraph(0).format(widow_control=explicit)
-    restored = Document.open(doc.save(tmp_path / "middle.hwpx")).save(tmp_path / "restored.docx")
-    assert WordFile(restored).paragraphs[0].paragraph_format.widow_control is (explicit is not False)
+    native = doc.save(tmp_path / "middle.hwpx")
+    common = Document.open(native)
+    paragraph = common.sections[0].blocks[0]
+    style = next(style for style in common.paragraph_styles if style.style_id == paragraph.para_pr_id)
+    assert style.break_setting["widowOrphan"] == ("0" if explicit is False else "1")
+    restored = common.save(tmp_path / "restored.docx")
+    assert WordFile(restored).paragraphs[0].paragraph_format.widow_control is explicit
 
 
 def test_pure_hwp_does_not_silently_discard_new_column_settings(tmp_path):

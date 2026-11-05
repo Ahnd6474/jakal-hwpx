@@ -230,6 +230,8 @@ class Document:
         *,
         converter: HancomConverter | None = None,
     ) -> "HancomDocument":
+        from .addons.docx.hwpx_properties import inflate_carriers
+        document, attachment_warnings = inflate_carriers(document)
         instance = cls(
             metadata=HancomMetadata.from_hwpx_metadata(document.metadata()),
             sections=[],
@@ -244,8 +246,11 @@ class Document:
             for font in family
         }
         instance.character_styles = [_extract_character_style(style, font_lookup=font_lookup) for style in document.character_styles()]
+        instance._hwpx_version_attributes = dict(document.xml_part("version.xml").element.attrib)
+        instance._hwpx_application_settings = [etree.tostring(node) for node in document.xml_part("settings.xml").element
+                                                if etree.QName(node).localname != "CaretPosition"]
         instance._hwpx_ref_resources = [etree.tostring(node) for node in document.header.readonly_root_element.xpath("./hh:refList/*", namespaces=NS)
-                                        if etree.QName(node).localname not in {"fontfaces", "charProperties", "paraProperties", "styles"}]
+                                        if etree.QName(node).localname not in {"charProperties", "paraProperties", "styles"}]
         instance.memo_shape_definitions = [_extract_hwpx_memo_shape(memo_shape) for memo_shape in document.memo_shapes()]
         for section in document.sections:
             instance.sections.append(_extract_hwpx_section(section))
@@ -255,6 +260,7 @@ class Document:
             from .addons.docx.features import restore_carriers
 
             restore_carriers(instance)
+        instance.import_warnings.extend(attachment_warnings)
         return instance
 
     @classmethod
@@ -989,6 +995,13 @@ class Document:
 
             return carrier_model(self).to_hwpx_document(converter=converter)
         document = HwpxDocument.blank()
+        version = getattr(self, "_hwpx_version_attributes", None)
+        if version:
+            node = document.xml_part("version.xml").element
+            node.attrib.clear()
+            node.attrib.update(version)
+        for raw in getattr(self, "_hwpx_application_settings", []):
+            document.xml_part("settings.xml").element.append(etree.fromstring(raw))
         self.metadata.apply_to_hwpx_document(document)
         _apply_styles(document, self)
         while len(document.sections) < len(self.sections):
@@ -1010,13 +1023,22 @@ class Document:
                 _apply_page_numbers_to_source_paragraphs(document, section_index, section.settings)
         for section in document.sections:
             for text_node in section.root_element.xpath(".//hp:t", namespaces=NS):
-                if not len(text_node) and any(char in (text_node.text or "") for char in "\t\r\n"):
+                if not len(text_node) and any(char in (text_node.text or "") for char in "\t\r\n\u00a0\u2007"):
                     _set_text_node_content(text_node, text_node.text or "")
                     section.mark_modified()
         if getattr(self, "_word_feature_model", False):
             from .addons.docx.native_effects import activate_lists
 
             activate_lists(document)
+            from .addons.docx.features import normalize_carrier_fonts
+            normalize_carrier_fonts(document)
+        from ._hancom_text_layout import restore_empty_runs
+        for paragraph, record in getattr(document, "_hwpx_empty_runs", {}).items():
+            if paragraph.getparent() is not None:
+                restore_empty_runs(paragraph, record)
+        if getattr(self, "_word_resources", {}).get("native_hwpx_origin"):
+            from .addons.docx.hwpx_properties import store_carriers
+            store_carriers(document)
         return document
 
     def write_to_hwpx(self, path: str | Path, *, validate: bool = True, preserve_formatting: bool | None = None, converter: HancomConverter | None = None) -> Path:
